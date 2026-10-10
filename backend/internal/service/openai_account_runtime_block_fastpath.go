@@ -232,7 +232,7 @@ func (s *OpenAIGatewayService) markOpenAIOAuth429RateLimited(ctx context.Context
 	}
 	s.recordOpenAIOAuth429()
 	disposition, resetAt := classifyOpenAIOAuth429(headers, responseBody)
-	if disposition == openAIOAuth429Transient && s.openAIOAuth429RetryWindowActive(account) {
+	if disposition == openAIOAuth429Transient && !openAIUpstreamFinalAttempt(ctx) && s.openAIOAuth429RetryWindowActive(account) {
 		return
 	}
 
@@ -566,6 +566,10 @@ func (s *OpenAIGatewayService) clearOpenAIAccountRuntimeBlockIfUnchanged(account
 // IsOpenAIResponsesCompactPath）：门票门控按真正出站的模型名判定，否则 compact
 // 请求会被按客户端原始模型误拦（见 openAICodexTicketOutboundModel）。
 func (s *OpenAIGatewayService) isOpenAIAccountRequestRuntimeBlocked(account *Account, requestedModel string, requireCompact bool) bool {
+	return s.isOpenAIAccountHealthRuntimeBlocked(account, requestedModel, requireCompact, false)
+}
+
+func (s *OpenAIGatewayService) isOpenAIAccountHealthRuntimeBlocked(account *Account, requestedModel string, requireCompact, bootstrap bool) bool {
 	if s == nil {
 		return false
 	}
@@ -573,7 +577,7 @@ func (s *OpenAIGatewayService) isOpenAIAccountRequestRuntimeBlocked(account *Acc
 		return true
 	}
 	outboundModel := s.openAICodexTicketOutboundModel(account, requestedModel, requireCompact)
-	if s.openAICodexTicketBlocksAccount(account, outboundModel) {
+	if !bootstrap && s.openAICodexTicketBlocksAccount(account, outboundModel) {
 		return true
 	}
 	snapshot := s.peekOpenAIAccountRuntimeBlock(account)

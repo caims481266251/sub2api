@@ -1765,6 +1765,12 @@ func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDBBeforeProfit(ct
 	if account == nil {
 		return nil
 	}
+	if s.borrowRoutes != nil && account.IsOpenAI() {
+		if err := s.borrowRoutes.Check(ctx, account.ID, s.openAICodexTicketOutboundModel(account, requestedModel, requireCompact), "http"); err != nil {
+			observeBorrowSelectionFailure(ctx, err)
+			return nil
+		}
+	}
 	platform = NormalizeOpenAICompatiblePlatform(platform)
 	if s.schedulerSnapshot == nil || s.accountRepo == nil {
 		if s.openAIGroupRequiresPrivacySet(ctx, groupID) && !account.IsPrivacySet() {

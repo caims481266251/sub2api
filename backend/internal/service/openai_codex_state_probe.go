@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -66,10 +67,14 @@ type OpenAICodexStateProbeResult struct {
 	// Detail 是脱敏截断后的上游报错原文，便于看出「模型不支持」之类的具体原因。
 	Detail string `json:"detail,omitempty"`
 
-	MintStatus     int  `json:"mint_status"`
-	ContinueStatus int  `json:"continue_status"`
-	Minted         bool `json:"minted"`
-	NewTicket      bool `json:"new_ticket"`
+	RouteCookieDeadline time.Time     `json:"-"`
+	RouteCookie         string        `json:"-"`
+	RetryAfter          time.Duration `json:"-"`
+	RetryCount          int           `json:"retry_count,omitempty"`
+	MintStatus          int           `json:"mint_status"`
+	ContinueStatus      int           `json:"continue_status"`
+	Minted              bool          `json:"minted"`
+	NewTicket           bool          `json:"new_ticket"`
 	// TicketLength 是第一发打到的门票长度；判据只在 780 长度的完整请求上验证过。
 	TicketLength         int    `json:"ticket_length"`
 	ContinueTicketLength int    `json:"continue_ticket_length"`
@@ -81,10 +86,14 @@ type OpenAICodexStateProbeResult struct {
 }
 
 type openAICodexStateShot struct {
-	status  int
-	state   string
-	cookies []string
-	model   string
+	errorBody  []byte // Bounded HTTP error or structured terminal SSE payload.
+	headers    http.Header
+	failure    string // Structured stream error, independent of HTTP status.
+	retryAfter time.Duration
+	status     int
+	state      string
+	cookies    []string
+	model      string
 	// streamErr 非空表示 200 但回复流没有完整跑完（上游过载、额度用尽等流内失败）。
 	streamErr error
 	detail    string
@@ -160,6 +169,7 @@ func (s *OpenAIGatewayService) probeOpenAICodexState(ctx context.Context, accoun
 func runOpenAICodexStateProbe(ctx context.Context, result *OpenAICodexStateProbeResult, seed string, fire func(string, string) (openAICodexStateShot, error)) {
 	mint, err := fire("", seed)
 	result.MintStatus = mint.status
+	result.RetryAfter = mint.retryAfter
 	result.TicketLength = len(mint.state)
 	if !result.shotUsable(ctx, "打票", mint, err) {
 		return
@@ -179,8 +189,12 @@ func runOpenAICodexStateProbe(ctx context.Context, result *OpenAICodexStateProbe
 		}
 		cookies = h.Get("Cookie")
 	}
+	result.RouteCookie = cookies
 	cont, err := fire(mint.state, cookies)
 	result.ContinueStatus = cont.status
+	if cont.retryAfter > result.RetryAfter {
+		result.RetryAfter = cont.retryAfter
+	}
 	result.ContinueTicketLength = len(cont.state)
 	if !result.shotUsable(ctx, "门票续接", cont, err) {
 		return
@@ -200,8 +214,11 @@ func runOpenAICodexStateProbe(ctx context.Context, result *OpenAICodexStateProbe
 // ProbeOpenAICodexStateRoute validates a borrowed route using only the target's
 // credentials. Both shots use the same leased exit and __oailb cookie. This
 // bypasses the borrowing wrapper to avoid recursive validation; tickets stay local.
-func ProbeOpenAICodexStateRoute(ctx context.Context, upstream HTTPUpstream, template *http.Request, proxy string, accountID int64, concurrency int, profile *tlsfingerprint.Profile) *OpenAICodexStateProbeResult {
+func ProbeOpenAICodexStateRoute(ctx context.Context, upstream HTTPUpstream, template *http.Request, proxy string, accountID int64, concurrency int, profile *tlsfingerprint.Profile, models ...string) *OpenAICodexStateProbeResult {
 	result := &OpenAICodexStateProbeResult{AccountID: accountID, Model: OpenAICodexStateProbeDefaultModel, Verdict: OpenAICodexStateInconclusive, StartedAt: time.Now()}
+	if len(models) > 0 && models[0] != "" {
+		result.Model = models[0]
+	}
 	defer func() {
 		result.FinishedAt = time.Now()
 		result.LatencyMs = result.FinishedAt.Sub(result.StartedAt).Milliseconds()
@@ -220,29 +237,97 @@ func ProbeOpenAICodexStateRoute(ctx context.Context, upstream HTTPUpstream, temp
 	}
 	routeChanged := false
 	runOpenAICodexStateProbe(ctx, result, pinned.String(), func(state, cookie string) (openAICodexStateShot, error) {
-		return fireOpenAICodexStateShotRequest(ctx, template.Header, result.Model, state, cookie, func(req *http.Request) (*http.Response, error) {
-			req = req.WithContext(WithHTTPUpstreamRedirectsDisabled(req.Context()))
-			resp, err := upstream.DoWithTLS(req, proxy, accountID, concurrency, profile)
-			if resp != nil {
-				for _, got := range resp.Cookies() {
-					if got.Name == "__oailb" && (got.Value != pinned.Value || got.MaxAge < 0 || (!got.Expires.IsZero() && !time.Now().Before(got.Expires))) {
-						routeChanged = true
+		return retryOpenAICodexStateRouteShot(ctx, result, state == "", func() (openAICodexStateShot, error) {
+			shot, shotErr := fireOpenAICodexStateShotRequest(ctx, template.Header, result.Model, state, cookie, func(req *http.Request) (*http.Response, error) {
+				req = req.WithContext(WithHTTPUpstreamRedirectsDisabled(req.Context()))
+				resp, err := upstream.DoWithTLS(req, proxy, accountID, concurrency, profile)
+				if resp != nil {
+					for _, got := range resp.Cookies() {
+						if got.Name == "__oailb" && got.Value == pinned.Value {
+							deadline := got.Expires
+							if got.MaxAge > 0 {
+								maxAge := time.Now().Add(time.Duration(got.MaxAge) * time.Second)
+								if deadline.IsZero() || maxAge.Before(deadline) {
+									deadline = maxAge
+								}
+							}
+							if !deadline.IsZero() && (result.RouteCookieDeadline.IsZero() || deadline.Before(result.RouteCookieDeadline)) {
+								result.RouteCookieDeadline = deadline
+							}
+						}
+						if got.Name == "__oailb" && (got.Value != pinned.Value || got.MaxAge < 0 || (!got.Expires.IsZero() && !time.Now().Before(got.Expires))) {
+							routeChanged = true
+						}
 					}
 				}
-			}
+				return resp, err
+			})
 			if routeChanged {
-				if resp != nil && resp.Body != nil {
-					_ = resp.Body.Close()
-				}
-				return nil, errors.New("target_route_changed")
+				return shot, errOpenAICodexStateRouteChanged
 			}
-			return resp, err
+			return shot, shotErr
 		})
 	})
 	if routeChanged {
 		result.fail("route_changed", "探针期间网关路由已改变", "")
 	}
 	return result
+}
+
+var errOpenAICodexStateRouteChanged = errors.New("target_route_changed")
+
+// Retry only the failed phase on the pinned route. A successful mint and its
+// target-issued ticket are retained when retrying continuation. The caller's
+// validation/recovery deadlines bound all attempts and backoff together.
+func retryOpenAICodexStateRouteShot(ctx context.Context, result *OpenAICodexStateProbeResult, mint bool, fire func() (openAICodexStateShot, error)) (openAICodexStateShot, error) {
+	for attempt := 0; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return openAICodexStateShot{}, err
+		}
+		shot, err := fire()
+		if borrowInternal(ctx) && (shot.status == 429 || shot.failure == OpenAICodexStateFailureRateLimited) {
+			return shot, err
+		}
+		if errors.Is(err, ErrBorrowProbeBusy) || errors.Is(err, ErrBorrowRecoveryWaiting) || errors.Is(err, ErrBorrowPaused) || errors.Is(err, ErrBorrowRequestBudget) || errors.Is(err, ErrBorrowRouteReady) {
+			return shot, err
+		}
+		if attempt >= 2 || ctx.Err() != nil || errors.Is(err, errOpenAICodexStateRouteChanged) {
+			return shot, err
+		}
+		if !openAICodexShotRetryable(ctx, shot, err, mint) {
+			return shot, err
+		}
+		timer := time.NewTimer(time.Duration(attempt+1) * 500 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return shot, ctx.Err()
+		case <-timer.C:
+		}
+		result.RetryCount++
+		slog.Info("astra_target_probe_retry", "account_id", result.AccountID, "mint", mint, "attempt", attempt+2, "failure", shot.failure)
+	}
+}
+
+// Network and transient server failures share the probe retry policy. Account
+// health remains authoritative at every subsequent pre-send admission.
+func openAICodexShotRetryable(ctx context.Context, shot openAICodexStateShot, err error, mint bool) bool {
+	if errors.Is(err, ErrBorrowUnavailable) || errors.Is(err, errBorrowSourceDeferred) {
+		return false
+	}
+	check := &OpenAICodexStateProbeResult{}
+	if check.shotUsable(ctx, "", shot, err) {
+		return mint && shot.state == ""
+	}
+	switch check.Failure {
+	case OpenAICodexStateFailureNetworkError, OpenAICodexStateFailureStreamError:
+		return true
+	case OpenAICodexStateFailureRateLimited:
+		return !borrowInternal(ctx)
+	case OpenAICodexStateFailureUpstreamError:
+		return shot.status == http.StatusRequestTimeout || (shot.status >= 500 && shot.status <= 599)
+	}
+	return false
 }
 
 func (r *OpenAICodexStateProbeResult) fail(kind, reason, detail string) {
@@ -254,6 +339,39 @@ func (r *OpenAICodexStateProbeResult) fail(kind, reason, detail string) {
 
 // shotUsable 判断一发是否干净跑通；没跑通时写好失败分类并返回 false。
 func (r *OpenAICodexStateProbeResult) shotUsable(ctx context.Context, step string, shot openAICodexStateShot, err error) bool {
+	if errors.Is(err, ErrBorrowProbeBusy) {
+		r.fail("probe_busy", "等待目标探测并发", "")
+		return false
+	}
+	if errors.Is(err, ErrBorrowRequestBudget) {
+		r.fail("request_budget", "等待探针请求额度", "")
+		return false
+	}
+	if errors.Is(err, ErrBorrowRouteReady) {
+		r.fail("route_ready", "已有有效路由，停止探测", "")
+		return false
+	}
+	if errors.Is(err, ErrBorrowRecoveryWaiting) {
+		r.fail("recovery_waiting", "等待目标恢复", "")
+		return false
+	}
+	if errors.Is(err, ErrBorrowPaused) {
+		r.fail("acquisition_paused", "后台获取已暂停", "")
+		return false
+	}
+	// A complete error event remains authoritative even if the connection then
+	// breaks. Do not replace explicit limits/auth failures with a network retry.
+	if shot.status == http.StatusOK {
+		switch shot.failure {
+		case OpenAICodexStateFailureRateLimited:
+			r.fail(shot.failure, step+"回复流报告限流或额度用尽，等待上游恢复", "")
+			return false
+		case OpenAICodexStateFailureAccountError:
+			r.fail(shot.failure, step+"回复流报告认证或访问权限错误", "")
+			return false
+		}
+	}
+
 	if err != nil {
 		if ctx.Err() != nil {
 			r.fail(OpenAICodexStateFailureCancelled, step+"请求被取消或超时", "")
@@ -322,30 +440,51 @@ func openAICodexStateProbeUnsupportedReason(account *Account, requestedModel str
 // lite 形态（292/332 长度的票）上没有验证。每发用新的 session_id，也与验证时一致。
 func (s *OpenAIGatewayService) fireOpenAICodexStateShot(ctx context.Context, account *Account, token, model, proxy, turnState, cookie string) (openAICodexStateShot, error) {
 
-	headers := make(http.Header)
-	headers.Set("Authorization", "Bearer "+token)
-	if err := resolveAndSetOpenAIChatGPTAccountHeaders(ctx, s.accountRepo, headers, account); err != nil {
+	headers, err := s.buildOpenAICodexProbeHeaders(ctx, account, token, model)
+	if err != nil {
 		return openAICodexStateShot{}, err
 	}
-	applyOpenAICodexTicketHarvestIdentity(headers, model)
 	return fireOpenAICodexStateShotRequest(ctx, headers, model, turnState, cookie, func(req *http.Request) (*http.Response, error) {
 		return s.httpUpstream.Do(req, proxy, account.ID, account.Concurrency)
 	})
 }
 
+// Minimal worker/diagnostic payloads share business authentication and account
+// identity resolution. A source's persisted exit identity is applied afterward.
+func (s *OpenAIGatewayService) buildOpenAICodexProbeHeaders(ctx context.Context, account *Account, token, model string) (http.Header, error) {
+	headers, err := s.buildOpenAIAuthenticationHeaders(ctx, account, token)
+	if err != nil {
+		return nil, err
+	}
+	if err = resolveAndSetOpenAIChatGPTAccountHeaders(ctx, s.accountRepo, headers, account); err != nil {
+		return nil, err
+	}
+	applyOpenAICodexTicketHarvestIdentity(headers, model)
+	return headers, nil
+}
+
 type openAICodexStateProbeContextKey struct{}
+type openAICodexShotObserverKey struct{}
 
 func IsOpenAICodexStateProbeRequest(ctx context.Context) bool {
 	value, _ := ctx.Value(openAICodexStateProbeContextKey{}).(bool)
 	return value
 }
 
-func fireOpenAICodexStateShotRequest(ctx context.Context, headers http.Header, model, turnState, cookie string, send func(*http.Request) (*http.Response, error)) (openAICodexStateShot, error) {
-	var out openAICodexStateShot
+func openAICodexStateProbeBody(model string) []byte {
+	return []byte(`{"model":` + jsonString(model) + `,"instructions":"Reply with OK.","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Reply with OK."}]}],"stream":true,"store":false,"parallel_tool_calls":true,"include":["reasoning.encrypted_content"]}`)
+}
+
+func fireOpenAICodexStateShotRequest(ctx context.Context, headers http.Header, model, turnState, cookie string, send func(*http.Request) (*http.Response, error)) (out openAICodexStateShot, resultErr error) {
+	defer func() {
+		if observe, ok := ctx.Value(openAICodexShotObserverKey{}).(func(context.Context, openAICodexStateShot)); ok && out.status > 0 {
+			observe(ctx, out)
+		}
+	}()
 	ctx = context.WithValue(ctx, openAICodexStateProbeContextKey{}, true)
 	shotCtx, cancel := context.WithTimeout(ctx, openAICodexStateProbeShotTimeout)
 	defer cancel()
-	body := []byte(`{"model":` + jsonString(model) + `,"instructions":"Reply with OK.","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Reply with OK."}]}],"stream":true,"store":false,"parallel_tool_calls":true,"include":["reasoning.encrypted_content"]}`)
+	body := openAICodexStateProbeBody(model)
 	req, err := http.NewRequestWithContext(shotCtx, http.MethodPost, chatgptCodexURL, bytes.NewReader(body))
 	if err != nil {
 		return out, err
@@ -369,6 +508,9 @@ func fireOpenAICodexStateShotRequest(ctx context.Context, headers http.Header, m
 		req.Header.Set("Cookie", cookie)
 	}
 
+	if err := BorrowBeforeSend(req); err != nil {
+		return out, err
+	}
 	resp, err := send(req)
 	if err != nil {
 		if resp != nil && resp.Body != nil {
@@ -380,6 +522,10 @@ func fireOpenAICodexStateShotRequest(ctx context.Context, headers http.Header, m
 		return out, errors.New("nil upstream response")
 	}
 	out.status = resp.StatusCode
+	out.headers = resp.Header.Clone()
+	if out.status == 429 {
+		out.retryAfter = borrowRetryAfter(resp.Header.Get("Retry-After"), time.Now())
+	}
 	out.state = strings.TrimSpace(extractOpenAICodexTurnState(resp.Header))
 	out.cookies = openAICodexStateRouteCookies(resp)
 	if resp.Body == nil {
@@ -388,6 +534,17 @@ func fireOpenAICodexStateShotRequest(ctx context.Context, headers http.Header, m
 	}
 	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, openAICodexStateProbeMaxBody+1))
+	if out.status != http.StatusOK {
+		out.errorBody = data[:min(len(data), openAICodexStateProbeMaxBody)]
+	} else {
+		out.errorBody = openAICodexStateStreamErrorPayload(data[:min(len(data), openAICodexStateProbeMaxBody)])
+	}
+	// ReadAll can return both data and an error. Preserve structured failure
+	// signals already received before dealing with truncation/disconnection.
+	out.failure, out.retryAfter = codexProbeSignal(data, resp.Header, time.Now())
+	if out.status == http.StatusTooManyRequests {
+		out.retryAfter = codexProbeMaxWait(out.retryAfter, borrowRetryAfter(resp.Header.Get("Retry-After"), time.Now()))
+	}
 	if err != nil {
 		if shotCtx.Err() != nil {
 			return out, shotCtx.Err()

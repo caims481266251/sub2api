@@ -1,0 +1,21 @@
+export default {
+  scrollHint: 'Scroll horizontally to view all proxy details and actions.',
+  title: 'Global proxy pool',
+  description: 'Maintain encrypted egress configurations. Enable automatic source bindings and fixed fingerprints in Ticket Borrowing. Disabling or removing an entry triggers reassignment of its borrowing source.',
+  encryptionHint: 'Enable credential encryption before saving proxies. The key is stored in the server data directory and must be backed up with the data.',
+  initializeEncryption: 'Enable credential encryption',
+  importTitle: 'Manage proxies in bulk', mode: 'Import mode', append: 'Append proxies', replace: 'Replace pool inventory',
+  appendHint: 'Keep existing entries and add unique proxies. Matching entries retain their IDs and enabled status.',
+  replaceHint: 'Keep only the submitted entries. Matching entries retain their IDs and enabled status; removed entries remain in history.',
+  lines: 'Proxies (one per line)', placeholder: "host:port:username:password\nhttp://username:password{'@'}host:port",
+  inputHint: 'HTTP, HTTPS, SOCKS5 and SOCKS5H; bracket IPv6 addresses. Maximum 2,000 entries. Percent-encode special credential characters in URLs. Shorthand passwords may contain colons. Blank lines are ignored; an invalid line prevents the entire import.',
+  preview: 'Preview changes', clearDraft: 'Clear input',
+  previewSummary: '{valid} valid, {duplicates} duplicate lines; {added} added, {retained} matching existing, {removed} removed.',
+  lineNumber: 'Line {line}', replaceConfirmation: 'Confirmation will remove {count} entries from the current inventory. Existing account configurations are unaffected.',
+  applyReplace: 'Confirm replacement', applyAppend: 'Confirm append', inventory: '{count} entries · Revision {revision}',
+  search: 'Search ID, protocol or address', endpoint: 'Endpoint', credentials: 'Credentials', status: 'Status', action: 'Action',
+  encrypted: 'Stored encrypted', noCredentials: 'No authentication', enabled: 'Enabled', disabled: 'Disabled', disable: 'Disable', enable: 'Enable',
+  empty: 'No matching proxy entries', saved: 'Proxy pool saved. Plaintext input cleared.', leaveConfirm: 'Discard the unsaved proxy input and leave?',
+  issues: { invalid_proxy: 'Invalid proxy. Check protocol, address, port and authentication format.', input_limit: 'Input exceeds 2,000 lines.', pool_limit: 'The resulting pool would exceed 2,000 entries.', empty_input: 'Provide at least one valid proxy.' },
+  errors: { proxy_pool_invalid: 'Invalid input. Preview again and correct the reported lines.', proxy_pool_conflict: 'Another operation changed the pool. Refresh the inventory and preview again. Your input has been preserved.', proxy_pool_unavailable: 'Cannot read or save the proxy pool. Check the service, database and credential encryption key.', proxy_pool_encryption_required: 'Enable credential encryption first.' }
+}

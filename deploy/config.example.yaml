@@ -258,6 +258,12 @@ gateway:
   # Grok text Responses first-byte timeout (seconds, 0=disabled; default 120)
   # Grok 文本 Responses 首字节超时时间（秒，0=禁用；默认 120）
   grok_response_header_timeout: 120
+  # Borrowing-target HTTP business recovery: initial attempt + at most one recovery.
+  # 上游 429 不做内部重试；首次失败需在 15 秒内，恢复等待首个有效输出最多 30 秒。
+  # true restores legacy retry scheduling (transport freshness remains enabled).
+  borrow_business_recovery_disabled: false
+  borrow_business_retry_window_seconds: 15 # 1-60; 0 uses default 15
+  borrow_business_recovery_timeout_seconds: 30 # 30-120; 0 uses default 30
   # Native OpenAI HTTP Responses first semantic output timeout (seconds, 0=disabled)
   # Includes response-header wait; does not apply to passthrough or WebSocket transports.
   # A timed-out request may already have incurred upstream usage; account failover can therefore duplicate upstream billing.

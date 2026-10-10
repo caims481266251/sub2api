@@ -1,0 +1,21 @@
+export default {
+  scrollHint: '左右滑动查看完整代理信息与操作。',
+  title: '全局代理池',
+  description: '集中维护出口配置，凭据加密保存。可在借票管理中开启来源账号自动绑定与固定指纹；停用或移除条目会触发借票出口重新分配。',
+  encryptionHint: '保存代理前需要启用凭据加密。密钥保存在服务的数据目录中，请随数据一起备份。',
+  initializeEncryption: '启用凭据加密',
+  importTitle: '批量维护代理', mode: '导入方式', append: '追加代理', replace: '整体替换池内清单',
+  appendHint: '保留已有条目，新增不重复的代理。相同条目保留 ID 和启停状态。',
+  replaceHint: '仅保留这次提交的条目；相同条目保留 ID 和启停状态，被移除条目留作历史。',
+  lines: '代理列表（每行一条）', placeholder: "host:port:username:password\nhttp://username:password{'@'}host:port",
+  inputHint: '支持 HTTP、HTTPS、SOCKS5 和 SOCKS5H，IPv6 请加方括号。最多 2,000 条。URL 中的特殊凭据字符需要百分号编码；简写格式的密码可包含冒号。空行忽略，错误行会阻止整批保存。',
+  preview: '预览变更', clearDraft: '清空输入',
+  previewSummary: '有效 {valid} 条，批内重复 {duplicates} 条；新增 {added} 条、匹配已有 {retained} 条、移除 {removed} 条。',
+  lineNumber: '第 {line} 行', replaceConfirmation: '确认后从当前池清单移除 {count} 条。账号原有配置不随本次替换变更。',
+  applyReplace: '确认替换清单', applyAppend: '确认追加', inventory: '当前 {count} 条 · 配置版本 {revision}',
+  search: '搜索 ID、协议或地址', endpoint: '出口地址', credentials: '凭据', status: '状态', action: '操作',
+  encrypted: '已加密保存', noCredentials: '无认证', enabled: '启用', disabled: '停用', disable: '停用', enable: '启用',
+  empty: '暂无匹配的代理条目', saved: '代理池已保存，明文输入已清空。', leaveConfirm: '尚有未保存的代理输入，确定离开并丢弃？',
+  issues: { invalid_proxy: '代理格式无效，请检查协议、地址、端口和认证格式。', input_limit: '输入行数超过 2,000 条。', pool_limit: '保存后代理池将超过 2,000 条。', empty_input: '请至少提供一条有效代理。' },
+  errors: { proxy_pool_invalid: '输入无效，请重新预览并修正错误行。', proxy_pool_conflict: '配置已被其他操作修改，请刷新池清单后重新预览。输入草稿已保留。', proxy_pool_unavailable: '无法读写代理池，请检查服务、数据库及凭据加密密钥。', proxy_pool_encryption_required: '请先启用凭据加密。' }
+}

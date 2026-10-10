@@ -290,6 +290,7 @@
           <template #cell-status="{ row }">
             <div class="flex items-center gap-1.5">
               <AccountStatusIndicator :account="row" :global-bps-enabled="appStore.cachedPublicSettings?.excel_bps_enabled !== false" @show-temp-unsched="handleShowTempUnsched" />
+              <TicketBorrowStatusBadge v-if="row.platform === 'openai'" :account-id="row.parent_account_id || row.id" />
             </div>
           </template>
           <template #cell-schedulable="{ row }">
@@ -526,6 +527,7 @@ import IQTestModal from '@/components/admin/account/IQTestModal.vue'
 import ScheduledTestsPanel from '@/components/admin/account/ScheduledTestsPanel.vue'
 import type { SelectOption } from '@/components/common/Select.vue'
 import AccountStatusIndicator from '@/components/account/AccountStatusIndicator.vue'
+import TicketBorrowStatusBadge from '@/components/account/TicketBorrowStatusBadge.vue'
 import AccountUsageCell from '@/components/account/AccountUsageCell.vue'
 import AccountTodayStatsCell from '@/components/account/AccountTodayStatsCell.vue'
 import AccountGroupsCell from '@/components/account/AccountGroupsCell.vue'

@@ -30,5 +30,24 @@ import "embed"
 //	    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 //	);
 //
+// Keep the proxy-pool/borrowing dependency chain explicit as well as the glob:
+// a partial source archive must fail to build instead of silently omitting a
+// required schema migration. All SQL still ships inside the binary and is
+// applied automatically on first startup; operators do not import it manually.
+//
 //go:embed *.sql
+//go:embed 254_openai_oauth_reauth.sql 255_account_token_guard_v2.sql
+//go:embed 269_ticket_borrowing.sql 270_ticket_borrow_normal_sources.sql
+//go:embed 271_ticket_borrow_recovery.sql 272_ticket_borrow_observation.sql
+//go:embed 273_ticket_borrow_expiry_only.sql 274_proxy_pool.sql
+//go:embed 275_ticket_borrow_proxy_bindings.sql 276_ticket_borrow_rotation.sql
+//go:embed 277_ticket_borrow_source_rotation_history.sql 278_ticket_borrow_probe_policy.sql
+//go:embed 279_ticket_borrow_event_retention.sql 280_ticket_borrow_probe_concurrency_default.sql
+//go:embed 281_ticket_borrow_min_route_remaining.sql
+//go:embed 282_ticket_borrow_global_probe_policy.sql
+//go:embed 283_ticket_borrow_renew_default.sql
+//go:embed 284_ticket_borrow_shared_proxy_bindings.sql
+//go:embed 285_ticket_borrow_fingerprint_snapshot.sql
+//go:embed 286_ticket_borrow_source_auth_exclusion.sql
+//go:embed 287_ticket_borrow_normal_flow.sql 288_ticket_borrow_rotation_partial.sql
 var FS embed.FS

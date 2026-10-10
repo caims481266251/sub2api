@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/upstreamroute"
 	"github.com/spf13/viper"
@@ -1059,19 +1060,44 @@ func strictConfigInt(value any) (int, error) {
 
 // GatewayConfig API网关相关配置
 // CodexGatewayPinConfig controls the private HTTP routing experiment.
-// Cookie values are learned from completed Astra responses, never configured.
+// Cookie values are learned from completed source-model responses, never configured.
 type CodexGatewayPinConfig struct {
-	NodeCooldownSeconds int     `mapstructure:"node_cooldown_seconds" json:"node_cooldown_seconds"`
-	RotateNodes         bool    `mapstructure:"rotate_nodes" json:"rotate_nodes"`
-	MaxNodeAttempts     int     `mapstructure:"max_node_attempts" json:"max_node_attempts"`
-	IPAffinity          bool    `mapstructure:"ip_affinity" json:"ip_affinity"`
-	TTLSeconds          int     `mapstructure:"ttl_seconds" json:"ttl_seconds"`
-	Enabled             bool    `mapstructure:"enabled" json:"enabled"`
-	SourceAccountIDs    []int64 `mapstructure:"source_account_ids" json:"source_account_ids"`
-	TargetAccountIDs    []int64 `mapstructure:"target_account_ids" json:"target_account_ids"`
+	Seamless            bool             `mapstructure:"seamless" json:"seamless"`
+	SourceAccountModels map[int64]string `mapstructure:"source_account_models" json:"source_account_models,omitempty"`
+	NodeCooldownSeconds int              `mapstructure:"node_cooldown_seconds" json:"node_cooldown_seconds"`
+	RotateNodes         bool             `mapstructure:"rotate_nodes" json:"rotate_nodes"`
+	MaxNodeAttempts     int              `mapstructure:"max_node_attempts" json:"max_node_attempts"`
+	IPAffinity          bool             `mapstructure:"ip_affinity" json:"ip_affinity"`
+	TTLSeconds          int              `mapstructure:"ttl_seconds" json:"ttl_seconds"`
+	Enabled             bool             `mapstructure:"enabled" json:"enabled"`
+	SourceAccountIDs    []int64          `mapstructure:"source_account_ids" json:"source_account_ids"`
+	TargetAccountIDs    []int64          `mapstructure:"target_account_ids" json:"target_account_ids"`
+}
+
+// SourceModel preserves the original Astra acquisition behavior for old settings.
+func (c CodexGatewayPinConfig) SourceModel(accountID int64) string {
+	if model := strings.TrimSpace(c.SourceAccountModels[accountID]); model != "" {
+		return model
+	}
+	return "gpt-6-astra"
 }
 
 func (c CodexGatewayPinConfig) Validate() error {
+	if c.Enabled && c.Seamless && c.RotateNodes {
+		return fmt.Errorf("astra_seamless_fixed_egress_required")
+	}
+	if len(c.SourceAccountModels) > 64 {
+		return fmt.Errorf("select at most 64 source models")
+	}
+	for id, model := range c.SourceAccountModels {
+		selected := false
+		for _, sourceID := range c.SourceAccountIDs {
+			selected = selected || sourceID == id
+		}
+		if id <= 0 || !selected || len(model) == 0 || len(model) > 256 || strings.Contains(model, "*") || strings.IndexFunc(model, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0 {
+			return fmt.Errorf("astra_source_model_invalid")
+		}
+	}
 	if c.NodeCooldownSeconds != 0 && (c.NodeCooldownSeconds < 60 || c.NodeCooldownSeconds > 86400) {
 		return fmt.Errorf("astra node cooldown must be 60–86400 seconds")
 	}
@@ -1146,6 +1172,10 @@ type GatewayConfig struct {
 	// GrokResponseHeaderTimeout bounds the pre-first-byte wait for xAI/Grok.
 	// A zero value uses the provider-safe default instead of the generic gateway timeout.
 	GrokResponseHeaderTimeout int `mapstructure:"grok_response_header_timeout"`
+	// Borrow business recovery is request scoped; disabled restores legacy retries.
+	BorrowBusinessRecoveryDisabled       bool `mapstructure:"borrow_business_recovery_disabled"`
+	BorrowBusinessRetryWindowSeconds     int  `mapstructure:"borrow_business_retry_window_seconds"`
+	BorrowBusinessRecoveryTimeoutSeconds int  `mapstructure:"borrow_business_recovery_timeout_seconds"`
 	// OpenAIFirstOutputTimeoutSeconds: native HTTP Responses 首个语义输出超时（秒），0表示禁用。
 	OpenAIFirstOutputTimeoutSeconds int `mapstructure:"openai_first_output_timeout_seconds"`
 	// OpenAIHighEffortFirstOutputTimeoutSeconds: high/xhigh/max 推理的首个语义输出超时（秒）。
@@ -2768,6 +2798,9 @@ func setDefaults() {
 	viper.SetDefault("gateway.client_idle_ttl_seconds", 900)
 	viper.SetDefault("gateway.concurrency_slot_ttl_minutes", 30) // 并发槽位过期时间（支持超长请求）
 	viper.SetDefault("gateway.stream_data_interval_timeout", 180)
+	viper.SetDefault("gateway.borrow_business_recovery_disabled", false)
+	viper.SetDefault("gateway.borrow_business_retry_window_seconds", 15)
+	viper.SetDefault("gateway.borrow_business_recovery_timeout_seconds", 30)
 	viper.SetDefault("gateway.stream_keepalive_interval", 10)
 	viper.SetDefault("gateway.image_stream_data_interval_timeout", 900)
 	viper.SetDefault("gateway.image_stream_keepalive_interval", 10)
@@ -3601,6 +3634,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.GrokResponseHeaderTimeout < 0 || c.Gateway.GrokResponseHeaderTimeout > 1800 {
 		return fmt.Errorf("gateway.grok_response_header_timeout must be between 0-1800 seconds")
+	}
+	if n := c.Gateway.BorrowBusinessRetryWindowSeconds; n < 0 || n > 60 {
+		return fmt.Errorf("gateway.borrow_business_retry_window_seconds must be 0 (default) or 1-60")
+	}
+	if n := c.Gateway.BorrowBusinessRecoveryTimeoutSeconds; n < 0 || n > 120 || (n > 0 && n < 30) {
+		return fmt.Errorf("gateway.borrow_business_recovery_timeout_seconds must be 0 (default) or 30-120")
 	}
 	if c.Gateway.OpenAIFirstOutputTimeoutSeconds < 0 || c.Gateway.OpenAIFirstOutputTimeoutSeconds > 600 ||
 		(c.Gateway.OpenAIFirstOutputTimeoutSeconds > 0 && c.Gateway.OpenAIFirstOutputTimeoutSeconds < 30) {

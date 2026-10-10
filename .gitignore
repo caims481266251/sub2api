@@ -199,3 +199,10 @@ issues/
 !docs/screenshots/channel-monitor-v3/
 !docs/screenshots/usage-tps-single-token/
 !docs/screenshots/support-tickets/
+
+# Dedicated borrowing design and operator instructions
+!docs/ticket-borrowing.md
+!docs/ticket-borrowing-implementation-plan.md
+!docs/recent-features-release-20261010.md
+!docs/ticket-borrowing-ui-20261010.md
+!docs/ticket-borrowing-429-release-20261010.md

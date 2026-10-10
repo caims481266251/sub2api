@@ -9,6 +9,17 @@ function snapshot() { return { generated_at: new Date().toISOString(), revision:
 beforeEach(() => { vi.useFakeTimers(); vi.clearAllMocks(); mocks.get.mockResolvedValue(snapshot()); mocks.test.mockResolvedValue({ action: 'prepare', success: true, reason: 'success', duration_ms: 1000 }) })
 afterEach(() => vi.useRealTimers())
 describe('Astra gateway runtime', () => {
+  it('keeps readiness visible while a backup probe fails', async () => {
+    const expiry = new Date(Date.now() + 120000).toISOString()
+    mocks.get.mockResolvedValue({ ...snapshot(), targets: [{ account_id: 300, state: 'ready', reason: 'target_probe_passed', expires_at: expiry, routes: [{ role: 'primary', source_account_id: 299, gateway: 'chat.gateway.unified-23.api.openai.com', expires_at: expiry, checked_at: new Date().toISOString() }], maintenance: { phase: 'target', running: true, reason: 'target_probe_failed', failure: 'stream_error', retries: 1, mint_status: 200 } }] })
+    const w = mount(AstraGatewayRuntime, { props: { settings, dirty: false } }); await flushPromises()
+    expect(w.get('[data-testid="seamless-routes"]').text()).toContain('primary')
+    expect(w.get('[data-testid="seamless-maintenance"]').text()).toContain('stream_error')
+    expect(w.text()).toContain('target_probe_passed')
+    expect(w.text()).toContain('120 s')
+    w.unmount()
+  })
+
   it('never shows a countdown for failed or unverified routes', async () => {
     const data = snapshot(); data.sources[0].state = 'candidate'; data.sources[0].reason = 'source_passed_target_failed'; data.ready_routes = 0
     mocks.get.mockResolvedValue(data)

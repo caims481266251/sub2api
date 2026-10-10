@@ -23,6 +23,7 @@ import (
 // Each settings revision gets a fresh pool. In-flight requests finish against
 // their snapshot; removed candidates cannot re-populate the new pool.
 type astraRoutingUpstream struct {
+	borrowRoutes    *service.TicketBorrowService
 	rotationCache   astraRotationCache
 	listNodes       func() ([]mihomo.AstraNode, error)
 	pinNode         func(context.Context, mihomo.AstraNode) (string, func(), error)
@@ -54,13 +55,27 @@ func (s *astraRoutingUpstream) current(ctx context.Context) *codexGatewayPinUpst
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !settings.CookiePool.Enabled {
+		if s.pool != nil && s.pool.seamless != nil {
+			s.pool.seamless.cancel()
+		}
 		s.pool = nil
 		s.revision = ""
 		return nil
 	}
 	if s.pool == nil || s.revision != string(encoded) {
+		if s.pool != nil && s.pool.seamless != nil {
+			s.pool.seamless.cancel()
+		}
 		s.revision = string(encoded)
 		s.pool = &codexGatewayPinUpstream{rotationCache: &s.rotationCache, delegate: s.delegate, config: settings.CookiePool, historyRecorder: s.historyRecorder}
+		if settings.CookiePool.Seamless {
+			s.pool.seamless = newAstraSeamlessPool()
+			ttl := settings.CookiePool.TTLSeconds
+			if ttl == 0 {
+				ttl = 230
+			}
+			s.pool.seamless.prewarm = min(astraSeamlessPrewarm, time.Duration(ttl)*time.Second*2/3)
+		}
 	}
 	return s.pool
 }
@@ -68,8 +83,22 @@ func (s *astraRoutingUpstream) Do(r *http.Request, p string, a int64, n int) (*h
 	return s.DoWithTLS(r, p, a, n, nil)
 }
 func (s *astraRoutingUpstream) DoWithTLS(r *http.Request, p string, a int64, n int, f *tlsfingerprint.Profile) (*http.Response, error) {
+	if s.borrowRoutes != nil && r != nil {
+		enabled, err := s.borrowRoutes.Enabled(r.Context(), a)
+		if err != nil {
+			return nil, service.ErrBorrowUnavailable
+		}
+		if enabled || a < 0 {
+			return s.delegate.DoWithTLS(r, p, a, n, f)
+		}
+	}
 	if r != nil && !service.IsOpenAICodexStateProbeRequest(r.Context()) && codexGatewayPinRequest(r) {
 		if pool := s.current(r.Context()); pool != nil {
+			if pool.seamless != nil && service.IsAstraSourceAcquisition(r.Context()) && slices.Contains(pool.config.SourceAccountIDs, a) {
+				if err := pool.seamless.consume(true, a, time.Now()); err != nil {
+					return nil, err
+				}
+			}
 			if slices.Contains(pool.config.TargetAccountIDs, a) && codexGatewayPinAstra(r) {
 				cookie, _, effectiveProxy, release, err := s.targetRoute(r, p, a, n, f)
 				if err != nil {
@@ -85,6 +114,9 @@ func (s *astraRoutingUpstream) DoWithTLS(r *http.Request, p string, a int64, n i
 					r = astraFreshRequest(r)
 				}
 				resp, err := s.delegate.DoWithTLS(r, effectiveProxy, a, n, f)
+				if pool.seamless != nil {
+					pool.seamless.observeBusiness(r, p, a, f, cookie, resp)
+				}
 				return attachAstraLease(resp, err, release)
 			}
 			return pool.DoWithTLS(r, p, a, n, f)
@@ -118,6 +150,10 @@ func (s *astraRoutingUpstream) SetAstraGatewayPreparer(fn func(context.Context, 
 	s.prepareMu.Unlock()
 }
 func (s *astraRoutingUpstream) PrepareAstraGateway(ctx context.Context) error {
+	return s.prepareAstraGateway(ctx, false)
+}
+
+func (s *astraRoutingUpstream) prepareAstraGateway(ctx context.Context, refresh bool) error {
 	if !s.prepareMu.TryLock() {
 		return errors.New("preparation_in_progress")
 	}
@@ -128,10 +164,13 @@ func (s *astraRoutingUpstream) PrepareAstraGateway(ctx context.Context) error {
 	if pool == nil {
 		return errors.New("cookie_pool_disabled")
 	}
+	if pool.seamless != nil {
+		return s.acquireSeamlessSources(ctx, pool)
+	}
 	if pool.config.RotateNodes {
 		return s.prepareRotatedSource(ctx, pool)
 	}
-	if cookie, _ := pool.currentCookie("/backend-api/codex/responses", time.Now()); cookie != nil {
+	if cookie, _ := pool.currentCookie("/backend-api/codex/responses", time.Now()); cookie != nil && !refresh {
 		pool.mu.Lock()
 		expires := pool.routes[pool.activeSource].expires
 		pool.mu.Unlock()
@@ -149,28 +188,61 @@ func (s *astraRoutingUpstream) PrepareAstraGateway(ctx context.Context) error {
 	}
 	s.preparing.Store(true)
 	defer s.preparing.Store(false)
+	// Keep all completed candidates: an acquisition success alone does not
+	// prove that the target can use this route. Bound parallel upstream work.
+	var workers sync.WaitGroup
+	slots := make(chan struct{}, 4)
 	for _, id := range pool.config.SourceAccountIDs {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if s.current(ctx) != pool {
-			return errors.New("configuration_changed")
-		}
-		probeStart := time.Now()
-		if err := s.preparer(ctx, id); err != nil {
-			reason := "source_test_failed"
-			if err.Error() == "answer_mismatch" {
-				reason = "candy_answer_mismatch"
+		pool.mu.Lock()
+		blocked := time.Now().Before(pool.rejectedSources[id])
+		if refresh {
+			if pool.statuses == nil {
+				pool.statuses = make(map[int64]service.AstraRouteStatus)
 			}
-			pool.recordSourceReason(id, probeStart, nil, false, reason)
+			status := pool.statuses[id]
+			status.AccountID = id
+			status.State = "waiting"
+			status.Reason = "reacquiring_after_target_failure"
+			pool.statuses[id] = status
 		}
-		if s.current(ctx) != pool {
-			return errors.New("configuration_changed")
+		pool.mu.Unlock()
+		if blocked && !refresh {
+			continue
 		}
-		if cookie, _ := pool.currentCookie("/backend-api/codex/responses", time.Now()); cookie != nil {
-			s.retryAfter = time.Time{}
-			return nil
-		}
+		workers.Add(1)
+		go func(id int64) {
+			defer workers.Done()
+			select {
+			case slots <- struct{}{}:
+				defer func() { <-slots }()
+			case <-ctx.Done():
+				return
+			}
+			if ctx.Err() != nil || s.current(ctx) != pool {
+				return
+			}
+			probe, cancel := context.WithTimeout(ctx, 45*time.Second)
+			defer cancel()
+			probeStart := time.Now()
+			if err := s.preparer(probe, id); err != nil {
+				reason := "source_test_failed"
+				if err.Error() == "answer_mismatch" {
+					reason = "candy_answer_mismatch"
+				}
+				pool.recordSourceReason(id, probeStart, nil, false, reason)
+			}
+		}(id)
+	}
+	workers.Wait()
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if s.current(ctx) != pool {
+		return errors.New("configuration_changed")
+	}
+	if cookie, _ := pool.currentCookie("/backend-api/codex/responses", time.Now()); cookie != nil {
+		s.retryAfter = time.Time{}
+		return nil
 	}
 	s.retryAfter = time.Now().Add(15 * time.Second)
 	return errors.New("no_qualified_source_route")
@@ -183,6 +255,23 @@ func (s *astraRoutingUpstream) AstraGatewaySnapshot(ctx context.Context) service
 		for _, id := range settings.CookiePool.SourceAccountIDs {
 			result.Sources = append(result.Sources, service.AstraRouteStatus{AccountID: id, State: "disabled", Reason: "disabled"})
 		}
+		return result
+	}
+	if pool.seamless != nil {
+		pool.mu.Lock()
+		result.Gateways = pool.gatewayObservations()
+		result.UnknownGatewaySamples = pool.unknownGatewaySamples
+		pool.mu.Unlock()
+		result = pool.seamless.snapshot(result, pool.config, time.Now())
+		pool.mu.Lock()
+		for i, row := range result.Sources {
+			if row.State == "waiting" {
+				if prior, ok := pool.statuses[row.AccountID]; ok {
+					result.Sources[i] = prior
+				}
+			}
+		}
+		pool.mu.Unlock()
 		return result
 	}
 	now := time.Now()
@@ -224,6 +313,9 @@ func (s *astraRoutingUpstream) AstraGatewaySnapshot(ctx context.Context) service
 				row.Answer = check.answer
 				row.Reason = check.reason
 				failedSource[check.sourceID] = true
+			} else if !check.passed && now.Before(check.expires) {
+				row.State = "rejected"
+				row.Reason = check.reason
 			} else {
 				row.State = "waiting"
 				row.Reason = "target_not_verified"

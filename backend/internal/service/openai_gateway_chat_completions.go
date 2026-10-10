@@ -1046,6 +1046,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	}
 	processFrame := func(frame openAICompatSSEFrame) bool {
 		payload := openAICompatPayloadWithEventType(frame.Data, frame.EventType)
+		BorrowBusinessRecoveryFromContext(c.Request.Context()).ObserveSSE(c.Request.Context(), []byte(payload), frame.EventType)
 		if strings.TrimSpace(payload) == "[DONE]" {
 			return false
 		}

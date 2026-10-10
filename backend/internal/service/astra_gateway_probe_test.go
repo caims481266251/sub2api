@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 type astraTargetProbeStub struct {
@@ -15,6 +17,34 @@ type astraTargetProbeStub struct {
 	calls   int
 	err     error
 	request *http.Request
+}
+
+func TestAstraGatewaySourceAcquiresWithSelectedModel(t *testing.T) {
+	for _, model := range []string{"", "gpt-5.6-sol", "source-alias"} {
+		t.Run(model, func(t *testing.T) {
+			cfg := &config.Config{}
+			cfg.Gateway.CodexGatewayPin.SourceAccountIDs = []int64{7}
+			if model != "" {
+				cfg.Gateway.CodexGatewayPin.SourceAccountModels = map[int64]string{7: model}
+			}
+			a := stateProbeAccount()
+			a.Status = StatusActive
+			if model == "source-alias" {
+				a.Credentials["model_mapping"] = map[string]any{"source-alias": "gpt-5.6-sol"}
+			}
+			upstream := &stateProbeUpstream{replies: []stateProbeReply{{status: http.StatusOK, body: "data: {\"type\":\"response.output_text.delta\",\"delta\":\"OK\"}\n\n" + stateProbeCompletedStream}}}
+			svc := &AccountTestService{cfg: cfg, accountRepo: &stateProbeAccountRepo{account: a}, httpUpstream: upstream}
+			require.NoError(t, svc.prepareAstraGatewaySource(t.Context(), a.ID))
+			require.Len(t, upstream.calls, 1)
+			want := cfg.Gateway.CodexGatewayPin.SourceModel(a.ID)
+			if model == "source-alias" {
+				want = "gpt-5.6-sol"
+			}
+			require.Equal(t, want, gjson.Get(upstream.calls[0].body, "model").String())
+			require.True(t, strings.Contains(upstream.calls[0].body, "Reply with OK only."))
+			require.Equal(t, "Bearer tok-7", upstream.calls[0].header.Get("Authorization"))
+		})
+	}
 }
 
 func (p *astraTargetProbeStub) VerifyAstraGatewayTarget(_ context.Context, req *http.Request, _ string, _ int64, _ int) error {

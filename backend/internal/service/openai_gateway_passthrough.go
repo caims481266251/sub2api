@@ -1483,6 +1483,14 @@ func openAIStreamFailedEventSemanticStatus(payload []byte, message string) int {
 			return status
 		}
 	}
+	// Explicit quota codes also appear without a rate_limit type/message.
+	// Keep HTTP/SSE business and internal workers on the same classification.
+	for _, value := range []string{code, errType} {
+		switch value {
+		case "usage_limit_reached", "usage_limit_exceeded", "insufficient_quota":
+			return http.StatusTooManyRequests
+		}
+	}
 	switch {
 	case strings.Contains(combined, "rate_limit"):
 		return http.StatusTooManyRequests
@@ -1710,14 +1718,18 @@ func (s *OpenAIGatewayService) handleOpenAIStreamTerminalAccountSideEffects(
 	headers http.Header,
 	canonicalModel ...string,
 ) (int, bool) {
+	ctx := context.Background()
+	if c != nil && c.Request != nil {
+		ctx = c.Request.Context()
+	}
+	return s.handleOpenAIStreamTerminalAccountSideEffectsContext(ctx, account, payload, message, headers, canonicalModel...)
+}
+
+func (s *OpenAIGatewayService) handleOpenAIStreamTerminalAccountSideEffectsContext(ctx context.Context, account *Account, payload []byte, message string, headers http.Header, canonicalModel ...string) (int, bool) {
 	statusCode := openAIStreamFailureStatus(payload, message)
 	if account != nil && account.IsGrok() {
 		if isGrokContentPolicyRejection(http.StatusForbidden, payload) {
 			return http.StatusForbidden, false
-		}
-		ctx := context.Background()
-		if c != nil && c.Request != nil {
-			ctx = c.Request.Context()
 		}
 		s.handleGrokAccountUpstreamError(withGrokTeamRateLimitModel(ctx, firstNonEmpty(canonicalModel...)), account, statusCode, nil, payload)
 		return statusCode, false
@@ -1729,10 +1741,6 @@ func (s *OpenAIGatewayService) handleOpenAIStreamTerminalAccountSideEffects(
 		}
 		fallthrough
 	case http.StatusUnauthorized, http.StatusTooManyRequests, 529:
-		ctx := context.Background()
-		if c != nil && c.Request != nil {
-			ctx = c.Request.Context()
-		}
 		model := firstNonEmpty(canonicalModel...)
 		if model == "" {
 			model = firstNonEmpty(gjson.GetBytes(payload, "model").String(), gjson.GetBytes(payload, "response.model").String())
@@ -2176,6 +2184,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 			dataBytes := []byte(data)
 			trimmedData := strings.TrimSpace(data)
 			rawEventType := effectiveOpenAISSEEventType(dataBytes, pendingSSEEventType)
+			BorrowBusinessRecoveryFromContext(ctx).ObserveSSE(ctx, dataBytes, rawEventType)
 			observer.ObserveOpenAI(dataBytes, rawEventType)
 			if needModelReplace {
 				line = s.replaceModelInSSELine(line, mappedModel, originalModel)

@@ -11,6 +11,15 @@ func ResolveAstraDependencies(value AstraRoutingSettings) (AstraRoutingSettings,
 	value.SchedulingGroupIDs = append([]int64(nil), value.SchedulingGroupIDs...)
 	value.CookiePool.SourceAccountIDs = append([]int64(nil), value.CookiePool.SourceAccountIDs...)
 	value.CookiePool.TargetAccountIDs = append([]int64(nil), value.CookiePool.TargetAccountIDs...)
+	if len(value.CookiePool.SourceAccountModels) > 0 {
+		models := make(map[int64]string, len(value.CookiePool.SourceAccountModels))
+		for id, model := range value.CookiePool.SourceAccountModels {
+			models[id] = model
+		}
+		value.CookiePool.SourceAccountModels = models
+	} else {
+		value.CookiePool.SourceAccountModels = nil
+	}
 	value.WSSession.AccountIDs = append([]int64(nil), value.WSSession.AccountIDs...)
 	if value.WSSession.Enabled {
 		value.CookiePool.Enabled = true

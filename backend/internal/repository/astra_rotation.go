@@ -226,8 +226,14 @@ func (s *astraRoutingUpstream) prepareRotatedSource(ctx context.Context, pool *c
 
 func (s *astraRoutingUpstream) targetRoute(req *http.Request, proxy string, id int64, n int, profile *tlsfingerprint.Profile) (*http.Cookie, [32]byte, string, func(), error) {
 	pool := s.current(req.Context())
-	if pool == nil || !pool.config.RotateNodes {
+	if pool == nil {
 		return s.targetRouteOnce(req, proxy, id, n, profile)
+	}
+	if pool.seamless != nil {
+		return s.seamlessTargetRoute(req, proxy, id, n, profile, pool)
+	}
+	if !pool.config.RotateNodes {
+		return s.targetSourceRoutes(req, proxy, id, n, profile, pool)
 	}
 	ctx, cancel := context.WithTimeout(req.Context(), 180*time.Second)
 	defer cancel()
@@ -287,6 +293,70 @@ func (s *astraRoutingUpstream) targetRoute(req *http.Request, proxy string, id i
 			return nil, key, proxy, func() {}, errors.New("astra_rotation_exhausted")
 		}
 	}
+}
+
+const astraSourceRecoveryRounds = 3
+const astraTargetCandidatesPerBatch = 3
+
+// Try independent candidates, then acquire fresh Cookies automatically when
+// the batch is exhausted. Never bypass validation or retry a rejected Cookie.
+func (s *astraRoutingUpstream) targetSourceRoutes(req *http.Request, proxy string, id int64, n int, profile *tlsfingerprint.Profile, pool *codexGatewayPinUpstream) (*http.Cookie, [32]byte, string, func(), error) {
+	if !pool.targetRecoveryMu.TryLock() {
+		// Concurrent business requests may reuse an exact cached pass, while
+		// fresh validation and source recovery remain serialized.
+		cached := req.Clone(context.WithValue(req.Context(), astraCachedTargetOnlyKey{}, true))
+		return s.targetRouteOnce(cached, proxy, id, n, profile)
+	}
+	defer pool.targetRecoveryMu.Unlock()
+	ctx, cancel := context.WithTimeout(req.Context(), 180*time.Second)
+	defer cancel()
+	req = req.Clone(ctx)
+	var lastErr error
+	var key [32]byte
+	for round := 0; round < astraSourceRecoveryRounds; round++ {
+		if s.current(ctx) != pool {
+			return nil, key, proxy, func() {}, errors.New("configuration_changed")
+		}
+		if round > 0 {
+			if err := s.prepareAstraGateway(ctx, true); err != nil {
+				if err.Error() == "source_preparer_unavailable" && lastErr != nil {
+					return nil, key, proxy, func() {}, lastErr
+				}
+				return nil, key, proxy, func() {}, err
+			}
+		}
+		for attempt := 0; attempt < len(pool.config.SourceAccountIDs) && attempt < astraTargetCandidatesPerBatch; attempt++ {
+			if s.current(ctx) != pool {
+				return nil, key, proxy, func() {}, errors.New("configuration_changed")
+			}
+			if attempt > 0 {
+				if cookie, _ := pool.currentCookie(req.URL.Path, time.Now()); cookie == nil {
+					break
+				}
+			}
+			cookie, candidateKey, egress, release, err := s.targetRouteOnce(req, proxy, id, n, profile)
+			key = candidateKey
+			if err == nil {
+				return cookie, key, egress, release, nil
+			}
+			if ctx.Err() != nil {
+				return nil, key, proxy, func() {}, ctx.Err()
+			}
+			if s.current(ctx) != pool {
+				return nil, key, proxy, func() {}, errors.New("configuration_changed")
+			}
+			switch err.Error() {
+			case "target_probe_degraded", "target_route_changed", "target_probe_failed":
+				lastErr = err
+			default:
+				return nil, key, proxy, func() {}, err
+			}
+		}
+	}
+	if lastErr == nil {
+		lastErr = errCodexGatewayPinUnavailable
+	}
+	return nil, key, proxy, func() {}, lastErr
 }
 
 // A reused listener must open a new CONNECT, never reuse a previous node's idle connection.

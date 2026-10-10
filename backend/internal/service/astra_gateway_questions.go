@@ -7,6 +7,7 @@ import (
 )
 
 type astraQuestion struct {
+	Model            string
 	Prompt, Expected string
 	HTML             bool
 }

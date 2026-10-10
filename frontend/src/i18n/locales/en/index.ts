@@ -1,3 +1,5 @@
+import ticketBorrowing from './ticketBorrowing'
+import proxyPool from './proxyPool'
 import priorityScheduling from './priorityScheduling'
 import qualityOps from './qualityOps'
 import controlledExperiments from './controlledExperiments'
@@ -20,6 +22,8 @@ import requestTiming from './requestTiming'
 import autoConfig from './autoConfig'
 
 export default {
+  ticketBorrowing,
+  proxyPool,
   autoConfig,
   priorityScheduling,
   qualityOps,

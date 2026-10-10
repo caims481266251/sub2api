@@ -4,6 +4,17 @@
 
 This directory contains SQL migration files for database schema changes. The migration system uses SHA256 checksums to ensure migration immutability and consistency across environments.
 
+All SQL files are embedded in the application binary. On a fresh installation,
+startup applies the full sequence to the empty database before serving requests,
+including required initial rows. Operators do not import SQL or run a separate
+migration command. Later starts verify checksums and apply only new scripts.
+
+The proxy-pool and borrowing migration dependencies are also named explicitly in
+`migrations.go`, so omitting one from a build context is a compilation error.
+`TestProxyPoolFirstInstall` verifies the complete embedded sequence against an
+empty database, then exercises the proxy-pool HTTP handlers through initial
+loading, encryption setup, import, and a simulated restart.
+
 ## Migration File Naming
 
 Format: `NNN_description.sql`
@@ -72,12 +83,12 @@ Why?
 
 3. **Test locally**
    ```bash
-   # Apply migration
-   make migrate-up
-
-   # Test rollback
-   make migrate-down
+   # From backend/, with Docker available. This creates a disposable database.
+   go test -tags=integration ./internal/handler/admin -run '^TestProxyPoolFirstInstall$' -count=1
    ```
+   For a disposable local PostgreSQL server, set
+   `SUB2API_FRESH_INSTALL_TEST_POSTGRES_URL` to its PostgreSQL URL. The test creates
+   and removes its own database. Never point this test at a production server.
 
 4. **Commit and deploy**
    ```bash
@@ -182,3 +193,25 @@ VALUES ('NNN_migration.sql', 'calculated_checksum', NOW());
 
 - Migration runner: `internal/repository/migrations_runner.go`
 - PostgreSQL docs: https://www.postgresql.org/docs/
+
+### 281–282：路由业务准入与全局探测继承
+
+281 新增全局最低剩余有效期，默认 120 秒。282 新增全局探测并发与提前量，以及目标账号覆盖标记；已有明确保存或非默认的策略保留为账号覆盖，新账号默认继承。两项迁移不修改历史路由、会话、请求或计费记录。
+
+### Borrow probe renewal default (283)
+
+Migration 283 sets the renewal default to 180 seconds for new global and target rows. It updates the untouched initial settings row (revision 1, old default 15) and preserves saved settings and existing account overrides. The service and UI fallback use the same default.
+
+### Shared borrowing proxy assignments (284)
+
+Migration 284 removes only entry-level uniqueness from source bindings and pending rotation assignments, retaining account primary keys and foreign keys. Non-unique entry indexes support allocation counts. The pool lock serializes planning, and each account keeps its own device identity. Existing bindings and histories remain intact.
+
+### Borrowing fingerprint snapshots (285)
+
+Migration 285 adds immutable identity/TLS snapshots and an indexed ClientHello structural comparison key to the fingerprint history. Active bindings and pending assignments carry a generator version; existing rows remain version 1 until normal rotation. Missing version 2 snapshots fail closed. The migration does not rotate sources, alter target identities, or remove history.
+
+- `286_ticket_borrow_source_auth_exclusion.sql`: 保存来源 401 拒绝凭据的 SHA-256 标识；按同一凭据剔除借票来源，保留账号、路由和日志，新凭据可恢复。
+
+### Normal account borrowing flow (287)
+
+Migration 287 requires borrowing source proxy/fingerprint bindings and retires only old source auth/quota task delays. Migration 286's rejection columns remain audit metadata; normal account eligibility and recovery now control source admission. Account cooldowns, proxy settings, task budgets, routes and historical logs are preserved. A legacy binding without a complete fingerprint fails closed until normal source rotation creates a snapshot.
