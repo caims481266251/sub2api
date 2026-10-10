@@ -90,7 +90,7 @@ func TestTicketBorrowNormalSelectionMembershipAndRouteSurvival(t *testing.T) {
 	ok, e := r.AcquireJob(ctx, "target", targetID, "normal-route")
 	require.NoError(t, e)
 	require.True(t, ok)
-	route := &service.BorrowRoute{ID: uuid.NewString(), TargetID: targetID, TargetRevision: tstate.Revision, SourceID: source.ID, IdentityHash: "identity", CookieHash: uuid.NewString(), ExpiresAt: time.Now().Add(time.Minute)}
+	route := &service.BorrowRoute{ID: uuid.NewString(), TargetID: targetID, TargetRevision: tstate.Revision, SourceID: source.ID, IdentityHash: "identity", CookieHash: uuid.NewString(), ExpiresAt: time.Now().Add(3 * time.Minute)}
 	require.NoError(t, r.Publish(ctx, route, "normal-route"))
 	selection, e = r.Selection(ctx)
 	require.NoError(t, e)

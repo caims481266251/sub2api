@@ -15,6 +15,8 @@ type borrowQueryer interface {
 
 // The target row serializes acquisition reservations and publication. Identity
 // is the same snapshot used by normal route admission, not a proxy-pool version.
+// A route that is no longer business-usable must not suppress acquisition when
+// the configured renewal window is smaller than the global admission floor.
 func checkBorrowAcquisition(ctx context.Context, db borrowQueryer, a service.BorrowAcquisition, waits bool) error {
 	var running, active, ready, upstream bool
 	var budgetUntil sql.NullTime
@@ -24,7 +26,7 @@ func checkBorrowAcquisition(ctx context.Context, db borrowQueryer, a service.Bor
  AND ($2=0 OR t.revision=$2) AND ($3='' OR (t.lease_token=$3 AND t.lease_until>clock_timestamp())),
  EXISTS(SELECT 1 FROM ticket_borrow_routes r LEFT JOIN ticket_borrow_cookie_deadlines d ON d.cookie_hash=r.cookie_hash
  WHERE r.target_id=t.account_id AND r.target_revision=t.revision AND r.revoked_at IS NULL
- AND ($4='' OR r.identity_hash=$4) AND LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at))>clock_timestamp()+t.renew_before_seconds*INTERVAL '1 second'),
+ AND ($4='' OR r.identity_hash=$4) AND LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at))>clock_timestamp()+GREATEST(CASE WHEN t.probe_policy_override THEN t.renew_before_seconds ELSE s.renew_before_seconds END,s.min_route_remaining_seconds)*INTERVAL '1 second'),
  COALESCE(t.upstream_wait_until>clock_timestamp(),false),t.budget_wait_until,clock_timestamp()
  FROM ticket_borrow_targets t JOIN accounts a ON a.id=t.account_id CROSS JOIN ticket_borrow_settings s
  WHERE t.account_id=$1 AND s.id=1`, a.TargetID, a.Revision, a.Lease, a.Identity).Scan(&running, &active, &ready, &upstream, &budgetUntil, &now)

@@ -80,6 +80,8 @@ func TestTicketBorrowProbePolicyAPIValidationAndScope(t *testing.T) {
 		status     int
 	}{
 		{name: "valid", body: `{"revision":1,"concurrency":3,"renew_before_seconds":15}`, status: 200},
+		{name: "inherit-global", body: `{"revision":1,"use_global":true}`, status: 200},
+		{name: "override-requires-values", body: `{"revision":1,"use_global":false}`, status: 400},
 		{name: "zero-window", body: `{"revision":1,"concurrency":32,"renew_before_seconds":0}`, status: 200},
 		{name: "missing-window", body: `{"revision":1,"concurrency":3}`, status: 400},
 		{name: "fractional", body: `{"revision":1,"concurrency":1.5,"renew_before_seconds":15}`, status: 400},
@@ -107,6 +109,7 @@ func TestTicketBorrowProbePolicyAPIValidationAndScope(t *testing.T) {
 			require.NotContains(t, w.Body.String(), "SECRET_DATABASE")
 			if tc.status == 200 {
 				require.EqualValues(t, 11, repo.id)
+				require.Equal(t, tc.name == "inherit-global", repo.policy.UseGlobal)
 				require.Contains(t, w.Body.String(), `"probe_policy"`)
 				require.Contains(t, w.Body.String(), `"revision":5`)
 			}

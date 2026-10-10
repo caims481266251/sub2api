@@ -324,12 +324,20 @@ func (h *AccountHandler) BorrowSaveProbePolicy(c *gin.Context) {
 		Revision           *int64 `json:"revision"`
 		Concurrency        *int   `json:"concurrency"`
 		RenewBeforeSeconds *int   `json:"renew_before_seconds"`
+		UseGlobal          bool   `json:"use_global"`
 	}
-	if c.ShouldBindJSON(&input) != nil || input.Revision == nil || input.Concurrency == nil || input.RenewBeforeSeconds == nil {
+	if c.ShouldBindJSON(&input) != nil || input.Revision == nil || (!input.UseGlobal && (input.Concurrency == nil || input.RenewBeforeSeconds == nil)) {
 		response.BadRequest(c, "borrow_probe_policy_invalid")
 		return
 	}
-	if err := s.SaveProbePolicy(c.Request.Context(), id, service.BorrowProbePolicy{Revision: *input.Revision, Concurrency: *input.Concurrency, RenewBeforeSeconds: *input.RenewBeforeSeconds}); err != nil {
+	policy := service.BorrowProbePolicy{Revision: *input.Revision, UseGlobal: input.UseGlobal}
+	if input.Concurrency != nil {
+		policy.Concurrency = *input.Concurrency
+	}
+	if input.RenewBeforeSeconds != nil {
+		policy.RenewBeforeSeconds = *input.RenewBeforeSeconds
+	}
+	if err := s.SaveProbePolicy(c.Request.Context(), id, policy); err != nil {
 		borrowError(c, err)
 		return
 	}

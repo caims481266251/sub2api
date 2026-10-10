@@ -1,12 +1,19 @@
 export default {
   policyPage: {
-  "intro": "Manage background acquisition, candidate lifetime and request budgets. Save to apply changes.",
+  "intro": "Manage background acquisition, route lifetime and request budgets. Saved changes apply immediately.",
   "liveState": "Saved state",
   "acquisition": "Acquisition & lifetime",
-  "acquisitionHint": "Control background acquisition and candidate lifetime without changing business egress.",
+  "acquisitionHint": "Control background acquisition, candidate lifetime and business route admission for all targets.",
   "ttlLabel": "Candidate lifetime limit",
   "ttlError": "Enter an integer from 30 to 240 seconds.",
-  "targetPolicies": "Configure probe concurrency and renewal per target",
+  "minRouteRemainingLabel": "Minimum remaining route lifetime",
+  "minRouteRemainingHint": "An integer from 0 to 240 seconds; default: 120. Applies to all targets. Routes at or below this remaining lifetime stop accepting new business requests. Return 429 when no other route is available. Requests already sent continue. Set to 0 to allow routes until expiry.",
+  "minRouteRemainingError": "Minimum remaining route lifetime must be an integer from 0 to 240 seconds.",
+  "minRouteRemainingWarning": "This value meets or exceeds the candidate lifetime limit. Even newly acquired routes may not accept business requests.",
+  "targetPolicies": "Manage account overrides",
+  "globalProbeTitle": "Global route probing policy",
+  "globalProbeHint": "Targets without an account override inherit this policy. Existing overrides are preserved. Concurrency is counted separately for each target and isolated from business requests. Saved changes apply immediately; in-flight requests continue.",
+  "renewWindowHint": "A renewal window at or below the minimum remaining lifetime leaves no advance replacement window. Consider a larger renewal window. Probing still resumes when routes become unavailable.",
   "budgetHint": "Rolling 60-second window. Sources share a budget; each target has its own.",
   "sourceBudgetLabel": "All sources combined",
   "targetBudgetLabel": "Each target account",
@@ -96,6 +103,12 @@ export default {
   secondsUnit: "s",
   routeRenewing: "Valid route still serving · renewal window reached",
   probePolicy: {
+    inherited: 'Global policy',
+    overridden: 'Account override',
+    "useGlobal": "Use global policy",
+    "inheritedHint": "Inherits the global values from Borrowing policy and follows future global changes. Uncheck to configure this account separately.",
+    "overrideHint": "This account has its own settings and will not follow global changes. Check and save to restore inheritance.",
+
     bulk: {
       "title": "Bulk probe settings",
       "hint": "Set probe concurrency and the renewal window for multiple target accounts. Only checked parameters change; other parameters keep each account’s current configuration.",
@@ -119,7 +132,7 @@ export default {
       "retryHint": "Successful changes are saved. Failed accounts remain selected. Review the reasons below, then close and reopen bulk settings to retry.",
       "draftHint": "Save or revert individual target probe drafts before applying bulk settings."
     },
-    "concurrencyHint": "Per target, 1–32 whole numbers. Default: 2.","concurrencyError": "Enter a whole number from 1 to 32.","renewHint": "0–240 seconds. Default: 15. Use 0 to probe after expiry.","renewError": "Enter a whole number from 0 to 240 seconds.", "title": "Route probe policy", "hint": "Configured independently for each target. Probes and business use separate concurrency. Business uses the target account proxy, or a direct connection when none is configured. Saving preserves valid routes.", "concurrency": "Probe concurrency", "renewBefore": "Resume probing before expiry", "ranges": "Concurrency: 1–32, default 2. Renewal window: 0–240 seconds, default 15. Set 0 to probe only after expiry.", "save": "Save probe policy"},
+    "concurrencyHint": "Per target, 1–32 whole numbers. Default: 2.","concurrencyError": "Enter a whole number from 1 to 32.","renewHint": "0–240 seconds. Default: 180. Use 0 to resume only when routes become unavailable.","renewError": "Enter a whole number from 0 to 240 seconds.", "title": "Route probe policy", "hint": "Inherits the global policy by default, with optional account overrides. Probes and business use separate concurrency. Business uses the target account proxy, or a direct connection when none is configured. Saving does not interrupt in-flight requests.", "concurrency": "Probe concurrency", "renewBefore": "Resume probing before expiry", "ranges": "Concurrency: 1–32, default 2. Renewal window: 0–240 seconds, default 180. Set 0 to probe when routes become unavailable.", "save": "Save probe policy"},
   rotation: {
     bulk: {
       title: 'Bulk rotation settings',
@@ -184,7 +197,7 @@ export default {
   sourceBudget: "All source requests per minute",
   sourceBudgetUsed: "Reservations across all sources in the last 60 seconds",
   requestBudgetTitle: "Request budgets",
-  expiryOnlyHint: "Pause new probes while a valid route is outside the target renewal window. Resume probing when the configured remaining lifetime is reached. Ordinary failures try other candidates without a fixed cooldown.",
+  expiryOnlyHint: "Resume probes when a route enters the target renewal window or no longer qualifies for business requests. Set the renewal window above the minimum remaining route lifetime to leave time for replacement. Ordinary failures try other candidates without a fixed cooldown.",
   validRouteIdle: "Valid route serving · outside the renewal window",
   recoveryTitle: "Acquisition after failures",
   recoveryEnabled: "Use progressive cooldown",
@@ -341,7 +354,7 @@ export default {
     rotation_configuration_changed: "Configuration changed; rotation cancelled",
     rotation_environment_changed: "Proxy and fingerprint changed",
  source_proxy_pool_unavailable: "Waiting for an enabled pool proxy assignment", source_configuration_changed: "Source configuration changed; waiting for the next round",
-    borrow_settings_invalid: "Invalid settings: target budget must be an integer from 2 to 60, source budget from 1 to 120, and route lifetime from 30 to 240 seconds.",
+    borrow_settings_invalid: "Invalid settings: target budget must be an integer from 2 to 60, source budget from 1 to 120, route lifetime from 30 to 240 seconds, and minimum remaining route lifetime from 0 to 240 seconds.",
     legacy_wait_unknown: "Legacy wait deadline (not extended)",
     source_request_budget: "Source request budget exhausted",
     budget_waiting: "Waiting for request budget",

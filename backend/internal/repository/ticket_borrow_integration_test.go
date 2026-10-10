@@ -43,7 +43,7 @@ func TestTicketBorrowPersistenceExpiryAndFencing(t *testing.T) {
 	require.True(t, ok)
 	now, e := r.Now(ctx)
 	require.NoError(t, e)
-	route := &service.BorrowRoute{ID: uuid.NewString(), TargetID: id, TargetRevision: target.Revision, SourceID: 1, IdentityHash: "identity", CookieHash: uuid.NewString(), Gateway: "chat.gateway.unified-1.api.openai.com", ExpiresAt: now.Add(time.Second)}
+	route := &service.BorrowRoute{ID: uuid.NewString(), TargetID: id, TargetRevision: target.Revision, SourceID: 1, IdentityHash: "identity", CookieHash: uuid.NewString(), Gateway: "chat.gateway.unified-1.api.openai.com", ExpiresAt: now.Add(3 * time.Minute)}
 	require.NoError(t, r.Publish(ctx, route, "lease-one"))
 	got, e := r.Route(ctx, id, "identity", "")
 	require.NoError(t, e)
@@ -156,7 +156,7 @@ func TestTicketBorrowSessionsReplacementSourceDeleteAndFreshRepository(t *testin
 	require.True(t, ok)
 	now, e := r.Now(ctx)
 	require.NoError(t, e)
-	old := &service.BorrowRoute{ID: uuid.NewString(), TargetID: id, TargetRevision: target.Revision, SourceID: source.ID, IdentityHash: "identity", CookieHash: uuid.NewString(), ExpiresAt: now.Add(time.Minute)}
+	old := &service.BorrowRoute{ID: uuid.NewString(), TargetID: id, TargetRevision: target.Revision, SourceID: source.ID, IdentityHash: "identity", CookieHash: uuid.NewString(), ExpiresAt: now.Add(220 * time.Second)}
 	require.NoError(t, r.Publish(ctx, old, "worker"))
 	bound, e := r.BindSession(ctx, id, "conversation", old.ID)
 	require.NoError(t, e)
@@ -164,8 +164,8 @@ func TestTicketBorrowSessionsReplacementSourceDeleteAndFreshRepository(t *testin
 	replacement := *old
 	replacement.ID = uuid.NewString()
 	replacement.CookieHash = uuid.NewString()
-	replacement.ExpiresAt = now.Add(2 * time.Minute)
-	// The expiry-only policy rejects further publication while a route is live.
+	replacement.ExpiresAt = now.Add(4 * time.Minute)
+	// Further publication is rejected while a route is outside the renewal window.
 	// Seed a historical overlapping route to retain coverage of old sessions
 	// created before that policy was introduced.
 	require.ErrorIs(t, r.Publish(ctx, &replacement, "worker"), service.ErrBorrowConflict)

@@ -28,7 +28,7 @@ func probeBatchFixture() (*TicketBorrowService, *probeBatchTestRepo) {
 	return NewTicketBorrowService(r, nil, nil), r
 }
 func TestTicketBorrowProbeBatchPreservesUnspecifiedFieldsAndAcceptsZero(t *testing.T) {
-	require.Equal(t, BorrowProbePolicy{Concurrency: 2, RenewBeforeSeconds: 15}, DefaultBorrowProbePolicy())
+	require.Equal(t, BorrowProbePolicy{Concurrency: 2, RenewBeforeSeconds: 180}, DefaultBorrowProbePolicy())
 	for _, concurrencyOnly := range []bool{true, false} {
 		s, r := probeBatchFixture()
 		in := BorrowProbeBatchInput{Accounts: []BorrowProbeBatchAccount{{11, new(int64(2))}, {12, new(int64(3))}}}

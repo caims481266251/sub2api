@@ -10,6 +10,15 @@ const now = Date.now()
 const target = (id: number): BorrowTarget => ({ account_id: id, name: `target ${id}`, enabled: true, revision: 1, ready: true, phase: 'verifying', reason: 'target_probe_passed', expires_at: new Date(now+120000).toISOString(), server_now: new Date(now).toISOString(), next_attempt_at: '', inflight: 3, probe_policy: { revision: 1, concurrency: 3, renew_before_seconds: 15 } })
 
 describe('account management lists', () => {
+  it('stops showing a route as ready at its admission deadline before cookie expiry', async () => {
+    const route = { ...target(1), expires_at: new Date(now+121000).toISOString(), usable_until: new Date(now+1000).toISOString() }
+    const w = mount(BorrowTargetList, { props: { targets: [route], running: true, now, dirtyIds: {} } })
+    expect(w.get('[data-target-row="1"]').text()).toContain('ticketBorrowing.ready')
+    await w.setProps({ now: now + 1000 })
+    expect(w.get('[data-target-row="1"]').text()).toContain('ticketBorrowing.management.noRoute')
+    expect(w.get('[data-target-row="1"]').text()).not.toContain('ticketBorrowing.remaining')
+    w.unmount()
+  })
   it('selects target accounts across pages and clears selection when filters change', async () => {
     const targets = [...Array.from({length: 25}, (_, i) => target(i+1)), {...target(26), probe_policy: undefined}]
     const w = mount(BorrowTargetList, { props: { targets, running: true, now, dirtyIds: {}, selected: [24] } })

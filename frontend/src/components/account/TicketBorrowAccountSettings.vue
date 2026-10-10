@@ -31,7 +31,7 @@ let serverOffset = 0
 let generation = 0
 let disposed = false
 const ttl = computed(() => status.value?.expires_at ? Date.parse(status.value.expires_at) - now.value - serverOffset : 0)
-const usable = computed(() => !!status.value?.ready && ttl.value > 0)
+const usable = computed(() => !!status.value?.ready && Date.parse(status.value.usable_until ?? status.value.expires_at ?? '') > now.value + serverOffset)
 const remaining = computed(() => ttl.value < 1000 ? t('ticketBorrowing.underSecond') : t('ticketBorrowing.seconds', { count: Math.ceil(ttl.value / 1000) }))
 function accept(value: BorrowTarget) { if (status.value?.account_id === value.account_id && (status.value?.probe_policy?.revision ?? 0) > (value.probe_policy?.revision ?? 0)) value = { ...value, probe_policy: status.value!.probe_policy }; serverOffset = Date.parse(value.server_now) - Date.now(); status.value = value; now.value = Date.now() }
 function message(e: unknown) { const value = e as { reason?: string; message?: string }; const key = `ticketBorrowing.reasons.${value.reason || value.message}`; return te(key) ? t(key) : t('ticketBorrowing.failure') }

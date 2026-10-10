@@ -206,6 +206,13 @@ func (s *TicketBorrowService) Settings(ctx context.Context) (BorrowSettings, err
 }
 func (s *TicketBorrowService) SaveSettings(ctx context.Context, v BorrowSettings) error {
 	NormalizeBorrowSettings(&v)
+	if v.MinRouteRemainingSeconds != nil && (*v.MinRouteRemainingSeconds < 0 || *v.MinRouteRemainingSeconds > 240) {
+		return errors.New("borrow_settings_invalid")
+	}
+	if (v.ProbeConcurrency != nil && (*v.ProbeConcurrency < 1 || *v.ProbeConcurrency > 32)) ||
+		(v.RenewBeforeSeconds != nil && (*v.RenewBeforeSeconds < 0 || *v.RenewBeforeSeconds > 240)) {
+		return ErrBorrowProbePolicyInvalid
+	}
 	if v.TTLSeconds < 30 || v.TTLSeconds > 240 || v.Recovery.ProbeRequestsPerMinute < 2 || v.Recovery.ProbeRequestsPerMinute > 60 || v.Recovery.SourceRequestsPerMinute < 1 || v.Recovery.SourceRequestsPerMinute > 120 {
 		return errors.New("borrow_settings_invalid")
 	}
@@ -272,6 +279,9 @@ func (s *TicketBorrowService) Status(ctx context.Context, id int64) (BorrowTarge
 	target.Ready = true
 	target.Gateway = route.Gateway
 	target.ExpiresAt = &route.ExpiresAt
+	if !route.UsableUntil.IsZero() {
+		target.UsableUntil = &route.UsableUntil
+	}
 	return target, nil
 }
 func (s *TicketBorrowService) Targets(ctx context.Context) ([]BorrowTarget, error) {

@@ -73,6 +73,7 @@ func TestTicketBorrowProbeConcurrencyPerTargetAndBusinessIsolation(t *testing.T)
 	status, err := r.Target(ctx, id)
 	require.NoError(t, err)
 	p := status.ProbePolicy
+	p.UseGlobal = false
 	p.Concurrency = 1
 	require.NoError(t, r.(service.BorrowProbePolicyRepository).SaveProbePolicy(ctx, id, p))
 	q.ID = uuid.NewString()
@@ -87,7 +88,18 @@ func TestTicketBorrowProbeConcurrencyPerTargetAndBusinessIsolation(t *testing.T)
 
 func TestTicketBorrowProbePolicyPersistsWithoutInvalidatingRoutes(t *testing.T) {
 	r, id, q := borrowRecoveryFixture(t)
+	borrowSetAdmissionFloor(t, r, 0) // Isolate the existing probe-policy behavior.
 	ctx := t.Context()
+	settings, err := r.Settings(ctx)
+	require.NoError(t, err)
+	original := settings
+	t.Cleanup(func() {
+		current, _ := r.Settings(context.Background())
+		original.Revision = current.Revision
+		_ = r.SaveSettings(context.Background(), original)
+	})
+	settings.RenewBeforeSeconds = new(15) // Exercise a saved, non-default global policy.
+	require.NoError(t, r.SaveSettings(ctx, settings))
 	before, err := r.Target(ctx, id)
 	require.NoError(t, err)
 	require.Equal(t, 15, before.ProbePolicy.RenewBeforeSeconds)
@@ -102,6 +114,7 @@ func TestTicketBorrowProbePolicyPersistsWithoutInvalidatingRoutes(t *testing.T) 
 	require.NoError(t, err)
 	require.False(t, ok)
 	policy := before.ProbePolicy
+	policy.UseGlobal = false
 	policy.RenewBeforeSeconds = 60
 	policy.Concurrency = 5
 	require.NoError(t, r.(service.BorrowProbePolicyRepository).SaveProbePolicy(ctx, id, policy))
@@ -140,6 +153,7 @@ func TestTicketBorrowProbePolicyPersistsWithoutInvalidatingRoutes(t *testing.T) 
 
 func TestTicketBorrowProbeThresholdUsesCookieDeadlineAndZeroWindow(t *testing.T) {
 	r, id, q := borrowRecoveryFixture(t)
+	borrowSetAdmissionFloor(t, r, 0) // Both zero thresholds retain expiry-only behavior.
 	ctx := t.Context()
 	now, err := r.Now(ctx)
 	require.NoError(t, err)
@@ -157,6 +171,7 @@ func TestTicketBorrowProbeThresholdUsesCookieDeadlineAndZeroWindow(t *testing.T)
 	status, err := r.Target(ctx, id)
 	require.NoError(t, err)
 	policy := status.ProbePolicy
+	policy.UseGlobal = false
 	policy.RenewBeforeSeconds = 0
 	require.NoError(t, r.(service.BorrowProbePolicyRepository).SaveProbePolicy(ctx, id, policy))
 	ok, err = r.AcquireJob(ctx, "target", id, "zero-window")

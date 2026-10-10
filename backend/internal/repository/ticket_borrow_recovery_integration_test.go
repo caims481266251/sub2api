@@ -96,7 +96,7 @@ func TestTicketBorrowBusinessDoesNotExtendUpstreamWaitOrRouteExpiry(t *testing.T
 	ctx := t.Context()
 	now, e := r.Now(ctx)
 	require.NoError(t, e)
-	route := &service.BorrowRoute{ID: uuid.NewString(), TargetID: id, TargetRevision: q.Revision, SourceID: 1, IdentityHash: "identity", CookieHash: uuid.NewString(), ExpiresAt: now.Add(3 * time.Minute)}
+	route := &service.BorrowRoute{ID: uuid.NewString(), TargetID: id, TargetRevision: q.Revision, SourceID: 1, IdentityHash: "identity", CookieHash: uuid.NewString(), ExpiresAt: now.Add(220 * time.Second)}
 	require.NoError(t, r.Publish(ctx, route, "worker"))
 	require.NoError(t, r.RecordProbeOutcome(ctx, id, "worker", "target_rate_limited", 60500*time.Millisecond))
 	before, e := r.Target(ctx, id)

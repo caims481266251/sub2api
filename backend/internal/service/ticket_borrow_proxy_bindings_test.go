@@ -90,6 +90,7 @@ func (r *automaticBorrowRepo) AcquireJob(_ context.Context, kind string, _ int64
 
 func TestTicketBorrowAutomaticTickPauseValidRouteAndExpiry(t *testing.T) {
 	s, base := borrowFixture()
+	base.route.ExpiresAt = base.now.Add(220 * time.Second)
 	r := &automaticBorrowRepo{borrowWorkerRepo: &borrowWorkerRepo{borrowTestRepo: base, source: BorrowSource{ID: 1, Enabled: true, Model: "gpt-6-luna", Secret: BorrowSourceSecret{Credentials: map[string]any{"access_token": "source"}}}}}
 	s.repo = r
 	cookie := "x." + base64.RawURLEncoding.EncodeToString([]byte(`{"host":"chat.gateway.unified-1.api.openai.com"}`)) + ".x"

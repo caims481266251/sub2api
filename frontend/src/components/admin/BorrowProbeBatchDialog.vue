@@ -60,7 +60,7 @@ const emit = defineEmits<{ close: []; save: [input: BorrowProbeBatchInput]; dirt
 const { t, te } = useI18n()
 const selectedAccounts = computed(() => props.accounts.filter(a => props.selectedIds.includes(a.account_id)))
 const scope = ref(selectedAccounts.value.length ? 'selected' : 'all')
-const changeConcurrency = ref(false), concurrency = ref(2), changeRenew = ref(false), renew = ref(15)
+const changeConcurrency = ref(false), concurrency = ref(2), changeRenew = ref(false), renew = ref(180)
 const targets = computed(() => scope.value === 'all' ? props.accounts : selectedAccounts.value)
 const accountNames = computed(() => new Map(props.accounts.map(a => [a.account_id, a.name])))
 const failed = computed(() => props.results?.filter(item => item.status === 'failed') ?? [])

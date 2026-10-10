@@ -143,7 +143,7 @@ func (r *ticketBorrowRepository) RefreshSource(ctx context.Context, id, revision
 func (r *ticketBorrowRepository) Settings(ctx context.Context) (service.BorrowSettings, error) {
 	var s service.BorrowSettings
 	var recovery []byte
-	err := r.db.QueryRowContext(ctx, `SELECT revision,running,ttl_seconds,prewarm_seconds,recovery FROM ticket_borrow_settings WHERE id=1`).Scan(&s.Revision, &s.Running, &s.TTLSeconds, &s.PrewarmSeconds, &recovery)
+	err := r.db.QueryRowContext(ctx, `SELECT revision,running,ttl_seconds,prewarm_seconds,recovery,min_route_remaining_seconds,probe_concurrency,renew_before_seconds FROM ticket_borrow_settings WHERE id=1`).Scan(&s.Revision, &s.Running, &s.TTLSeconds, &s.PrewarmSeconds, &recovery, &s.MinRouteRemainingSeconds, &s.ProbeConcurrency, &s.RenewBeforeSeconds)
 	if err == nil {
 		err = json.Unmarshal(recovery, &s.Recovery)
 		service.NormalizeBorrowSettings(&s)
@@ -173,7 +173,7 @@ func (r *ticketBorrowRepository) SaveSettings(ctx context.Context, s service.Bor
 	if _, err = tx.ExecContext(ctx, `SELECT account_id FROM ticket_borrow_targets ORDER BY account_id FOR UPDATE`); err != nil {
 		return err
 	}
-	res, err := tx.ExecContext(ctx, `UPDATE ticket_borrow_settings SET running=$1,ttl_seconds=$2,prewarm_seconds=$3,revision=revision+1,recovery=COALESCE($5::jsonb,recovery) WHERE id=1 AND revision=$4`, s.Running, s.TTLSeconds, s.PrewarmSeconds, s.Revision, recovery)
+	res, err := tx.ExecContext(ctx, `UPDATE ticket_borrow_settings SET running=$1,ttl_seconds=$2,prewarm_seconds=$3,revision=revision+1,recovery=COALESCE($5::jsonb,recovery),min_route_remaining_seconds=COALESCE($6,min_route_remaining_seconds),probe_concurrency=COALESCE($7,probe_concurrency),renew_before_seconds=COALESCE($8,renew_before_seconds) WHERE id=1 AND revision=$4`, s.Running, s.TTLSeconds, s.PrewarmSeconds, s.Revision, recovery, s.MinRouteRemainingSeconds, s.ProbeConcurrency, s.RenewBeforeSeconds)
 	if err != nil {
 		return err
 	}
@@ -192,12 +192,12 @@ func (r *ticketBorrowRepository) SaveSettings(ctx context.Context, s service.Bor
 
 const borrowTargetSelect = `SELECT a.id,a.name,COALESCE(t.enabled,false),COALESCE(t.revision,0),COALESCE(t.cursor,0),COALESCE(t.refresh_requested,false),COALESCE(t.scan_sources,'[]'::jsonb),COALESCE(t.scan_offset,0),COALESCE(t.phase,'waiting'),COALESCE(t.last_reason,''),COALESCE(t.next_attempt_at,NOW()),clock_timestamp(),t.upstream_wait_until,COALESCE(t.cooldown_seconds,0),COALESCE(t.recovery_level,0),COALESCE(t.consecutive_failures,0),COALESCE(t.recovery_epoch,0),t.last_request_started_at,t.last_request_finished_at,
  (SELECT count(*) FROM ticket_borrow_requests x WHERE x.target_id=a.id AND x.kind='probe' AND x.finished_at IS NULL AND x.lease_until>clock_timestamp()),
- (SELECT count(*) FROM ticket_borrow_requests x WHERE x.target_id=a.id AND x.kind='probe' AND x.reserved_at>clock_timestamp()-INTERVAL '60 seconds'),t.upstream_wait_until,COALESCE(t.upstream_wait_reason,''),t.budget_wait_until,COALESCE(t.probe_policy_revision,0),COALESCE(t.probe_concurrency,2),COALESCE(t.renew_before_seconds,15) FROM accounts a LEFT JOIN ticket_borrow_targets t ON t.account_id=a.id `
+ (SELECT count(*) FROM ticket_borrow_requests x WHERE x.target_id=a.id AND x.kind='probe' AND x.reserved_at>clock_timestamp()-INTERVAL '60 seconds'),t.upstream_wait_until,COALESCE(t.upstream_wait_reason,''),t.budget_wait_until,COALESCE(t.probe_policy_revision,0),CASE WHEN t.probe_policy_override THEN t.probe_concurrency ELSE s.probe_concurrency END,CASE WHEN t.probe_policy_override THEN t.renew_before_seconds ELSE s.renew_before_seconds END,NOT COALESCE(t.probe_policy_override,false),s.probe_concurrency,s.renew_before_seconds FROM accounts a LEFT JOIN ticket_borrow_targets t ON t.account_id=a.id JOIN ticket_borrow_settings s ON s.id=1 `
 
 func scanBorrowTarget(row interface{ Scan(...any) error }) (service.BorrowTarget, error) {
 	var t service.BorrowTarget
 	var sources []byte
-	err := row.Scan(&t.AccountID, &t.Name, &t.Enabled, &t.Revision, &t.Cursor, &t.RefreshRequested, &sources, &t.ScanOffset, &t.Phase, &t.Reason, &t.NextAttemptAt, &t.ServerNow, &t.CooldownUntil, &t.CooldownSeconds, &t.RecoveryLevel, &t.ConsecutiveFailures, &t.RecoveryEpoch, &t.LastRequestStartedAt, &t.LastRequestFinishedAt, &t.Inflight, &t.ProbeRequestsLastMinute, &t.UpstreamWaitUntil, &t.UpstreamWaitReason, &t.BudgetWaitUntil, &t.ProbePolicy.Revision, &t.ProbePolicy.Concurrency, &t.ProbePolicy.RenewBeforeSeconds)
+	err := row.Scan(&t.AccountID, &t.Name, &t.Enabled, &t.Revision, &t.Cursor, &t.RefreshRequested, &sources, &t.ScanOffset, &t.Phase, &t.Reason, &t.NextAttemptAt, &t.ServerNow, &t.CooldownUntil, &t.CooldownSeconds, &t.RecoveryLevel, &t.ConsecutiveFailures, &t.RecoveryEpoch, &t.LastRequestStartedAt, &t.LastRequestFinishedAt, &t.Inflight, &t.ProbeRequestsLastMinute, &t.UpstreamWaitUntil, &t.UpstreamWaitReason, &t.BudgetWaitUntil, &t.ProbePolicy.Revision, &t.ProbePolicy.Concurrency, &t.ProbePolicy.RenewBeforeSeconds, &t.ProbePolicy.UseGlobal, &t.ProbePolicy.GlobalConcurrency, &t.ProbePolicy.GlobalRenewBeforeSeconds)
 	if err == nil {
 		err = json.Unmarshal(sources, &t.ScanSources)
 		t.ScanTotal = len(t.ScanSources)
@@ -398,11 +398,15 @@ func (r *ticketBorrowRepository) Publish(ctx context.Context, route *service.Bor
 func (r *ticketBorrowRepository) Route(ctx context.Context, id int64, identity, preferred string) (*service.BorrowRoute, error) {
 	var route service.BorrowRoute
 	var secret string
-	err := r.db.QueryRowContext(ctx, `SELECT r.id,r.target_id,r.target_revision,r.source_id,r.identity_hash,r.cookie_hash,r.gateway,LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at)),r.secret
+	// Read the current global floor on every lookup, including bound routes and
+	// the final transport admission check. Never revoke a route or cancel a stream
+	// just because it has crossed the admission floor.
+	err := r.db.QueryRowContext(ctx, `SELECT r.id,r.target_id,r.target_revision,r.source_id,r.identity_hash,r.cookie_hash,r.gateway,LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at)),r.secret,
+ LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at))-s.min_route_remaining_seconds*INTERVAL '1 second'
  FROM ticket_borrow_routes r LEFT JOIN ticket_borrow_cookie_deadlines d ON d.cookie_hash=r.cookie_hash JOIN ticket_borrow_targets t ON t.account_id=r.target_id AND t.revision=r.target_revision
- JOIN accounts a ON a.id=t.account_id
- WHERE t.account_id=$1 AND t.enabled AND a.deleted_at IS NULL AND a.status='active' AND a.schedulable AND (NOT a.auto_pause_on_expired OR a.expires_at IS NULL OR a.expires_at>clock_timestamp()) AND NOT EXISTS(SELECT 1 FROM ticket_borrow_rotation_accounts x WHERE x.account_id=t.account_id AND x.phase='draining' AND x.active_job IS NOT NULL) AND r.revoked_at IS NULL AND LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at))>clock_timestamp() AND r.identity_hash=$2 AND ($3='' OR r.id=$3)
- ORDER BY LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at)) DESC,r.checked_at DESC LIMIT 1`, id, identity, preferred).Scan(&route.ID, &route.TargetID, &route.TargetRevision, &route.SourceID, &route.IdentityHash, &route.CookieHash, &route.Gateway, &route.ExpiresAt, &secret)
+ JOIN accounts a ON a.id=t.account_id JOIN ticket_borrow_settings s ON s.id=1
+ WHERE t.account_id=$1 AND t.enabled AND a.deleted_at IS NULL AND a.status='active' AND a.schedulable AND (NOT a.auto_pause_on_expired OR a.expires_at IS NULL OR a.expires_at>clock_timestamp()) AND NOT EXISTS(SELECT 1 FROM ticket_borrow_rotation_accounts x WHERE x.account_id=t.account_id AND x.phase='draining' AND x.active_job IS NOT NULL) AND r.revoked_at IS NULL AND LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at))>clock_timestamp()+s.min_route_remaining_seconds*INTERVAL '1 second' AND r.identity_hash=$2 AND ($3='' OR r.id=$3)
+ ORDER BY LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at)) DESC,r.checked_at DESC LIMIT 1`, id, identity, preferred).Scan(&route.ID, &route.TargetID, &route.TargetRevision, &route.SourceID, &route.IdentityHash, &route.CookieHash, &route.Gateway, &route.ExpiresAt, &secret, &route.UsableUntil)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, service.ErrBorrowUnavailable
 	}

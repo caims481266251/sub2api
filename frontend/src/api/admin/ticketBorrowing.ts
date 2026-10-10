@@ -16,7 +16,7 @@ export interface BorrowSelection {
 }
 export interface BorrowSourceOption { id: number; name: string; group_ids: number[]; status: string; schedulable: boolean; is_target: boolean }
 export interface BorrowSourceOptions { accounts: BorrowSourceOption[]; groups: {id: number; name: string}[]; legacy_count: number; restorable_count: number }
-export interface BorrowProbePolicy { revision: number; concurrency: number; renew_before_seconds: number }
+export interface BorrowProbePolicy { revision: number; concurrency: number; renew_before_seconds: number; use_global?: boolean; global_concurrency?: number; global_renew_before_seconds?: number }
 export interface BorrowProbeBatchAccount { account_id: number; revision: number; name: string }
 export interface BorrowProbeBatchInput {
  accounts: { account_id: number; revision: number }[]
@@ -33,10 +33,10 @@ export interface BorrowTarget {
   account_id: number; name: string; enabled: boolean; revision: number
   scan_completed?: number; scan_total?: number; refresh_requested?: boolean;
  ready: boolean; phase: string; reason: string; gateway?: string
-  expires_at?: string; server_now: string; next_attempt_at: string
+  expires_at?: string; usable_until?: string; server_now: string; next_attempt_at: string
 }
 export interface BorrowRecoverySettings { enabled: boolean; failure_threshold: number; cooldown_seconds: number[]; probe_requests_per_minute: number; source_requests_per_minute?: number }
-export interface BorrowSettings { revision?:number; running: boolean; ttl_seconds: number; prewarm_seconds: number; recovery?: BorrowRecoverySettings; server_now?: string; source_budget?: { used: number; limit: number; available_at?: string } }
+export interface BorrowSettings { revision?:number; running: boolean; ttl_seconds: number; min_route_remaining_seconds?: number; probe_concurrency?: number; renew_before_seconds?: number; prewarm_seconds: number; recovery?: BorrowRecoverySettings; server_now?: string; source_budget?: { used: number; limit: number; available_at?: string } }
 export interface BorrowEnvironment {
   identity_hash?: string; profile_hash?: string; configured_proxy_hash?: string; client_version?: string; body_hash?: string
 }

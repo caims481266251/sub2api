@@ -26,15 +26,16 @@ func (a borrowTestAccounts) GetByID(context.Context, int64) (*Account, error) { 
 
 type borrowTestRepo struct {
 	TicketBorrowRepository
-	mu          sync.Mutex
-	now         time.Time
-	enabled     bool
-	unavailable bool
-	route       *BorrowRoute
-	revoked     []string
-	sessions    map[string]string
-	oldRoutes   map[string]*BorrowRoute
-	events      []BorrowEvent
+	mu           sync.Mutex
+	now          time.Time
+	minRemaining time.Duration
+	enabled      bool
+	unavailable  bool
+	route        *BorrowRoute
+	revoked      []string
+	sessions     map[string]string
+	oldRoutes    map[string]*BorrowRoute
+	events       []BorrowEvent
 }
 
 func (r *borrowTestRepo) Target(context.Context, int64) (BorrowTarget, error) {
@@ -52,10 +53,11 @@ func (r *borrowTestRepo) Route(_ context.Context, id int64, identity, preferred 
 	if preferred != "" && r.oldRoutes[preferred] != nil {
 		route = r.oldRoutes[preferred]
 	}
-	if r.unavailable || !r.enabled || route == nil || route.TargetID != id || route.IdentityHash != identity || !r.now.Before(route.ExpiresAt) || (preferred != "" && preferred != route.ID) {
+	if r.unavailable || !r.enabled || route == nil || route.TargetID != id || route.IdentityHash != identity || !r.now.Add(r.minRemaining).Before(route.ExpiresAt) || (preferred != "" && preferred != route.ID) {
 		return nil, ErrBorrowUnavailable
 	}
 	copy := *route
+	copy.UsableUntil = copy.ExpiresAt.Add(-r.minRemaining)
 	return &copy, nil
 }
 func (r *borrowTestRepo) Revoke(_ context.Context, _ int64, id, _ string) error {
@@ -105,7 +107,7 @@ func borrowRequest(t *testing.T) *http.Request {
 	req.Header.Set("X-Codex-Turn-State", "conversation-ticket")
 	return req
 }
-func TestTicketBorrowExpiryAllowsLastMillisecond(t *testing.T) {
+func TestTicketBorrowExpiryAllowsLastMillisecondWithZeroFloor(t *testing.T) {
 	for _, remaining := range []time.Duration{15 * time.Second, time.Second, time.Millisecond, 0, -time.Millisecond} {
 		t.Run(remaining.String(), func(t *testing.T) {
 			s, r := borrowFixture()

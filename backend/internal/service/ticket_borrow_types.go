@@ -92,7 +92,7 @@ func DefaultBorrowRecoverySettings() *BorrowRecoverySettings {
 
 // NormalizeBorrowSettings reports the policy actually enforced by this version.
 // Legacy global prewarming and progressive cooldown stay disabled; renewal is
-// controlled by each target's separate probe policy.
+// controlled by the global probe policy with optional account overrides.
 func NormalizeBorrowSettings(s *BorrowSettings) {
 	s.PrewarmSeconds = 0
 	if s.Recovery == nil {
@@ -179,13 +179,17 @@ type BorrowCandidateDetails struct {
 	ContinueStatus         int                  `json:"continue_status,omitempty"`
 }
 type BorrowSettings struct {
-	SourceBudget   *BorrowBudgetStatus     `json:"source_budget,omitempty"`
-	ServerNow      time.Time               `json:"server_now"`
-	Recovery       *BorrowRecoverySettings `json:"recovery,omitempty"`
-	Revision       int64                   `json:"revision"`
-	Running        bool                    `json:"running"`
-	TTLSeconds     int                     `json:"ttl_seconds"`
-	PrewarmSeconds int                     `json:"prewarm_seconds"`
+	// Nil on writes preserves the saved value for older API clients.
+	MinRouteRemainingSeconds *int                    `json:"min_route_remaining_seconds,omitempty"`
+	ProbeConcurrency         *int                    `json:"probe_concurrency,omitempty"`
+	RenewBeforeSeconds       *int                    `json:"renew_before_seconds,omitempty"`
+	SourceBudget             *BorrowBudgetStatus     `json:"source_budget,omitempty"`
+	ServerNow                time.Time               `json:"server_now"`
+	Recovery                 *BorrowRecoverySettings `json:"recovery,omitempty"`
+	Revision                 int64                   `json:"revision"`
+	Running                  bool                    `json:"running"`
+	TTLSeconds               int                     `json:"ttl_seconds"`
+	PrewarmSeconds           int                     `json:"prewarm_seconds"`
 }
 
 // Budget status is calculated from database reservations, never from client input.
@@ -223,6 +227,7 @@ type BorrowTarget struct {
 	Ready                   bool              `json:"ready"`
 	Gateway                 string            `json:"gateway,omitempty"`
 	ExpiresAt               *time.Time        `json:"expires_at,omitempty"`
+	UsableUntil             *time.Time        `json:"usable_until,omitempty"`
 	ServerNow               time.Time         `json:"server_now"`
 }
 type BorrowRouteSecret struct {
@@ -241,6 +246,7 @@ type BorrowRoute struct {
 	CookieHash     string            `json:"cookie_hash"`
 	Gateway        string            `json:"gateway"`
 	ExpiresAt      time.Time         `json:"expires_at"`
+	UsableUntil    time.Time         `json:"usable_until"`
 	Secret         BorrowRouteSecret `json:"-"`
 }
 type BorrowEvent struct {

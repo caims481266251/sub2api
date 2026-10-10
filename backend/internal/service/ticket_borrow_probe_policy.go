@@ -10,13 +10,16 @@ var ErrBorrowProbePolicyInvalid = errors.New("borrow_probe_policy_invalid")
 var ErrBorrowProbeBusy = errors.New("borrow_probe_concurrency_full")
 
 type BorrowProbePolicy struct {
-	Revision           int64 `json:"revision"`
-	Concurrency        int   `json:"concurrency"`
-	RenewBeforeSeconds int   `json:"renew_before_seconds"`
+	UseGlobal                bool  `json:"use_global"`
+	GlobalConcurrency        int   `json:"global_concurrency,omitempty"`
+	GlobalRenewBeforeSeconds int   `json:"global_renew_before_seconds"`
+	Revision                 int64 `json:"revision"`
+	Concurrency              int   `json:"concurrency"`
+	RenewBeforeSeconds       int   `json:"renew_before_seconds"`
 }
 
 func DefaultBorrowProbePolicy() BorrowProbePolicy {
-	return BorrowProbePolicy{Concurrency: 2, RenewBeforeSeconds: 15}
+	return BorrowProbePolicy{Concurrency: 2, RenewBeforeSeconds: 180}
 }
 
 func (p BorrowProbePolicy) effective() BorrowProbePolicy {
@@ -31,7 +34,7 @@ type BorrowProbePolicyRepository interface {
 }
 
 func (s *TicketBorrowService) SaveProbePolicy(ctx context.Context, id int64, p BorrowProbePolicy) error {
-	if id < 1 || p.Revision < 1 || p.Concurrency < 1 || p.Concurrency > 32 || p.RenewBeforeSeconds < 0 || p.RenewBeforeSeconds > 240 {
+	if id < 1 || p.Revision < 1 || (!p.UseGlobal && (p.Concurrency < 1 || p.Concurrency > 32 || p.RenewBeforeSeconds < 0 || p.RenewBeforeSeconds > 240)) {
 		return ErrBorrowProbePolicyInvalid
 	}
 	r, ok := s.repo.(BorrowProbePolicyRepository)
@@ -91,6 +94,9 @@ func (s *TicketBorrowService) SaveProbePolicies(ctx context.Context, in BorrowPr
 		if in.Concurrency != nil {
 			p.Concurrency = *in.Concurrency
 		}
+		// Batch edits are explicit account overrides, including accounts that
+		// previously inherited their effective values from global settings.
+		p.UseGlobal = false
 		if in.RenewBeforeSeconds != nil {
 			p.RenewBeforeSeconds = *in.RenewBeforeSeconds
 		}

@@ -18,7 +18,13 @@
             <div class="relative max-w-xs"><input id="borrow-ttl" v-model.number="ttl" type="number" min="30" max="240" step="1" class="input pr-12 tabular-nums" :class="{ 'input-error': !ttlValid }" :aria-invalid="!ttlValid" aria-describedby="borrow-ttl-hint" required data-testid="ttl" /><span class="pointer-events-none absolute inset-y-0 right-4 flex items-center text-sm text-gray-500 dark:text-gray-400">{{ t('ticketBorrowing.secondsUnit') }}</span></div>
             <p id="borrow-ttl-hint" class="mt-2 text-xs leading-5" :class="ttlValid ? 'text-gray-500 dark:text-gray-400' : 'text-red-600 dark:text-red-400'">{{ t(ttlValid ? 'ticketBorrowing.ttlHint' : 'ticketBorrowing.policyPage.ttlError') }}</p>
           </div>
-          <div class="rounded-xl bg-gray-50 p-3 dark:bg-dark-900/40"><p class="text-xs leading-5 text-gray-600 dark:text-gray-400">{{ t('ticketBorrowing.expiryOnlyHint') }}</p><button type="button" class="mt-2 min-h-8 text-xs font-medium text-primary-700 dark:text-primary-400" @click="$emit('targets')">{{ t('ticketBorrowing.policyPage.targetPolicies') }} →</button></div>
+          <div>
+            <label for="borrow-min-route-remaining" class="input-label">{{ t('ticketBorrowing.policyPage.minRouteRemainingLabel') }}</label>
+            <div class="relative max-w-xs"><input id="borrow-min-route-remaining" v-model.number="minRouteRemaining" type="number" min="0" max="240" step="1" class="input pr-12 tabular-nums" :class="{ 'input-error': !minRouteRemainingValid }" :aria-invalid="!minRouteRemainingValid" aria-describedby="borrow-min-route-remaining-hint" required data-testid="min-route-remaining" /><span class="pointer-events-none absolute inset-y-0 right-4 flex items-center text-sm text-gray-500 dark:text-gray-400">{{ t('ticketBorrowing.secondsUnit') }}</span></div>
+            <p id="borrow-min-route-remaining-hint" class="mt-2 text-xs leading-5" :class="minRouteRemainingValid ? 'text-gray-500 dark:text-gray-400' : 'text-red-600 dark:text-red-400'">{{ t(minRouteRemainingValid ? 'ticketBorrowing.policyPage.minRouteRemainingHint' : 'ticketBorrowing.policyPage.minRouteRemainingError') }}</p>
+            <p v-if="minRouteRemainingValid && minRouteRemaining >= ttl" class="mt-2 text-xs leading-5 text-amber-700 dark:text-amber-300" role="status">{{ t('ticketBorrowing.policyPage.minRouteRemainingWarning') }}</p>
+          </div>
+          <div class="rounded-xl bg-gray-50 p-3 dark:bg-dark-900/40"><p class="text-xs leading-5 text-gray-600 dark:text-gray-400">{{ t('ticketBorrowing.expiryOnlyHint') }}</p></div>
         </div>
       </section>
       <section class="card min-w-0 overflow-hidden">
@@ -35,6 +41,17 @@
             <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">{{ t('ticketBorrowing.policyPage.savedBudgetHint') }}</p>
           </div>
           <details class="rounded-xl bg-gray-50 p-3 text-xs text-gray-600 dark:bg-dark-900/40 dark:text-gray-400"><summary class="cursor-pointer font-medium">{{ t('ticketBorrowing.policyPage.budgetRules') }}</summary><p class="mt-2 leading-5">{{ t('ticketBorrowing.probeBudgetHint') }}</p></details>
+        </div>
+      </section>
+      <section class="card min-w-0 overflow-hidden lg:col-span-2">
+        <header class="border-b border-gray-100 px-5 py-4 dark:border-dark-700"><h3 class="text-sm font-semibold">{{ t('ticketBorrowing.policyPage.globalProbeTitle') }}</h3><p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">{{ t('ticketBorrowing.policyPage.globalProbeHint') }}</p></header>
+        <div class="space-y-4 p-5">
+          <div class="grid gap-4 sm:grid-cols-2">
+            <div><label for="borrow-global-probe-concurrency" class="input-label">{{ t('ticketBorrowing.probePolicy.concurrency') }}</label><input id="borrow-global-probe-concurrency" v-model.number="globalProbeConcurrency" type="number" min="1" max="32" step="1" class="input tabular-nums" :class="{ 'input-error': !globalProbeValid }" :aria-invalid="!globalProbeValid" aria-describedby="borrow-global-probe-hint" required data-testid="global-probe-concurrency" /><p id="borrow-global-probe-hint" class="mt-2 text-xs leading-5" :class="globalProbeValid ? 'text-gray-500 dark:text-gray-400' : 'text-red-600 dark:text-red-400'">{{ t(globalProbeValid ? 'ticketBorrowing.probePolicy.concurrencyHint' : 'ticketBorrowing.probePolicy.concurrencyError') }}</p></div>
+            <div><label for="borrow-global-renew" class="input-label">{{ t('ticketBorrowing.probePolicy.renewBefore') }}</label><div class="relative"><input id="borrow-global-renew" v-model.number="globalRenewBefore" type="number" min="0" max="240" step="1" class="input pr-12 tabular-nums" :class="{ 'input-error': !globalRenewValid }" :aria-invalid="!globalRenewValid" aria-describedby="borrow-global-renew-hint" required data-testid="global-renew-before" /><span class="pointer-events-none absolute inset-y-0 right-4 flex items-center text-sm text-gray-500 dark:text-gray-400">{{ t('ticketBorrowing.secondsUnit') }}</span></div><p id="borrow-global-renew-hint" class="mt-2 text-xs leading-5" :class="globalRenewValid ? 'text-gray-500 dark:text-gray-400' : 'text-red-600 dark:text-red-400'">{{ t(globalRenewValid ? 'ticketBorrowing.probePolicy.renewHint' : 'ticketBorrowing.probePolicy.renewError') }}</p></div>
+          </div>
+          <p v-if="globalRenewValid && minRouteRemainingValid && globalRenewBefore <= minRouteRemaining" class="text-xs leading-5 text-amber-700 dark:text-amber-300">{{ t('ticketBorrowing.policyPage.renewWindowHint') }}</p>
+          <button type="button" class="btn btn-secondary btn-sm" @click="$emit('targets')">{{ t('ticketBorrowing.policyPage.targetPolicies') }} →</button>
         </div>
       </section>
     </fieldset>
@@ -56,14 +73,20 @@ const { t } = useI18n()
 // replaced the parent snapshot before the child receives its updated props.
 const running = computed({ get: () => model.value.running, set: value => { model.value = { ...model.value, running: value } } })
 const ttl = computed({ get: () => model.value.ttl_seconds, set: value => { model.value = { ...model.value, ttl_seconds: value } } })
+const minRouteRemaining = computed({ get: () => model.value.min_route_remaining_seconds ?? 120, set: value => { model.value = { ...model.value, min_route_remaining_seconds: value } } })
+const globalProbeConcurrency = computed({ get: () => model.value.probe_concurrency ?? 2, set: value => { model.value = { ...model.value, probe_concurrency: value } } })
+const globalRenewBefore = computed({ get: () => model.value.renew_before_seconds ?? 180, set: value => { model.value = { ...model.value, renew_before_seconds: value } } })
 const sourceBudget = computed({ get: () => model.value.recovery.source_requests_per_minute, set: value => { model.value = { ...model.value, recovery: { ...model.value.recovery, source_requests_per_minute: value } } } })
 const probeBudget = computed({ get: () => model.value.recovery.probe_requests_per_minute, set: value => { model.value = { ...model.value, recovery: { ...model.value.recovery, probe_requests_per_minute: value } } } })
 
 const inRange = (value: unknown, min: number, max: number) => typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max
 const ttlValid = computed(() => inRange(model.value.ttl_seconds, 30, 240))
+const minRouteRemainingValid = computed(() => inRange(minRouteRemaining.value, 0, 240))
+const globalProbeValid = computed(() => inRange(globalProbeConcurrency.value, 1, 32))
+const globalRenewValid = computed(() => inRange(globalRenewBefore.value, 0, 240))
 const sourceValid = computed(() => inRange(model.value.recovery.source_requests_per_minute, 1, 120))
 const probeValid = computed(() => inRange(model.value.recovery.probe_requests_per_minute, 2, 60))
-const valid = computed(() => ttlValid.value && sourceValid.value && probeValid.value)
+const valid = computed(() => ttlValid.value && minRouteRemainingValid.value && globalProbeValid.value && globalRenewValid.value && sourceValid.value && probeValid.value)
 const waitSeconds = computed(() => props.saved?.source_budget?.available_at ? Math.max(0, Math.ceil((Date.parse(props.saved.source_budget.available_at)-props.now)/1000)) : 0)
 const budgetPercent = computed(() => { const budget = props.saved?.source_budget; return budget && budget.limit > 0 ? Math.min(100, Math.max(0, budget.used / budget.limit * 100)) : 0 })
 </script>

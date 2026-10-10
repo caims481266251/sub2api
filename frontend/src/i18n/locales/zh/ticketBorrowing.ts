@@ -1,12 +1,19 @@
 export default {
   policyPage: {
-  "intro": "统一管理后台运行、候选有效期和请求预算。修改保存后生效。",
+  "intro": "统一管理后台运行、路由有效期和请求预算。修改保存后立即生效。",
   "liveState": "已生效",
   "acquisition": "运行与有效期",
-  "acquisitionHint": "控制后台获取和候选寿命，不改变正常业务出口。",
+  "acquisitionHint": "控制后台获取、候选寿命和所有目标账号的业务路由准入。",
   "ttlLabel": "候选有效期上限",
   "ttlError": "请输入 30–240 的整数秒。",
-  "targetPolicies": "前往目标账号设置探测并发与提前量",
+  "minRouteRemainingLabel": "路由最低剩余有效期",
+  "minRouteRemainingHint": "0–240 的整数秒，默认 120。所有目标账号统一生效：路由剩余有效期小于或等于此值时，不再接收新业务；没有其他可用路由时返回 429。已发出的请求继续执行。设为 0 时仅在到期后不可用。",
+  "minRouteRemainingError": "路由最低剩余有效期应为 0–240 的整数秒。",
+  "minRouteRemainingWarning": "此值不低于候选有效期上限，新获取的路由也可能无法接收业务请求。",
+  "targetPolicies": "管理目标账号的单独配置",
+  "globalProbeTitle": "全局路由探测策略",
+  "globalProbeHint": "未单独配置的目标账号默认使用本策略；已有单独配置的账号保持覆盖。并发按每个目标独立计数，与业务并发隔离。保存后立即生效，已在途请求继续执行。",
+  "renewWindowHint": "恢复探测时间不大于最低剩余有效期时，没有提前补充窗口。建议设置更大的恢复探测时间；路由已不可用时仍会恢复探测。",
   "budgetHint": "滚动 60 秒窗口；来源全局计数，目标按账号计数。",
   "sourceBudgetLabel": "全部来源合计",
   "targetBudgetLabel": "每个目标账号",
@@ -96,9 +103,15 @@ export default {
   secondsUnit: "秒",
   routeRenewing: "有效路由继续服务 · 已进入提前探测窗口",
   probePolicy: {
+    inherited: '继承全局',
+    overridden: '账号单独配置',
+    "useGlobal": "使用全局策略",
+    "inheritedHint": "当前继承借票策略页面的全局参数，全局修改会同步生效。关闭此选项可为本账号单独配置。",
+    "overrideHint": "当前为账号单独配置，全局参数修改不会覆盖这里的值。重新勾选并保存可恢复继承。",
+
     bulk: {
       "title": "批量设置探测参数",
-      "hint": "统一设置目标帐号的探测并发数和恢复探测提前量。仅修改勾选的参数，未勾选的参数保留各帐号当前配置。",
+      "hint": "为目标帐号保存单独的探测策略，覆盖全局默认。仅修改勾选的参数，未勾选的参数保留当前生效值。",
       "scope": "应用范围",
       "selected": "已勾选的目标帐号（{count} 个）",
       "all": "全部可配置目标帐号（{count} 个）",
@@ -119,7 +132,7 @@ export default {
       "retryHint": "成功项已保存，失败项保留勾选。请查看下方原因，关闭后重新打开批量设置以重试。",
       "draftHint": "请先保存或撤销单个目标帐号的探测策略草稿，再进行批量设置。"
     },
-    "concurrencyHint": "每个目标独立计算，1–32 的整数，默认 2。","concurrencyError": "请输入 1–32 的整数。","renewHint": "0–240 秒，默认 15 秒；0 表示到期再探测。","renewError": "请输入 0–240 的整数秒。", "title": "路由探测策略", "hint": "每个目标账号独立配置。探测与业务使用独立并发；业务走目标账号自身代理，未配置则直连。保存后生效，不影响当前有效路由。", "concurrency": "探测并发数", "renewBefore": "剩余多少秒恢复探测", "ranges": "并发 1–32，默认 2；提前量 0–240 秒，默认 15。设为 0 时到期再探测。", "save": "保存探测策略"},
+    "concurrencyHint": "每个目标独立计算，1–32 的整数，默认 2。","concurrencyError": "请输入 1–32 的整数。","renewHint": "0–240 秒，默认 180 秒；0 表示不额外提前，在路由不可用时恢复探测。","renewError": "请输入 0–240 的整数秒。", "title": "路由探测策略", "hint": "默认继承全局策略，也可为本账号单独配置。探测与业务使用独立并发；业务走目标账号自身代理，未配置则直连。保存后生效，不中断在途请求。", "concurrency": "探测并发数", "renewBefore": "剩余多少秒恢复探测", "ranges": "并发 1–32，默认 2；提前量 0–240 秒，默认 180。设为 0 时，路由不可用再探测。", "save": "保存探测策略"},
   rotation: {
     bulk: {
       title: '批量设置轮换',
@@ -184,7 +197,7 @@ export default {
   sourceBudget: "全部来源每分钟请求上限",
   sourceBudgetUsed: "近 60 秒全部来源已预约请求",
   requestBudgetTitle: "请求预算",
-  expiryOnlyHint: "取得有效路由后暂停新增探测，剩余有效期达到目标账号设置的提前量时恢复探测。普通失败继续尝试其他候选，不设置固定冷却。",
+  expiryOnlyHint: "路由剩余有效期达到目标账号设置的探测提前量，或已经不满足业务可用条件时，恢复后台探测。建议探测提前量大于路由最低剩余有效期，为补充新路由留出时间。普通失败继续尝试其他候选，不设置固定冷却。",
   validRouteIdle: "有效路由服务中 · 尚未达到提前探测阈值",
   recoveryTitle: "失败后的获取节奏",
   recoveryEnabled: "连续失败后分阶段冷却",
@@ -341,7 +354,7 @@ export default {
     rotation_configuration_changed: "配置已改变，本轮切换已取消",
     rotation_environment_changed: "代理和指纹已切换",
  source_proxy_pool_unavailable: "代理池暂无可分配的启用代理，等待自动绑定", source_configuration_changed: "来源配置已变化，等待下一轮采集",
-    borrow_settings_invalid: "配置无效：目标预算应为 2–60 的整数，来源预算应为 1–120 的整数，路由寿命应为 30–240 秒。",
+    borrow_settings_invalid: "配置无效：目标预算应为 2–60 的整数，来源预算应为 1–120 的整数，路由寿命应为 30–240 的整数秒，路由最低剩余有效期应为 0–240 的整数秒。",
     legacy_wait_unknown: "迁移前等待期限（不再延长）",
     source_request_budget: "来源请求额度已用完",
     budget_waiting: "等待请求额度",

@@ -193,3 +193,11 @@ VALUES ('NNN_migration.sql', 'calculated_checksum', NOW());
 
 - Migration runner: `internal/repository/migrations_runner.go`
 - PostgreSQL docs: https://www.postgresql.org/docs/
+
+### 281–282：路由业务准入与全局探测继承
+
+281 新增全局最低剩余有效期，默认 120 秒。282 新增全局探测并发与提前量，以及目标账号覆盖标记；已有明确保存或非默认的策略保留为账号覆盖，新账号默认继承。两项迁移不修改历史路由、会话、请求或计费记录。
+
+### Borrow probe renewal default (283)
+
+Migration 283 sets the renewal default to 180 seconds for new global and target rows. It updates the untouched initial settings row (revision 1, old default 15) and preserves saved settings and existing account overrides. The service and UI fallback use the same default.

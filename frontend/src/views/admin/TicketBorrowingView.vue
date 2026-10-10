@@ -11,11 +11,12 @@
             <button :class="backgroundRunning ? 'text-emerald-600' : 'text-amber-600'" @click="tab = 'settings'">{{ t(!savedSettings ? 'ticketBorrowing.statusUnknown' : backgroundRunning ? 'ticketBorrowing.running' : 'ticketBorrowing.paused') }}</button>
           </div>
         </div>
-        <button class="btn btn-secondary btn-sm" :disabled="loading || busy" @click="reload">{{ t(loading ? 'ticketBorrowing.loading' : 'ticketBorrowing.refresh') }}</button>
+        <button class="btn btn-secondary btn-sm relative" :disabled="loading || busy" :title="pollError ? t('ticketBorrowing.management.staleStatus') : undefined" @click="reload">
+          {{ t(loading ? 'ticketBorrowing.loading' : 'ticketBorrowing.refresh') }}
+          <span v-if="pollError" class="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-amber-500" aria-hidden="true"></span>
+          <span v-if="pollError" class="sr-only" role="status">{{ t('ticketBorrowing.management.staleStatus') }}</span>
+        </button>
       </header>
-      <p v-if="error" role="alert" class="rounded-xl bg-red-50 p-3 text-sm text-red-700 dark:bg-red-900/20">{{ error }}</p>
-      <p v-if="pollError" role="status" class="text-xs text-amber-700 dark:text-amber-300">{{ t('ticketBorrowing.management.staleStatus') }}</p>
-      <p v-if="notice" role="status" class="text-sm text-emerald-600">{{ notice }}</p>
       <nav class="borrow-tabs" :aria-label="t('ticketBorrowing.title')">
         <button v-for="item in tabs" :key="item" :aria-current="tab === item ? 'page' : undefined" class="borrow-tab" :class="{ 'borrow-tab-active': tab === item }" :data-tab="item" @click="tab = item">{{ t(`ticketBorrowing.${item}`) }}<span class="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-amber-500" v-if="(item === 'sources' && (selectionDirty || rotationDirty)) || (item === 'settings' && settingsDirty) || (item === 'targets' && probeDirty)" :aria-label="t('ticketBorrowing.unsaved')"></span></button>
       </nav>
@@ -172,6 +173,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave, RouterLink } from 'vue-router'
 import { useI18n } from 'vue-i18n'
+import { useAppStore } from '@/stores/app'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Select from '@/components/common/Select.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
@@ -191,6 +193,7 @@ import BorrowSettingsPanel from '@/components/admin/BorrowSettingsPanel.vue'
 import BorrowEventList from '@/components/admin/BorrowEventList.vue'
 import { ticketBorrowing as api, type BorrowSource, type BorrowTarget, type BorrowEvent, type BorrowSettings, type BorrowRecoverySettings, type BorrowSelection, type BorrowSourceOptions, type BorrowSourceOption, type BorrowRotationState, type BorrowRotationPolicy } from '@/api/admin/ticketBorrowing'
 const { t, te } = useI18n()
+const appStore = useAppStore()
 const probeDrafts = ref<Record<number, boolean>>({})
 const sourceEditor = ref<'scope' | 'defaults' | null>(null)
 const sourceDetailId = ref<number | null>(null), targetDetailId = ref<number | null>(null)
@@ -203,7 +206,7 @@ function openSource(id: number) { sourceDetailId.value = id }
 function openTarget(id: number) { targetDetailId.value = id }
 
 function acceptProbeTarget(value: BorrowTarget) { targets.value = targets.value.map(target => target.account_id === value.account_id ? value : target) }
-function probeDue(target: BorrowTarget) { return !!target.expires_at && Date.parse(target.expires_at) - now.value - offset <= (target.probe_policy?.renew_before_seconds ?? 15) * 1000 }
+function probeDue(target: BorrowTarget) { return !!target.expires_at && Date.parse(target.expires_at) - now.value - offset <= (target.probe_policy?.renew_before_seconds ?? 180) * 1000 }
 const tabs = ['sources', 'settings', 'targets', 'events'] as const
 const tab = ref<(typeof tabs)[number]>('sources')
 const historyVisited = ref(false)
@@ -219,7 +222,7 @@ const batchRotationResults = ref<BorrowRotationBatchResult[] | null>(null)
 const pendingRotationRequests = new Map<string, string>()
 const sources = ref<BorrowSource[]>([]), targets = ref<BorrowTarget[]>([]), events = ref<BorrowEvent[]>([])
 const defaultRecovery = (): BorrowRecoverySettings => ({ enabled: false, failure_threshold: 0, cooldown_seconds: [], probe_requests_per_minute: 12, source_requests_per_minute: 12 })
-const settings = ref<BorrowSettings & { recovery: BorrowRecoverySettings }>({ running: false, ttl_seconds: 230, prewarm_seconds: 0, recovery: defaultRecovery() })
+const settings = ref<BorrowSettings & { recovery: BorrowRecoverySettings }>({ running: false, ttl_seconds: 230, min_route_remaining_seconds: 120, probe_concurrency: 2, renew_before_seconds: 180, prewarm_seconds: 0, recovery: defaultRecovery() })
 const selection = ref<BorrowSelection>({ revision: 0, group_ids: [], account_ids: [], default_model: 'gpt-6-luna', rotate_identity: true, use_proxy_pool: false, model_overrides: {} })
 const savedSelection = ref<BorrowSelection>(), savedSettings = ref<BorrowSettings>()
 const options = ref<BorrowSourceOptions>({ accounts: [], groups: [], legacy_count: 0, restorable_count: 0 })
@@ -228,7 +231,7 @@ const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value))
 function selectionKey(value: BorrowSelection) {
   return JSON.stringify({ groups: [...value.group_ids].sort((a,b) => a-b), accounts: [...value.account_ids].sort((a,b) => a-b), model: value.default_model, rotate: value.rotate_identity, pool: !!value.use_proxy_pool, overrides: Object.entries(value.model_overrides).sort(([a],[b]) => Number(a)-Number(b)) })
 }
-function settingsKey(value: BorrowSettings) { const r = value.recovery ?? defaultRecovery(); return JSON.stringify([value.running, value.ttl_seconds, r.probe_requests_per_minute, r.source_requests_per_minute ?? 12]) }
+function settingsKey(value: BorrowSettings) { const r = value.recovery ?? defaultRecovery(); return JSON.stringify([value.running, value.ttl_seconds, value.min_route_remaining_seconds ?? 120, value.probe_concurrency ?? 2, value.renew_before_seconds ?? 180, r.probe_requests_per_minute, r.source_requests_per_minute ?? 12]) }
 // Keep the edit baseline separate from the latest server snapshot. A refresh must not
 // replace a draft or silently advance its revision after another administrator's edit.
 const selectionBaseline = ref(''), settingsBaseline = ref('')
@@ -247,7 +250,7 @@ function acceptSettings(value: BorrowSettings, force = false) {
   const keepDraft = settingsDirty.value && !force
   savedSettings.value = clone(value)
   if (value.server_now) offset = Date.parse(value.server_now) - Date.now()
-  if (!keepDraft) { settings.value = { ...clone(value), recovery: { ...defaultRecovery(), ...clone(value.recovery ?? {}) } }; settingsBaseline.value = settingsKey(value) }
+  if (!keepDraft) { settings.value = { ...clone(value), min_route_remaining_seconds: value.min_route_remaining_seconds ?? 120, probe_concurrency: value.probe_concurrency ?? 2, renew_before_seconds: value.renew_before_seconds ?? 180, recovery: { ...defaultRecovery(), ...clone(value.recovery ?? {}) } }; settingsBaseline.value = settingsKey(value) }
 }
 function revertSelection() { if (savedSelection.value) acceptSelection(savedSelection.value, true) }
 function revertSettings() { if (savedSettings.value) acceptSettings(savedSettings.value, true) }
@@ -281,12 +284,13 @@ const sourceIndex = computed(() => new Map(sources.value.map(s => [s.account_id,
 function sourceBinding(id: number) { return sourceIndex.value.get(id) }
 function sourceState(id: number) { const source = sourceBinding(id); return source && (source.unavailable_reason || source.last_reason) ? reason(source.unavailable_reason || source.last_reason) : '' }
 const pollError = ref(false), eventsLoading = ref(false), oldestEventCursor = ref(0)
-const loading = ref(false), busy = ref(false), error = ref(''), notice = ref(''), hasOlder = ref(false)
+const loading = ref(false), busy = ref(false), error = ref(''), hasOlder = ref(false)
 const now = ref(Date.now()); let offset = 0; let disposed = false; let polling = false; let refreshGeneration = 0
 function reason(value: string) { const key = `ticketBorrowing.reasons.${value}`; return !value ? '—' : te(key) ? t(key) : t('ticketBorrowing.unknownResult') }
-function failure(e: unknown) { const v = e as { reason?: string; message?: string }; const key = `ticketBorrowing.reasons.${v?.reason || v?.message}`; error.value = te(key) ? t(key) : t('ticketBorrowing.failure') }
+function reportError(message: string) { error.value = message; appStore.showError(message) }
+function failure(e: unknown) { const v = e as { reason?: string; message?: string }; const key = `ticketBorrowing.reasons.${v?.reason || v?.message}`; reportError(te(key) ? t(key) : t('ticketBorrowing.failure')) }
 function ttl(target: BorrowTarget) { return target.expires_at ? Date.parse(target.expires_at) - now.value - offset : 0 }
-function usable(target: BorrowTarget) { return target.enabled && target.ready && ttl(target) > 0 }
+function usable(target: BorrowTarget) { return target.enabled && target.ready && Date.parse(target.usable_until ?? target.expires_at ?? '') > now.value + offset }
 function remaining(target: BorrowTarget) { return ttl(target) < 1000 ? t('ticketBorrowing.underSecond') : t('ticketBorrowing.seconds', { count: Math.ceil(ttl(target) / 1000) }) }
 function waitRemaining(until?: string) { return until ? Math.max(0, Math.ceil((Date.parse(until) - now.value - offset) / 1000)) : 0 }
 function idleTime(target: BorrowTarget) {
@@ -321,8 +325,8 @@ async function reload() {
 }
 async function action(fn: () => Promise<unknown>, message = 'saved') {
   if (busy.value || loading.value) return
-  busy.value = true; error.value = ''; notice.value = ''
-  try { await fn(); notice.value = t(`ticketBorrowing.${message}`); await reload() }
+  busy.value = true; error.value = ''
+  try { await fn(); appStore.showSuccess(t(`ticketBorrowing.${message}`)); await reload() }
   catch (e) { failure(e) }
   finally { busy.value = false }
 }
@@ -336,7 +340,11 @@ async function saveSelection() {
 async function restore() { if (window.confirm(t('ticketBorrowing.restoreConfirm'))) await action(() => api.restoreSources(), 'restored') }
 async function saveSettings() {
   const { probe_requests_per_minute: target, source_requests_per_minute: source } = settings.value.recovery
-  if (!Number.isInteger(settings.value.ttl_seconds) || settings.value.ttl_seconds < 30 || settings.value.ttl_seconds > 240 || !Number.isInteger(target) || target < 2 || target > 60 || !Number.isInteger(source) || source == null || source < 1 || source > 120) { error.value = t('ticketBorrowing.reasons.borrow_settings_invalid'); return }
+  const { probe_concurrency: concurrency, renew_before_seconds: renew } = settings.value
+  if (!Number.isInteger(concurrency) || concurrency == null || concurrency < 1 || concurrency > 32 || !Number.isInteger(renew) || renew == null || renew < 0 || renew > 240) { reportError(t('ticketBorrowing.reasons.borrow_probe_policy_invalid')); return }
+  const minRemaining = settings.value.min_route_remaining_seconds
+  if (!Number.isInteger(minRemaining) || minRemaining == null || minRemaining < 0 || minRemaining > 240) { reportError(t('ticketBorrowing.policyPage.minRouteRemainingError')); return }
+  if (!Number.isInteger(settings.value.ttl_seconds) || settings.value.ttl_seconds < 30 || settings.value.ttl_seconds > 240 || !Number.isInteger(target) || target < 2 || target > 60 || !Number.isInteger(source) || source == null || source < 1 || source > 120) { reportError(t('ticketBorrowing.reasons.borrow_settings_invalid')); return }
   if (!savedSettings.value || !settingsDirty.value || settingsConflict.value) return
   await action(async () => { acceptSettings(await api.saveSettings(clone(settings.value)), true) })
 }
@@ -374,7 +382,7 @@ const configurableTargets = computed(() => targets.value.filter(target => target
 watch(configurableTargets, rows => { probeSelection.value = probeSelection.value.filter(id => rows.some(target => target.account_id === id)) })
 function openBatchProbe() {
  if (busy.value || loading.value || probeSaving.value || !configurableTargets.value.length) return
- if (probeDirty.value) { error.value = t('ticketBorrowing.probePolicy.bulk.draftHint'); return }
+ if (probeDirty.value) { reportError(t('ticketBorrowing.probePolicy.bulk.draftHint')); return }
  batchProbeAccounts.value = configurableTargets.value.map(target => ({ account_id: target.account_id, name: target.name, revision: target.probe_policy!.revision }))
  batchProbeSelected.value = [...probeSelection.value]
  batchProbeResults.value = null
@@ -388,12 +396,13 @@ function closeBatchProbe() {
 }
 async function saveBatchProbe(input: BorrowProbeBatchInput) {
  if (busy.value || loading.value || probeSaving.value || !batchProbeAccounts.value) return
- busy.value = true; batchProbeError.value = ''; error.value = ''; notice.value = ''
+ busy.value = true; batchProbeError.value = ''; error.value = ''
  try {
   const results = await api.saveProbePolicies(input)
   batchProbeResults.value = results
   probeSelection.value = results.filter(item => item.status === 'failed').map(item => item.account_id)
-  notice.value = t('ticketBorrowing.probePolicy.bulk.result', { saved: results.filter(item => item.status === 'saved').length, failed: probeSelection.value.length })
+  const summary = t('ticketBorrowing.probePolicy.bulk.result', { saved: results.filter(item => item.status === 'saved').length, failed: probeSelection.value.length })
+  if (probeSelection.value.length) appStore.showWarning(summary); else appStore.showSuccess(summary)
   await reload()
   if (error.value) batchProbeError.value = error.value
  } catch (e) {
@@ -403,7 +412,7 @@ async function saveBatchProbe(input: BorrowProbeBatchInput) {
 }
 function openBatchRotation() {
  if (busy.value || loading.value || selectionDirty.value || !rotationsLoaded.value || !rotationSources.value.length) return
- if (rotationDirty.value) { error.value = t('ticketBorrowing.rotation.bulk.draftHint'); return }
+ if (rotationDirty.value) { reportError(t('ticketBorrowing.rotation.bulk.draftHint')); return }
  // Freeze the account scope and revisions while the dialog is open. Polling must
  // not silently add accounts or rebase edits over another administrator's save.
  batchRotationAccounts.value = rotationSources.value.map(s => ({ account_id: s.account_id, name: s.name, revision: rotationState(s.account_id)?.revision ?? 0 }))
@@ -419,12 +428,13 @@ function closeBatchRotation() {
 }
 async function saveBatchRotation(input: BorrowRotationBatchInput) {
  if (busy.value || loading.value || selectionDirty.value || !batchRotationAccounts.value) return
- busy.value = true; batchRotationError.value = ''; error.value = ''; notice.value = ''
+ busy.value = true; batchRotationError.value = ''; error.value = ''
  try {
   const results = await api.saveRotationPolicies(input)
   batchRotationResults.value = results
   rotationSelection.value = results.filter(item => item.status === 'failed').map(item => item.account_id)
-  notice.value = t('ticketBorrowing.rotation.bulk.result', { saved: results.filter(item => item.status === 'saved').length, failed: rotationSelection.value.length })
+  const summary = t('ticketBorrowing.rotation.bulk.result', { saved: results.filter(item => item.status === 'saved').length, failed: rotationSelection.value.length })
+  if (rotationSelection.value.length) appStore.showWarning(summary); else appStore.showSuccess(summary)
   await reload()
   if (error.value) batchRotationError.value = error.value
  } catch (e) {
@@ -445,7 +455,7 @@ async function rotateAccounts(ids: number[]) {
  }, 'rotationQueued')
 }
 async function saveRotation(id: number, policy: BorrowRotationPolicy) {
- if (!Number.isInteger(policy.interval_seconds) || policy.interval_seconds < 1 || policy.interval_seconds > 86400) { error.value = t('ticketBorrowing.reasons.borrow_rotation_invalid'); return }
+ if (!Number.isInteger(policy.interval_seconds) || policy.interval_seconds < 1 || policy.interval_seconds > 86400) { reportError(t('ticketBorrowing.reasons.borrow_rotation_invalid')); return }
  await action(async () => { rotations.value = await api.saveRotationPolicy(id, policy) })
 }
 const rotationDirty = computed(() => Object.values(rotationDrafts.value).some(Boolean))

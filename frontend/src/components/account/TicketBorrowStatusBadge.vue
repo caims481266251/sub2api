@@ -7,5 +7,5 @@ const props = defineProps<{ accountId: number }>()
 const { t } = useI18n()
 const { rows, now, offset } = useTicketBorrowStatuses()
 const status = computed(() => rows.value.find(r => r.account_id === props.accountId && r.enabled))
-const ready = computed(() => !!status.value?.ready && !!status.value.expires_at && Date.parse(status.value.expires_at) > now.value + offset.value)
+const ready = computed(() => !!status.value?.ready && Date.parse(status.value.usable_until ?? status.value.expires_at ?? '') > now.value + offset.value)
 </script>

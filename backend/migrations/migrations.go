@@ -43,4 +43,7 @@ import "embed"
 //go:embed 275_ticket_borrow_proxy_bindings.sql 276_ticket_borrow_rotation.sql
 //go:embed 277_ticket_borrow_source_rotation_history.sql 278_ticket_borrow_probe_policy.sql
 //go:embed 279_ticket_borrow_event_retention.sql 280_ticket_borrow_probe_concurrency_default.sql
+//go:embed 281_ticket_borrow_min_route_remaining.sql
+//go:embed 282_ticket_borrow_global_probe_policy.sql
+//go:embed 283_ticket_borrow_renew_default.sql
 var FS embed.FS

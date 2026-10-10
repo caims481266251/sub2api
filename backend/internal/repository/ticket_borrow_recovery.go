@@ -54,7 +54,7 @@ func (r *ticketBorrowRepository) BeginTargetRequest(ctx context.Context, q servi
 		var running, cooled bool
 		var inflight, concurrency int
 		var raw []byte
-		if err = tx.QueryRowContext(ctx, `SELECT s.running,s.recovery,COALESCE(t.upstream_wait_until<=clock_timestamp(),true),(SELECT count(*) FROM ticket_borrow_requests WHERE target_id=$1 AND kind='probe' AND finished_at IS NULL AND lease_until>clock_timestamp()),t.probe_concurrency FROM ticket_borrow_targets t CROSS JOIN ticket_borrow_settings s WHERE t.account_id=$1 AND s.id=1`, q.TargetID).Scan(&running, &raw, &cooled, &inflight, &concurrency); err != nil {
+		if err = tx.QueryRowContext(ctx, `SELECT s.running,s.recovery,COALESCE(t.upstream_wait_until<=clock_timestamp(),true),(SELECT count(*) FROM ticket_borrow_requests WHERE target_id=$1 AND kind='probe' AND finished_at IS NULL AND lease_until>clock_timestamp()),CASE WHEN t.probe_policy_override THEN t.probe_concurrency ELSE s.probe_concurrency END FROM ticket_borrow_targets t CROSS JOIN ticket_borrow_settings s WHERE t.account_id=$1 AND s.id=1`, q.TargetID).Scan(&running, &raw, &cooled, &inflight, &concurrency); err != nil {
 			return err
 		}
 		if !running {
