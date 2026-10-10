@@ -203,6 +203,11 @@ func (l *openAIWSConnLease) MarkPrewarmed() {
 }
 
 func (l *openAIWSConnLease) WriteJSON(value any, timeout time.Duration) error {
+	if l != nil && l.pool != nil && l.pool.borrowRoutes != nil {
+		if err := l.pool.borrowRoutes.Check(context.Background(), l.accountID, "gpt-6-astra", "ws"); err != nil {
+			return err
+		}
+	}
 	conn, err := l.activeConn()
 	if err != nil {
 		return err
@@ -211,6 +216,11 @@ func (l *openAIWSConnLease) WriteJSON(value any, timeout time.Duration) error {
 }
 
 func (l *openAIWSConnLease) WriteJSONWithContextTimeout(ctx context.Context, value any, timeout time.Duration) error {
+	if l != nil && l.pool != nil && l.pool.borrowRoutes != nil {
+		if err := l.pool.borrowRoutes.Check(ctx, l.accountID, "gpt-6-astra", "ws"); err != nil {
+			return err
+		}
+	}
 	conn, err := l.activeConn()
 	if err != nil {
 		return err
@@ -219,6 +229,11 @@ func (l *openAIWSConnLease) WriteJSONWithContextTimeout(ctx context.Context, val
 }
 
 func (l *openAIWSConnLease) WriteJSONContext(ctx context.Context, value any) error {
+	if l != nil && l.pool != nil && l.pool.borrowRoutes != nil {
+		if err := l.pool.borrowRoutes.Check(ctx, l.accountID, "gpt-6-astra", "ws"); err != nil {
+			return err
+		}
+	}
 	conn, err := l.activeConn()
 	if err != nil {
 		return err
@@ -857,7 +872,8 @@ type openAIWSPoolMetrics struct {
 }
 
 type openAIWSConnPool struct {
-	cfg *config.Config
+	borrowRoutes *TicketBorrowService
+	cfg          *config.Config
 	// 通过接口解耦底层 WS 客户端实现，默认使用 coder/websocket。
 	clientDialer openAIWSClientDialer
 
@@ -1117,6 +1133,11 @@ type openAIWSAcquireQueueWait struct {
 }
 
 func (p *openAIWSConnPool) Acquire(ctx context.Context, req openAIWSAcquireRequest) (*openAIWSConnLease, error) {
+	if p != nil && p.borrowRoutes != nil && req.Account != nil {
+		if err := p.borrowRoutes.Check(ctx, req.Account.ID, "gpt-6-astra", "ws"); err != nil {
+			return nil, err
+		}
+	}
 	if p != nil {
 		p.metrics.acquireTotal.Add(1)
 	}

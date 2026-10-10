@@ -97,7 +97,8 @@
       </template>
 
       <template #table>
-        <div v-if="activeManagementTab !== 'proxies'" class="min-h-0 flex-1 overflow-y-auto p-4">
+        <div v-if="poolVisited" v-show="activeManagementTab === 'pool'" class="min-h-0 flex-1 overflow-y-auto p-4"><ProxyPoolPanel /></div>
+        <div v-if="activeManagementTab !== 'proxies' && activeManagementTab !== 'pool'" class="min-h-0 flex-1 overflow-y-auto p-4">
           <MihomoSettings :section="activeManagementTab" />
         </div>
         <div v-show="activeManagementTab === 'proxies'" ref="proxyTableRef" class="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -912,6 +913,7 @@
 import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import MihomoSettings from './settings/MihomoSettings.vue'
+import ProxyPoolPanel from '@/components/admin/proxy/ProxyPoolPanel.vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
@@ -942,6 +944,7 @@ const route = useRoute()
 const router = useRouter()
 const managementTabs = [
   { key: 'proxies', label: 'admin.proxies.proxyList' },
+  { key: 'pool', label: 'proxyPool.title' },
   { key: 'subscriptions', label: 'admin.proxies.subscriptions' },
   { key: 'dynamic', label: 'admin.proxies.dynamicProxies' },
   { key: 'nodes', label: 'admin.proxies.nodes' },
@@ -953,6 +956,8 @@ function tabFromHash(hash?: string): ManagementTab {
   return managementTabs.find(tab => '#' + tab.key === hash)?.key || 'proxies'
 }
 const activeManagementTab = ref<ManagementTab>(tabFromHash(route?.hash))
+const poolVisited = ref(activeManagementTab.value === 'pool')
+watch(activeManagementTab, value => { if (value === 'pool') poolVisited.value = true })
 watch(() => route?.hash, hash => { activeManagementTab.value = tabFromHash(hash) })
 function selectManagementTab(tab: ManagementTab) {
   activeManagementTab.value = tab

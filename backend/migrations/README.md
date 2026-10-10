@@ -4,6 +4,17 @@
 
 This directory contains SQL migration files for database schema changes. The migration system uses SHA256 checksums to ensure migration immutability and consistency across environments.
 
+All SQL files are embedded in the application binary. On a fresh installation,
+startup applies the full sequence to the empty database before serving requests,
+including required initial rows. Operators do not import SQL or run a separate
+migration command. Later starts verify checksums and apply only new scripts.
+
+The proxy-pool and borrowing migration dependencies are also named explicitly in
+`migrations.go`, so omitting one from a build context is a compilation error.
+`TestProxyPoolFirstInstall` verifies the complete embedded sequence against an
+empty database, then exercises the proxy-pool HTTP handlers through initial
+loading, encryption setup, import, and a simulated restart.
+
 ## Migration File Naming
 
 Format: `NNN_description.sql`
@@ -72,12 +83,12 @@ Why?
 
 3. **Test locally**
    ```bash
-   # Apply migration
-   make migrate-up
-
-   # Test rollback
-   make migrate-down
+   # From backend/, with Docker available. This creates a disposable database.
+   go test -tags=integration ./internal/handler/admin -run '^TestProxyPoolFirstInstall$' -count=1
    ```
+   For a disposable local PostgreSQL server, set
+   `SUB2API_FRESH_INSTALL_TEST_POSTGRES_URL` to its PostgreSQL URL. The test creates
+   and removes its own database. Never point this test at a production server.
 
 4. **Commit and deploy**
    ```bash

@@ -19,6 +19,9 @@ func (r *settingRepository) SetAstraRoutingWithAccounts(ctx context.Context, key
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if _, err = tx.Client().ExecContext(ctx, `SELECT pg_advisory_xact_lock(269003)`); err != nil {
+		return err
+	}
 	if _, err = tx.Client().ExecContext(ctx, `SELECT key FROM settings WHERE key=$1 FOR UPDATE`, key); err != nil {
 		return err
 	}
@@ -59,18 +62,38 @@ func (r *settingRepository) SetAstraRoutingWithAccounts(ctx context.Context, key
 	slices.Sort(ids)
 	ids = slices.Compact(ids)
 	for _, id := range ids {
+		conflictRows, e := tx.Client().QueryContext(ctx, `SELECT 1 FROM ticket_borrow_targets WHERE account_id=$1 AND enabled`, id)
+		if e != nil {
+			return e
+		}
+		conflict := conflictRows.Next()
+		readErr = conflictRows.Err()
+		_ = conflictRows.Close()
+		if readErr != nil {
+			return readErr
+		}
+		if conflict {
+			return fmt.Errorf("borrow_legacy_config_conflict: %d", id)
+		}
 		ws := value.WSSession.Enabled && slices.Contains(value.WSSession.AccountIDs, id)
+		source := value.CookiePool.Enabled && slices.Contains(value.CookiePool.SourceAccountIDs, id)
+		model := "gpt-6-astra"
+		if source {
+			model = value.CookiePool.SourceModel(id)
+		}
 		// Reject malformed model mappings rather than replacing an administrator's
 		// unknown data. Empty mappings keep their existing allow-all semantics.
 		result, updateErr := tx.Client().ExecContext(ctx, `UPDATE accounts SET
    credentials=CASE
-    WHEN COALESCE(extra->>'astra_model_disabled','false')='true' THEN credentials
+    WHEN $3='gpt-6-astra' AND COALESCE(extra->>'astra_model_disabled','false')='true' THEN credentials
     WHEN credentials->'model_mapping' IS NULL OR credentials->'model_mapping'='null'::jsonb OR credentials->'model_mapping'='{}'::jsonb THEN credentials
-    ELSE jsonb_set(credentials,'{model_mapping}',(credentials->'model_mapping') || '{"gpt-6-astra":"gpt-6-astra"}'::jsonb) END,
+    ELSE jsonb_set(credentials,'{model_mapping}',(credentials->'model_mapping')
+      || CASE WHEN $4 AND credentials->'model_mapping' ? $3 THEN '{}'::jsonb ELSE jsonb_build_object($3::text,$3::text) END
+      || CASE WHEN $2 AND COALESCE(extra->>'astra_model_disabled','false')!='true' THEN '{"gpt-6-astra":"gpt-6-astra"}'::jsonb ELSE '{}'::jsonb END) END,
    extra=COALESCE(extra,'{}'::jsonb) || CASE WHEN $2 THEN '{"openai_oauth_responses_websockets_v2_enabled":true,"openai_oauth_responses_websockets_v2_mode":"ctx_pool","openai_ws_force_http":false}'::jsonb ELSE '{}'::jsonb END,
    updated_at=NOW()
    WHERE id=$1 AND deleted_at IS NULL AND platform='openai' AND type IN ('oauth','setup-token') AND parent_account_id IS NULL
-    AND (credentials->'model_mapping' IS NULL OR credentials->'model_mapping'='null'::jsonb OR jsonb_typeof(credentials->'model_mapping')='object')`, id, ws)
+    AND (credentials->'model_mapping' IS NULL OR credentials->'model_mapping'='null'::jsonb OR jsonb_typeof(credentials->'model_mapping')='object')`, id, ws, model, source)
 		if updateErr != nil {
 			return updateErr
 		}

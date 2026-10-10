@@ -284,6 +284,7 @@ func (s *OpenAIGatewayService) getOpenAIWSConnPool() *openAIWSConnPool {
 		if s.openaiWSPool == nil {
 			s.openaiWSPool = newOpenAIWSConnPool(s.cfg)
 		}
+		s.openaiWSPool.borrowRoutes = s.borrowRoutes
 	})
 	return s.openaiWSPool
 }

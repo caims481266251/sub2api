@@ -42,6 +42,15 @@
         <div v-for="row in runtime.targets" :key="`target-${row.account_id}`" class="rounded-xl border p-3 dark:border-dark-600">
           <p class="text-sm font-medium">{{ t(`${p}.targets`) }} #{{ row.account_id }}</p><p class="my-2 text-xs text-gray-500">{{ reason(row.reason) }} · {{ routeLifetime(row) }}</p>
           <p class="mb-2 break-all font-mono text-xs">{{ row.gateway || t(`${p}.unknownGateway`) }}</p>
+          <div v-if="row.routes?.length" class="mb-2 space-y-1 text-xs" data-testid="seamless-routes">
+            <p v-for="route in row.routes" :key="`${route.role}:${route.checked_at}`">{{ t(`${p}.routeRoles.${route.role}`) }} · #{{ route.source_account_id }} · {{ route.gateway || '—' }} · {{ remaining(route.expires_at) }} s</p>
+          </div>
+          <div v-if="row.maintenance" class="mb-2 space-y-1 text-xs text-gray-500" data-testid="seamless-maintenance">
+            <p>{{ t(`${p}.seamlessTitle`) }} · {{ t(`${p}.maintenancePhases.${row.maintenance.phase || 'idle'}`) }}<span v-if="row.maintenance.reason"> · {{ reason(row.maintenance.reason) }}</span></p>
+            <p v-if="row.maintenance.failure">{{ t(`${p}.probeFailure`) }}: {{ t(`${p}.probeFailures.${row.maintenance.failure}`) }} · {{ t(`${p}.probeRetries`) }}: {{ row.maintenance.retries }}</p>
+            <p v-if="row.maintenance.mint_status || row.maintenance.continue_status">HTTP {{ row.maintenance.mint_status || '—' }} / {{ row.maintenance.continue_status || '—' }}</p>
+            <p v-if="!row.maintenance.running && row.maintenance.next_attempt && remaining(row.maintenance.next_attempt)">{{ t(`${p}.nextAttempt`) }}: {{ remaining(row.maintenance.next_attempt) }} s</p>
+          </div>
           <p v-if="row.proxy_node" class="mb-2 text-xs">{{ row.proxy_country || '—' }} · {{ row.proxy_node }}</p>
           <p v-if="row.answer" class="mb-2 text-xs">{{ t(`${p}.actual`) }}: {{ row.answer }}</p>
           <button type="button" class="btn btn-secondary btn-sm" :disabled="busy || setupBusy || dirty || !settings?.cookie_pool.enabled" @click="run('verify', row.account_id)">{{ t(`${p}.verifyTarget`) }}</button>

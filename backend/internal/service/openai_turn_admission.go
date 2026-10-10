@@ -367,6 +367,11 @@ func (s *OpenAIGatewayService) admitOpenAITurnWithGroup(
 	if !latest.IsOpenAI() {
 		return latest, nil
 	}
+	if s.borrowRoutes != nil {
+		if err := s.borrowRoutes.Check(ctx, latest.ID, outboundModel, "http"); err != nil {
+			return nil, denyOpenAITurn("borrow_route_unavailable")
+		}
+	}
 	if openAITurnRouteFingerprint(latest) != openAITurnRouteFingerprint(selected) {
 		return nil, denyOpenAITurn("account_binding_changed")
 	}

@@ -907,6 +907,11 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	}
 
 	dialer := s.getOpenAIWSPassthroughDialer()
+	if s.borrowRoutes != nil {
+		if e := s.borrowRoutes.Check(ctx, account.ID, gjson.GetBytes(firstClientMessage, "model").String(), "ws"); e != nil {
+			return e
+		}
+	}
 	if dialer == nil {
 		return errors.New("openai ws passthrough dialer is nil")
 	}
@@ -1200,6 +1205,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			// mutations and new generations must not feed an ineligible socket.
 			if isResponseCreate || eventType == "session.update" || strings.HasPrefix(eventType, "conversation.item.") {
 				latest, err := s.admitOpenAITurn(ctx, c, account, model)
+				if err == nil && s.borrowRoutes != nil {
+					err = s.borrowRoutes.Check(ctx, account.ID, model, "ws")
+				}
 				if err == nil {
 					err = s.checkOpenAIWSBinding(latest, model, handshakeBinding)
 				}
@@ -1232,6 +1240,11 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			if policyErr == nil && blocked == nil && isResponseCreate {
 				if err := s.acquireOpenAIRPMForSend(ctx, account); err != nil {
 					return out, nil, err
+				}
+				if s.borrowRoutes != nil {
+					if err := s.borrowRoutes.Check(ctx, account.ID, model, "ws"); err != nil {
+						return out, nil, err
+					}
 				}
 				activePolicyModel.Store(&model)
 				usageMeta.updateFromResponseCreate(out, model, requestModelForThisFrame)
@@ -1279,6 +1292,11 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	}
 	if err := s.acquireOpenAIRPMForSend(ctx, latest); err != nil {
 		return err
+	}
+	if s.borrowRoutes != nil {
+		if err := s.borrowRoutes.Check(ctx, account.ID, capturedSessionModel, "ws"); err != nil {
+			return err
+		}
 	}
 	firstWriteCtx, cancelFirstWrite := context.WithTimeout(ctx, s.openAIWSWriteTimeout())
 	firstWriteErr := relayUpstreamFrameConn.WriteFrame(firstWriteCtx, coderws.MessageText, firstClientMessage)

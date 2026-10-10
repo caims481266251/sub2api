@@ -455,6 +455,7 @@ var ErrNoAvailableCompactAccounts = errors.New("no available accounts support /r
 // OpenAIGatewayService handles OpenAI API gateway operations
 type OpenAIGatewayService struct {
 	stopAstraSetup          func()
+	borrowRoutes            *TicketBorrowService
 	codexWSAnchors          codexWSAnchorStore
 	priorityScheduling      prioritySchedulingState
 	excelBPSRecoveryMu      sync.Mutex

@@ -74,6 +74,10 @@ func classifySelectionFailureError(err error, fallback noAccountErrorClassificat
 	if fallback.ModelNotFound {
 		return fallback
 	}
+	if service.IsBorrowRouteUnavailable(err) {
+		status, errType, message := openAIAdmissionClientError(err)
+		return noAccountErrorClassification{Status: status, ErrType: errType, Message: message}
+	}
 	match := selectionModelRateLimitedPattern.FindStringSubmatch(strings.ToLower(err.Error()))
 	if len(match) != 2 {
 		return fallback

@@ -149,6 +149,10 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 	sessionHash := h.gatewayService.GenerateSessionHash(c, body)
 	promptCacheKey := h.gatewayService.ExtractSessionID(c, body)
 
+	borrowCtx, borrowRecovery := service.WithBorrowBusinessRecovery(c.Request.Context(), h.cfg)
+	c.Request = c.Request.WithContext(borrowCtx)
+	defer borrowRecovery.Close()
+
 	maxAccountSwitches := h.maxAccountSwitches
 	switchCount := 0
 	var forbiddenBudget grokForbiddenFailoverBudget
@@ -165,12 +169,15 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 	c.Request = c.Request.WithContext(ccPricingCtx)
 
 	for {
+		if h.stopBorrowBusinessRecovery(c, streamStarted, false) {
+			return
+		}
 		if failoverClientGone(c) {
 			return
 		}
 		reqLog.Debug("openai_chat_completions.account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
 		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
-			c.Request.Context(),
+			service.BorrowBusinessRecoveryContext(c.Request.Context()),
 			apiKey.GroupID,
 			"",
 			sessionHash,
@@ -184,6 +191,12 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 			requestPlatform,
 		)
 		if err != nil {
+			if h.stopBorrowBusinessRecovery(c, streamStarted, false) {
+				return
+			}
+			if borrowBusinessSelectionFallback(c, err, failedAccountIDs) {
+				continue
+			}
 			err = rpmAdmission.selectionError(err)
 			if isOpenAIRPMError(err) {
 				rpmAdmission.retryAfter(c, err)
@@ -199,7 +212,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 				zap.Error(openAICompatibleSelectionErrorForLog(err, requestPlatform)),
 				zap.Int("excluded_account_count", len(failedAccountIDs)),
 			)
-			if len(failedAccountIDs) == 0 {
+			if len(failedAccountIDs) == 0 || service.IsBorrowRouteUnavailable(err) {
 				cls := classifyOpenAICompatibleNoAccountErrorFromGin(c, h.gatewayService, apiKey, reqModel, reqModel)
 				cls = classifySelectionFailureError(err, cls)
 				if !cls.ModelNotFound {
@@ -209,7 +222,8 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 				return
 			} else {
 				if lastAdmissionErr != nil && lastFailoverErr == nil {
-					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "admission_unavailable", "Account eligibility changed; please retry with complete context", streamStarted)
+					status, code, message := openAIAdmissionClientError(err)
+					h.handleStreamingAwareError(c, status, code, message, streamStarted)
 				} else if lastFailoverErr != nil {
 					h.handleFailoverExhausted(c, lastFailoverErr, streamStarted)
 				} else {
@@ -268,7 +282,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 					accountReleaseFunc()
 				}
 			}()
-			return h.gatewayService.ForwardAsChatCompletions(rpmAdmission.forwardContext(c.Request.Context(), account), c, account, forwardBody, promptCacheKey, "")
+			return h.gatewayService.ForwardAsChatCompletions(rpmAdmission.forwardContext(service.BorrowBusinessRecoveryContext(c.Request.Context()), account), c, account, forwardBody, promptCacheKey, "")
 		}()
 		if retryOpenAIInitialAdmission(c, err, result, body, account.ID, failedAccountIDs, &switchCount, maxAccountSwitches) {
 			lastAdmissionErr = err
@@ -337,9 +351,14 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 				}
 			})
 		}
+		if h.stopBorrowBusinessRecovery(c, streamStarted, false) {
+			submitChatUsage(result)
+			return
+		}
 		if err != nil {
 			if service.IsOpenAITurnAdmissionError(err) {
-				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "admission_unavailable", "Account eligibility changed; please retry with complete context", streamStarted)
+				status, code, message := openAIAdmissionClientError(err)
+				h.handleStreamingAwareError(c, status, code, message, streamStarted)
 				return
 			}
 			if result != nil && result.ImageCount > 0 {
@@ -368,6 +387,14 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 					}
 					if !forbiddenBudget.canRetry(failoverErr, switchCount) {
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
+						return
+					}
+					if handled, retry := h.handleBorrowBusinessRecovery(c, failoverErr, account, failedAccountIDs, &switchCount, maxAccountSwitches, streamStarted, false); handled {
+						submitChatUsage(result)
+						lastFailoverErr = failoverErr
+						if retry {
+							continue
+						}
 						return
 					}
 					// Pool mode: retry on the same account

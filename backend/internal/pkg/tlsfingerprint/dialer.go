@@ -5,6 +5,7 @@ package tlsfingerprint
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"fmt"
 	"log/slog"
@@ -42,8 +43,9 @@ type Dialer struct {
 // HTTPProxyDialer creates TLS connections through HTTP/HTTPS proxies with custom fingerprints.
 // It handles the CONNECT tunnel establishment before performing TLS handshake.
 type HTTPProxyDialer struct {
-	profile  *Profile
-	proxyURL *url.URL
+	profile        *Profile
+	proxyURL       *url.URL
+	proxyTLSConfig *tls.Config
 }
 
 // SOCKS5ProxyDialer creates TLS connections through SOCKS5 proxies with custom fingerprints.
@@ -214,13 +216,31 @@ func (d *HTTPProxyDialer) DialTLSContext(ctx context.Context, network, addr stri
 	}
 	slog.Debug("tls_fingerprint_http_proxy_connected", "proxy_addr", proxyAddr)
 	// CONNECT can stall before TLS starts; bound and cancel those reads too.
-	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	rawConn := conn
+	stop := context.AfterFunc(ctx, func() { _ = rawConn.Close() })
 	defer stop()
 	if deadline, ok := ctx.Deadline(); ok {
 		if err := conn.SetDeadline(deadline); err != nil {
 			_ = conn.Close()
 			return nil, err
 		}
+	}
+
+	// HTTPS proxies require an authenticated outer TLS tunnel before any proxy
+	// credentials are written. The inner handshake still uses the target profile.
+	if d.proxyURL.Scheme == "https" {
+		cfg := &tls.Config{MinVersion: tls.VersionTLS12}
+		if d.proxyTLSConfig != nil {
+			cfg = d.proxyTLSConfig.Clone()
+		}
+		cfg.ServerName = d.proxyURL.Hostname()
+		cfg.NextProtos = []string{"http/1.1"}
+		secure := tls.Client(conn, cfg)
+		if err := secure.HandshakeContext(ctx); err != nil {
+			_ = conn.Close()
+			return nil, fmt.Errorf("TLS handshake with proxy: %w", err)
+		}
+		conn = secure
 	}
 
 	// Step 2: Send CONNECT request to establish tunnel

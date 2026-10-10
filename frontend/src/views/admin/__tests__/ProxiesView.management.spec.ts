@@ -14,6 +14,15 @@ const mountView = () => shallowMount(ProxiesView, { global: { stubs: {
 beforeEach(() => { vi.clearAllMocks(); route.hash = ''; list.mockResolvedValue({ items: [], total: 0, pages: 1 }) })
 afterEach(() => wrapper?.unmount())
 describe('IP management navigation', () => {
+  it('opens the ordinary pool and preserves its mounted draft when changing tabs', async () => {
+    wrapper = mountView(); await flushPromises()
+    await wrapper.findAll('button').find(b => b.text() === 'proxyPool.title')!.trigger('click')
+    const pool = wrapper.findComponent({ name: 'ProxyPoolPanel' })
+    expect(pool.exists()).toBe(true)
+    expect(replace).toHaveBeenLastCalledWith({ hash: '#pool' })
+    await wrapper.findAll('button').find(b => b.text() === 'admin.proxies.proxyList')!.trigger('click')
+    expect(wrapper.findComponent({ name: 'ProxyPoolPanel' }).exists()).toBe(true)
+  })
   it('preserves the existing proxy list and exposes the four management sections', async () => {
     wrapper = mountView(); await flushPromises()
     expect(wrapper.find('input[type="text"]').exists()).toBe(true)

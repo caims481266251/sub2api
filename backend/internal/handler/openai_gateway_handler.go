@@ -902,6 +902,10 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	))
 	requireCompact := legacyCompact
 
+	borrowCtx, borrowRecovery := service.WithBorrowBusinessRecovery(c.Request.Context(), h.cfg)
+	c.Request = c.Request.WithContext(borrowCtx)
+	defer borrowRecovery.Close()
+
 	maxAccountSwitches := h.maxAccountSwitches
 	switchCount := 0
 	var forbiddenBudget grokForbiddenFailoverBudget
@@ -937,6 +941,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	c.Request = c.Request.WithContext(pricingCtx)
 
 	for {
+		if h.stopBorrowBusinessRecovery(c, streamStarted, false) {
+			return
+		}
 		// Streaming Forward intentionally detaches the upstream request so usage can
 		// be drained after a disconnect. Re-check the client context before every
 		// account attempt so a canceled request never starts a failover replay.
@@ -946,7 +953,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		// Select account supporting the requested model
 		reqLog.Debug("openai.account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
 		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
-			c.Request.Context(),
+			service.BorrowBusinessRecoveryContext(c.Request.Context()),
 			apiKey.GroupID,
 			previousResponseID,
 			sessionHash,
@@ -960,6 +967,12 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			requestPlatform,
 		)
 		if err != nil {
+			if h.stopBorrowBusinessRecovery(c, streamStarted, false) {
+				return
+			}
+			if borrowBusinessSelectionFallback(c, err, failedAccountIDs) {
+				continue
+			}
 			if failoverClientGone(c) {
 				reqLog.Info("openai.account_select_aborted_client_disconnected", zap.Error(err))
 				return
@@ -975,7 +988,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				zap.Error(openAICompatibleSelectionErrorForLog(err, requestPlatform)),
 				zap.Int("excluded_account_count", len(failedAccountIDs)),
 			)
-			if len(failedAccountIDs) == 0 {
+			if len(failedAccountIDs) == 0 || service.IsBorrowRouteUnavailable(err) {
 				if legacyCompact && errors.Is(err, service.ErrNoAvailableCompactAccounts) {
 					markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
 					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "compact_not_supported", "No available accounts support /responses/compact", streamStarted)
@@ -990,7 +1003,8 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				return
 			}
 			if lastAdmissionErr != nil && lastFailoverErr == nil {
-				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "admission_unavailable", "Account eligibility changed; please retry with complete context", streamStarted)
+				status, code, message := openAIAdmissionClientError(err)
+				h.handleStreamingAwareError(c, status, code, message, streamStarted)
 			} else if lastFailoverErr != nil {
 				h.handleFailoverExhausted(c, lastFailoverErr, streamStarted)
 			} else {
@@ -1085,7 +1099,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					accountReleaseFunc()
 				}
 			}()
-			return h.gatewayService.Forward(rpmAdmission.forwardContext(c.Request.Context(), account), c, account, attemptBody)
+			return h.gatewayService.Forward(rpmAdmission.forwardContext(service.BorrowBusinessRecoveryContext(c.Request.Context()), account), c, account, attemptBody)
 		}()
 		if retryOpenAIInitialAdmission(c, err, result, forwardBody, account.ID, failedAccountIDs, &switchCount, maxAccountSwitches) {
 			lastAdmissionErr = err
@@ -1156,9 +1170,14 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				}
 			})
 		}
+		if h.stopBorrowBusinessRecovery(c, streamStarted, false) {
+			submitResponsesUsage(result)
+			return
+		}
 		if err != nil {
 			if service.IsOpenAITurnAdmissionError(err) {
-				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "admission_unavailable", "Account eligibility changed; please retry with complete context", streamStarted)
+				status, code, message := openAIAdmissionClientError(err)
+				h.handleStreamingAwareError(c, status, code, message, streamStarted)
 				return
 			}
 			if result != nil && result.ClientDisconnect {
@@ -1212,6 +1231,14 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					}
 					if openAIFirstOutputFailoverExhausted(failoverErr, &firstOutputTimeoutSwitchCount) {
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
+						return
+					}
+					if handled, retry := h.handleBorrowBusinessRecovery(c, failoverErr, account, failedAccountIDs, &switchCount, maxAccountSwitches, streamStarted, false); handled {
+						submitResponsesUsage(result)
+						lastFailoverErr = failoverErr
+						if retry {
+							continue
+						}
 						return
 					}
 					// 池模式：同账号重试
@@ -1581,6 +1608,10 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		return
 	}
 
+	borrowCtx, borrowRecovery := service.WithBorrowBusinessRecovery(c.Request.Context(), h.cfg)
+	c.Request = c.Request.WithContext(borrowCtx)
+	defer borrowRecovery.Close()
+
 	maxAccountSwitches := h.maxAccountSwitches
 	switchCount := 0
 	var forbiddenBudget grokForbiddenFailoverBudget
@@ -1597,6 +1628,9 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 	c.Request = c.Request.WithContext(msgPricingCtx)
 
 	for {
+		if h.stopBorrowBusinessRecovery(c, streamStarted, true) {
+			return
+		}
 		if failoverClientGone(c) {
 			return
 		}
@@ -1606,7 +1640,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		}
 		reqLog.Debug("openai_messages.account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
 		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
-			c.Request.Context(),
+			service.BorrowBusinessRecoveryContext(c.Request.Context()),
 			apiKey.GroupID,
 			"", // no previous_response_id
 			sessionHash,
@@ -1620,6 +1654,12 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			requestPlatform,
 		)
 		if err != nil {
+			if h.stopBorrowBusinessRecovery(c, streamStarted, true) {
+				return
+			}
+			if borrowBusinessSelectionFallback(c, err, failedAccountIDs) {
+				continue
+			}
 			if failoverClientGone(c) {
 				reqLog.Info("openai_messages.account_select_aborted_client_disconnected", zap.Error(err))
 				return
@@ -1635,9 +1675,12 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 				zap.Error(openAICompatibleSelectionErrorForLog(err, requestPlatform)),
 				zap.Int("excluded_account_count", len(failedAccountIDs)),
 			)
-			if len(failedAccountIDs) == 0 {
+			if len(failedAccountIDs) == 0 || service.IsBorrowRouteUnavailable(err) {
 				if err != nil {
 					cls := classifyOpenAICompatibleNoAccountErrorFromGin(c, h.gatewayService, apiKey, currentRoutingModel, reqModel)
+					if service.IsBorrowRouteUnavailable(err) {
+						cls = classifySelectionFailureError(err, cls)
+					}
 					if !cls.ModelNotFound {
 						markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
 					}
@@ -1703,7 +1746,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 					accountReleaseFunc()
 				}
 			}()
-			return h.gatewayService.ForwardAsAnthropic(rpmAdmission.forwardContext(c.Request.Context(), account), c, account, forwardBody, promptCacheKey, defaultMappedModel)
+			return h.gatewayService.ForwardAsAnthropic(rpmAdmission.forwardContext(service.BorrowBusinessRecoveryContext(c.Request.Context()), account), c, account, forwardBody, promptCacheKey, defaultMappedModel)
 		}()
 		if h.handleOpenAIRPMForwardError(c, err, streamStarted, true) {
 			return
@@ -1769,7 +1812,16 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 				}
 			})
 		}
+		if h.stopBorrowBusinessRecovery(c, streamStarted, true) {
+			submitMessagesUsage(result)
+			return
+		}
 		if err != nil {
+			if service.IsBorrowRouteUnavailable(err) {
+				status, code, message := openAIAdmissionClientError(err)
+				h.anthropicStreamingAwareError(c, status, code, message, streamStarted)
+				return
+			}
 			if result != nil && result.ImageCount > 0 {
 				reqLog.Warn("openai_messages.forward_partial_error_with_image_result",
 					zap.Int64("account_id", account.ID),
@@ -1796,6 +1848,14 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 					}
 					if !forbiddenBudget.canRetry(failoverErr, switchCount) {
 						h.handleAnthropicFailoverExhausted(c, failoverErr, streamStarted)
+						return
+					}
+					if handled, retry := h.handleBorrowBusinessRecovery(c, failoverErr, account, failedAccountIDs, &switchCount, maxAccountSwitches, streamStarted, true); handled {
+						submitMessagesUsage(result)
+						lastFailoverErr = failoverErr
+						if retry {
+							continue
+						}
 						return
 					}
 					// 池模式：同账号重试
@@ -2504,11 +2564,21 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlot(
 	reqLog *zap.Logger,
 	writeError openAISlotErrorWriter,
 ) (func(), openAISlotAcquireResult) {
+	originalRequest := c.Request
+	c.Request = c.Request.WithContext(service.BorrowBusinessRecoveryContext(c.Request.Context()))
+	defer func() { c.Request = originalRequest }()
 	defer requesttiming.Observe(c.Request.Context(), "account_queue")()
 	if writeError == nil {
 		writeError = func(status int, errType, code, message string) {
 			h.handleStreamingAwareErrorWithCode(c, status, errType, code, message, *streamStarted, false)
 		}
+	}
+	originalWriteError := writeError
+	writeError = func(status int, errType, code, message string) {
+		if errors.Is(service.BorrowBusinessRecoveryFromContext(c.Request.Context()).Err(), service.ErrBorrowRecoveryTimeout) {
+			status, errType, code, message = http.StatusGatewayTimeout, "api_error", "borrow_recovery_timeout", "Upstream recovery timed out before output"
+		}
+		originalWriteError(status, errType, code, message)
 	}
 	if selection == nil || selection.Account == nil {
 		markOpsRoutingCapacityLimited(c)

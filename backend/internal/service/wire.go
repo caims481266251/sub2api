@@ -287,6 +287,8 @@ func ProvideAccountTestService(
 	openAIGatewayService *OpenAIGatewayService,
 	settingService *SettingService,
 	pluginManager *PluginManager,
+	borrowRepo TicketBorrowRepository,
+	borrowOAuth *OpenAIOAuthService,
 ) *AccountTestService {
 	service := NewAccountTestService(
 		accountRepo,
@@ -302,6 +304,15 @@ func ProvideAccountTestService(
 	service.SetOpenAIGatewayService(openAIGatewayService)
 	service.SetSettingService(settingService)
 	service.SetPluginManager(pluginManager)
+	borrowing := NewTicketBorrowService(borrowRepo, service, borrowOAuth)
+	service.TicketBorrow = borrowing
+	openAIGatewayService.borrowRoutes = borrowing
+	if p, ok := httpUpstream.(interface{ SetTicketBorrowService(*TicketBorrowService) }); ok {
+		p.SetTicketBorrowService(borrowing)
+	}
+	if cfg.RunsBackgroundJobs() {
+		borrowing.Start()
+	}
 	if p, ok := httpUpstream.(AstraGatewayRuntimeProvider); ok {
 		p.SetAstraGatewayPreparer(service.prepareAstraGatewaySource)
 	}
@@ -321,7 +332,10 @@ func ProvideAccountTestService(
 		}
 	}
 	stopScheduling := service.startAstraAccountScheduling()
+	stopSeamless := service.startAstraSeamlessMaintenance()
 	openAIGatewayService.stopAstraSetup = func() {
+		borrowing.Stop()
+		stopSeamless()
 		stopScheduling()
 		service.StopAstraAutomaticSetup()
 	}

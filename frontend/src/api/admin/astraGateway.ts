@@ -4,7 +4,7 @@ export interface AstraGatewaySettings {
   account_scheduling?: boolean
   scheduling_mode?: 'account' | 'model' | 'groups'
   scheduling_group_ids?: number[]
-  cookie_pool: { node_cooldown_seconds?: number; rotate_nodes?: boolean; max_node_attempts?: number; ip_affinity?: boolean; ttl_seconds?: number; enabled: boolean; source_account_ids: number[]; target_account_ids: number[] }
+  cookie_pool: { seamless?: boolean; source_account_models?: Record<string, string>; node_cooldown_seconds?: number; rotate_nodes?: boolean; max_node_attempts?: number; ip_affinity?: boolean; ttl_seconds?: number; enabled: boolean; source_account_ids: number[]; target_account_ids: number[] }
   ws_session: { ttl_seconds?: number; enabled: boolean; account_ids: number[] }
   revision: string
 }
@@ -15,6 +15,8 @@ export function normalizeAstraGateway(value: AstraGatewaySettings): AstraGateway
     scheduling_group_ids: [...(value.scheduling_group_ids || [])],
     cookie_pool: {
       enabled: value.cookie_pool.enabled,
+      seamless: value.cookie_pool.seamless ?? false,
+      source_account_models: Object.fromEntries(Object.entries(value.cookie_pool.source_account_models || {}).filter(([id]) => (value.cookie_pool.source_account_ids || []).includes(Number(id)))),
       ip_affinity: value.cookie_pool.ip_affinity ?? false,
       rotate_nodes: value.cookie_pool.rotate_nodes ?? false,
       max_node_attempts: value.cookie_pool.max_node_attempts || 3,
@@ -37,6 +39,8 @@ export async function saveAstraGateway(value: AstraGatewaySettings): Promise<Ast
 }
 
 export interface AstraRouteStatus {
+  routes?: { role: string; source_account_id: number; gateway: string; expires_at: string; checked_at: string; remaining_seconds: number }[]
+  maintenance?: { phase: string; reason?: string; failure?: string; mint_status?: number; continue_status?: number; retries: number; running: boolean; next_attempt?: string }
   account_id: number; state: string; reason: string; proxy_node?: string; proxy_country?: string; checked_at?: string
   expires_at?: string; remaining_seconds: number; gateway?: string; active: boolean; answer?: string
 }

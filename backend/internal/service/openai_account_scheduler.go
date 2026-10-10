@@ -2002,6 +2002,12 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 	if account == nil {
 		return false, "account_nil"
 	}
+	if s.service != nil && s.service.borrowRoutes != nil && account.IsOpenAI() {
+		if err := s.service.borrowRoutes.Check(ctx, account.ID, s.service.openAICodexTicketOutboundModel(account, req.RequestedModel, req.RequireCompact), "http"); err != nil {
+			observeBorrowSelectionFailure(ctx, err)
+			return false, "borrow_route_unavailable"
+		}
+	}
 	if source, ok := CompositeRouteSourceFromContext(ctx); ok && source == CompositeRouteSourceAccount {
 		if publicModel, modelOK := RequestedPublicModelFromContext(ctx); modelOK && !explicitModelMappingClaims(*account, publicModel) {
 			return false, "account_model_not_owned"
@@ -2405,6 +2411,8 @@ func (s *OpenAIGatewayService) selectAccountWithScheduler(
 	previousResponseCanMove bool,
 	useUpstreamTokenCost bool,
 ) (selection *AccountSelectionResult, decision OpenAIAccountScheduleDecision, err error) {
+	ctx, borrowSelectionError := withBorrowSelectionFailure(ctx)
+	defer func() { err = borrowSelectionError(err) }()
 	selection, decision, err = s.selectAccountWithSchedulerOnce(ctx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, requiredImageCapability, requireCompact, platform, previousResponseCanMove, useUpstreamTokenCost)
 	if err == nil || openAIProxyStreamQuarantineBypassed(ctx) {
 		return selection, decision, err

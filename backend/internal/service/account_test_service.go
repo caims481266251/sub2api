@@ -138,6 +138,7 @@ func normalizeGrokAccountTestMode(mode string) string {
 
 // AccountTestService handles account testing operations
 type AccountTestService struct {
+	TicketBorrow              *TicketBorrowService
 	astraGatewayActionMu      sync.Mutex
 	astraSetupMu              sync.Mutex
 	astraSetupCancel          context.CancelFunc

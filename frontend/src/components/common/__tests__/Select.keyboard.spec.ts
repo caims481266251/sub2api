@@ -45,6 +45,22 @@ describe('Select keyboard focus', () => {
     expect(wrapper.emitted('update:modelValue')).toBeUndefined()
   })
 
+  it('does not send dropdown Escape to a containing dialog', async () => {
+    const dialogEscape = vi.fn()
+    document.addEventListener('keydown', dialogEscape)
+    try {
+      await open(false)
+      dialogEscape.mockClear()
+      await press('Escape')
+      expect(dialogEscape).not.toHaveBeenCalled()
+      expect(wrapper.get('button').attributes('aria-expanded')).toBe('false')
+      await press('Escape')
+      expect(dialogEscape).toHaveBeenCalledOnce()
+    } finally {
+      document.removeEventListener('keydown', dialogEscape)
+    }
+  })
+
   it('keeps focus in the search input when search is enabled', async () => {
     await open(true)
     expect(document.activeElement).toBe(document.querySelector('.select-search-input'))

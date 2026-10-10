@@ -1,0 +1,44 @@
+# GitHub 发布与在线更新
+
+本分支的发布仓库是 `caims481266251/sub2api`。当前版本 `2.10.5` 基于本地 `2.10.1` 的借票管理、代理池、批量参数和恢复机制；不代表已合并其他仓库的 `2.10.2–2.10.4`。
+
+## 发布方式
+
+将已验证的代码推送到本仓库主分支后，创建带说明的正式 tag：
+
+```bash
+git tag -a v2.10.6 -m "Release v2.10.6" -m "本次更新说明"
+git push origin main
+git push origin v2.10.6
+```
+
+`.github/workflows/release.yml` 接收 `v*` tag，自动构建前端及 Windows AMD64、macOS AMD64/ARM64、Linux AMD64/ARM64 更新包，发布 `checksums.txt`、GitHub Release 和 GHCR 多架构镜像。正式 tag 固定完整发布，不能被仓库的 `SIMPLE_RELEASE` 变量降级为仅镜像模式。手动触发仍可选择 simple release，但该模式不提供系统内在线更新包。
+
+更新包命名必须保持 `sub2api_<版本>_<系统>_<架构>.tar.gz`（Windows 为 `.zip`），校验文件必须保持 `checksums.txt`。仅推送 tag 不代表发布完成，应确认 Release 工作流成功且资源已上传。预发布 tag 不进入稳定版本的 latest 更新通道。
+
+## 系统内更新
+
+后端检查更新和回滚均读取本仓库 Releases；重登录运行时也从同一仓库下载。页面回滚指令和安装脚本使用本仓库，Docker 镜像为 `ghcr.io/caims481266251/sub2api`。
+
+已有安装若仍指向旧仓库，需要先安装一次本分支的正式版本；之后即可从管理页面检查并在线更新。发布构建使用 `BuildType=release`，页面才显示更新操作。在线更新需要能访问 GitHub，并允许服务用户写入应用所在目录。
+
+Docker 部署可通过页面更新当前容器中的二进制；重新创建容器会恢复镜像内版本，因此持久升级还应更新 Compose 镜像 tag 并重新创建应用容器：
+
+```yaml
+image: ghcr.io/caims481266251/sub2api:2.10.5
+```
+
+```bash
+docker compose pull app
+docker compose up -d --no-deps app
+```
+
+服务名以实际 Compose 文件为准。新仓库的 GHCR 软件包第一次发布后，应确认可匿名拉取；仓库公开不一定意味着软件包自动公开。数据库、账号凭据、`.env`、本地备份和运行数据不属于源码发布内容。
+
+## 本次功能
+
+- 来源帐号批量设置自动轮换开关和切换间隔。
+- 来源帐号一键切换所有已绑定来源的代理和指纹。
+- 目标帐号批量设置探测并发和提前恢复时间。
+- 新目标探测并发默认 2，迁移保留已有帐号保存的值。
+- 保留已实现的代理池、借票恢复、请求预算和事件保留机制。

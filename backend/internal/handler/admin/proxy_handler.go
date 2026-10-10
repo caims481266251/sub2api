@@ -16,6 +16,7 @@ import (
 // ProxyHandler handles admin proxy management
 type ProxyHandler struct {
 	adminService service.AdminService
+	pool         *service.ProxyPoolService
 }
 
 // NewProxyHandler creates a new admin proxy handler

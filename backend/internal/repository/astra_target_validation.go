@@ -43,7 +43,11 @@ func (s *astraRoutingUpstream) targetRouteOnce(req *http.Request, proxy string, 
 		return nil, zero, proxy, release, nil
 	}
 	cookie, sourceID := pool.currentCookie(req.URL.Path, time.Now())
+	cachedOnly, _ := req.Context().Value(astraCachedTargetOnlyKey{}).(bool)
 	if cookie == nil {
+		if cachedOnly {
+			return nil, zero, proxy, release, errors.New("target_validation_in_progress")
+		}
 		if err := s.PrepareAstraGateway(req.Context()); err != nil {
 			return nil, zero, proxy, release, err
 		}
@@ -93,10 +97,6 @@ func (s *astraRoutingUpstream) targetRouteOnce(req *http.Request, proxy string, 
 	fingerprint, _ := json.Marshal(profile)
 	identity = append(identity, string(fingerprint))
 	key := sha256.Sum256([]byte(strings.Join(identity, "\x00")))
-	if !pool.targetProbeMu.TryLock() {
-		return nil, key, proxy, release, errors.New("target_validation_in_progress")
-	}
-	defer pool.targetProbeMu.Unlock()
 	now := time.Now()
 	pool.targetMu.Lock()
 	old, exists := pool.targetChecks[id]
@@ -110,6 +110,10 @@ func (s *astraRoutingUpstream) targetRouteOnce(req *http.Request, proxy string, 
 			return nil, key, proxy, release, errors.New(old.reason)
 		}
 	}
+	if cachedOnly || !pool.targetProbeMu.TryLock() {
+		return nil, key, proxy, release, errors.New("target_validation_in_progress")
+	}
+	defer pool.targetProbeMu.Unlock()
 
 	ctx, cancel := context.WithTimeout(req.Context(), 90*time.Second)
 	defer cancel()
@@ -161,6 +165,9 @@ func (s *astraRoutingUpstream) targetRouteOnce(req *http.Request, proxy string, 
 	}
 	if !passed {
 		pool.rememberTargetFailure(id, pool.targetChecks[id])
+		if !pool.config.RotateNodes {
+			pool.rejectSourceRoute(pool.targetChecks[id])
+		}
 		return nil, key, proxy, release, errors.New(reason)
 	}
 	return cookie, key, proxy, release, nil
@@ -168,9 +175,15 @@ func (s *astraRoutingUpstream) targetRouteOnce(req *http.Request, proxy string, 
 
 // Manual verification always refreshes the evidence instead of accepting a cached pass.
 type astraForceProbeKey struct{}
+type astraCachedTargetOnlyKey struct{}
 
 func (s *astraRoutingUpstream) VerifyAstraGatewayTarget(ctx context.Context, req *http.Request, proxy string, id int64, n int) error {
 	req = req.Clone(context.WithValue(ctx, astraForceProbeKey{}, true))
+	if pool := s.current(ctx); pool != nil && pool.seamless != nil {
+		if _, err := pool.seamless.identity(req, proxy, id, n, nil, true, time.Now()); err != nil {
+			return err
+		}
+	}
 	_, _, _, release, err := s.targetRoute(req, proxy, id, n, nil)
 	release()
 	return err
@@ -195,4 +208,32 @@ func containsTarget(ids []int64, id int64) bool {
 		}
 	}
 	return false
+}
+
+// Called with targetMu held, before releasing the probe lock. Concurrent target
+// requests must never reselect a Cookie that just failed validation.
+func (pool *codexGatewayPinUpstream) rejectSourceRoute(check astraTargetValidation) {
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+	route, ok := pool.routes[check.sourceID]
+	if !ok || sha256.Sum256([]byte(route.cookie.Value)) != check.cookieFingerprint {
+		return
+	}
+	if pool.rejectedSources == nil {
+		pool.rejectedSources = make(map[int64]time.Time)
+		pool.rejectedCookies = make(map[[32]byte]time.Time)
+	}
+	for fingerprint, until := range pool.rejectedCookies {
+		if !time.Now().Before(until) {
+			delete(pool.rejectedCookies, fingerprint)
+		}
+	}
+	pool.rejectedSources[check.sourceID] = route.expires
+	pool.rejectedCookies[check.cookieFingerprint] = route.expires
+	delete(pool.routes, check.sourceID)
+	status := pool.statuses[check.sourceID]
+	status.State = "rejected"
+	status.Reason = "source_passed_target_failed"
+	pool.statuses[check.sourceID] = status
+	pool.activeSource = 0
 }

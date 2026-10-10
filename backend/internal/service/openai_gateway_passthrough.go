@@ -2176,6 +2176,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 			dataBytes := []byte(data)
 			trimmedData := strings.TrimSpace(data)
 			rawEventType := effectiveOpenAISSEEventType(dataBytes, pendingSSEEventType)
+			BorrowBusinessRecoveryFromContext(ctx).ObserveSSE(ctx, dataBytes, rawEventType)
 			observer.ObserveOpenAI(dataBytes, rawEventType)
 			if needModelReplace {
 				line = s.replaceModelInSSELine(line, mappedModel, originalModel)

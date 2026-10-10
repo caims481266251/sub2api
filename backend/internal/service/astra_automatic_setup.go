@@ -43,6 +43,17 @@ func (s *AccountTestService) StartAstraAutomaticSetup(settings config.AstraRouti
 		cancel()
 		return
 	}
+	if settings.CookiePool.Seamless && settings.CookiePool.Enabled {
+		// The lifecycle worker maintains inventory; a save must not launch a second
+		// full legacy recovery loop or hold the admin action lock for minutes.
+		cancel()
+		s.astraSetupMu.Lock()
+		if s.astraSetupStatus.Revision == settings.Revision {
+			s.astraSetupStatus.State = "maintaining"
+		}
+		s.astraSetupMu.Unlock()
+		return
+	}
 	go s.runAstraAutomaticSetup(ctx, cancel, settings)
 }
 func (s *AccountTestService) runAstraAutomaticSetup(ctx context.Context, cancel context.CancelFunc, settings config.AstraRoutingSettings) {

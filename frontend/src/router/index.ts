@@ -583,6 +583,7 @@ const routes: RouteRecordRaw[] = [
       descriptionKey: 'admin.accounts.description'
     }
   },
+  { path: '/admin/ticket-borrowing', name: 'AdminTicketBorrowing', component: () => import('@/views/admin/TicketBorrowingView.vue'), meta: { requiresAuth: true, requiresAdmin: true, title: 'Ticket borrowing', titleKey: 'ticketBorrowing.title' } },
   { path: '/admin/astra-gateway', redirect: '/admin/harvest-flow' },
   {
     path: '/admin/harvest-flow',

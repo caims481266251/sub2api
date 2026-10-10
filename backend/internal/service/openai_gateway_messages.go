@@ -870,6 +870,7 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 			if !ok {
 				if frame, ok := parser.Finish(); ok {
 					payload := openAICompatPayloadWithEventType(frame.Data, frame.EventType)
+					BorrowBusinessRecoveryFromContext(c.Request.Context()).ObserveSSE(c.Request.Context(), []byte(payload), frame.EventType)
 					payload = string(restoreCodexToolNamesFromContext(c, []byte(payload)))
 					var event apicompat.ResponsesStreamEvent
 					if err := json.Unmarshal([]byte(payload), &event); err == nil {
@@ -910,6 +911,7 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 				continue
 			}
 			payload := openAICompatPayloadWithEventType(frame.Data, frame.EventType)
+			BorrowBusinessRecoveryFromContext(c.Request.Context()).ObserveSSE(c.Request.Context(), []byte(payload), frame.EventType)
 			payload = string(restoreCodexToolNamesFromContext(c, []byte(payload)))
 
 			var event apicompat.ResponsesStreamEvent
@@ -1214,6 +1216,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	}
 	processFrame := func(frame openAICompatSSEFrame) bool {
 		payload := openAICompatPayloadWithEventType(frame.Data, frame.EventType)
+		BorrowBusinessRecoveryFromContext(c.Request.Context()).ObserveSSE(c.Request.Context(), []byte(payload), frame.EventType)
 		return processDataLine(payload)
 	}
 

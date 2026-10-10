@@ -24,7 +24,7 @@
       </div>
 
       <HarvestControlsPanel :refresh-key="snapshot?.generated_at" :runtime="snapshot?.runtime" @saved="fetchFlow" />
-      <HarvestGatewayBorrowPanel />
+      <TicketBorrowMigrationCard />
       <HarvestManualConsole
         v-if="snapshot"
         :accounts="snapshot.accounts || []"
@@ -238,7 +238,7 @@
 </template>
 
 <script setup lang="ts">
-import HarvestGatewayBorrowPanel from '@/components/admin/HarvestGatewayBorrowPanel.vue'
+import TicketBorrowMigrationCard from '@/components/admin/TicketBorrowMigrationCard.vue'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppLayout from '@/components/layout/AppLayout.vue'

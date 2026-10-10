@@ -19,6 +19,9 @@ import (
 // was handed to HTTP. In particular, a missing trace is NOT proof of no write.
 // Keep evidence across all redirects/connections in the first Client.Do call.
 func doWithOpenAIPreRequestRetry(client *http.Client, req *http.Request, proxyURL string, profile service.HTTPUpstreamProfile) (*http.Response, error) {
+	if req != nil && service.BorrowBusinessRecoveryFromContext(req.Context()).Active() {
+		return doUpstreamRequest(client, req)
+	}
 	if req == nil || req.URL == nil || req.URL.Scheme != "https" ||
 		strings.TrimSpace(proxyURL) == "" || profile != service.HTTPUpstreamProfileOpenAI ||
 		(req.Body != nil && req.Body != http.NoBody && req.GetBody == nil) {
