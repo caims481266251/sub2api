@@ -32,7 +32,7 @@
           :sources="sources" :rotations="rotations" :groups="options.groups" :running="backgroundRunning"
           :busy="busy || loading" :rotation-loaded="rotationsLoaded" :selection-dirty="selectionDirty"
           v-model:selected="rotationSelection" @open="openSource" @rotate="rotateAccounts"
-          @manage="sourceEditor = 'scope'" @defaults="sourceEditor = 'defaults'" @batch-settings="openBatchRotation"
+          @remove="removeSources" :scope-loaded="selectionLoaded" @manage="sourceEditor = 'scope'" @defaults="sourceEditor = 'defaults'" @batch-settings="openBatchRotation"
         />
         <div v-if="rotationResult?.skipped?.length" class="card p-4 text-sm" role="status" data-testid="rotation-result">
           <p>{{ t('ticketBorrowing.rotation.partialResult', { accepted: rotationResult.account_ids.length, skipped: rotationResult.skipped.length }) }}</p>
@@ -61,41 +61,8 @@
         <p v-if="error" role="alert" class="mb-3 text-sm text-red-600">{{ error }}</p>
         <p class="mb-3 text-xs text-gray-500">{{ t('ticketBorrowing.management.drawerDraftHint') }}</p>
         <form id="borrow-selection-form" class="space-y-4" @submit.prevent="saveSelection">
-          <fieldset v-if="sourceEditor === 'scope'" :disabled="busy || !selectionLoaded" class="card min-w-0 space-y-5 p-4 sm:p-5">
-            <h2 class="font-semibold">{{ t('ticketBorrowing.chooseScope') }}</h2>
-            <div class="grid gap-5 lg:grid-cols-2">
-              <fieldset class="min-w-0 space-y-2">
-                <legend class="font-medium">{{ t('ticketBorrowing.selectGroups') }}</legend>
-                <p class="text-xs text-gray-500">{{ t('ticketBorrowing.groupsHint') }}</p>
-                <input v-model="groupSearch" class="input" :placeholder="t('ticketBorrowing.searchGroups')" :aria-label="t('ticketBorrowing.searchGroups')" />
-                <div class="max-h-56 space-y-1 overflow-y-auto rounded-lg border p-2 dark:border-dark-600 lg:h-56">
-                  <label v-for="group in filteredGroups" :key="group.id" class="flex items-start gap-2 rounded p-2 text-sm hover:bg-gray-50 dark:hover:bg-dark-700">
-                    <input v-model="selection.group_ids" :value="group.id" type="checkbox" class="mt-1" :data-group-id="group.id" /><span class="min-w-0 break-words">{{ group.name }} <span class="text-gray-400">#{{ group.id }}</span></span>
-                  </label>
-                  <p v-if="!filteredGroups.length" class="p-2 text-sm text-gray-500">{{ t(options.groups.length ? 'ticketBorrowing.noMatches' : 'ticketBorrowing.noGroups') }}</p>
-                </div>
-              </fieldset>
-              <fieldset class="min-w-0 space-y-2">
-                <legend class="font-medium">{{ t('ticketBorrowing.selectAccounts') }}</legend>
-                <p class="text-xs text-gray-500">{{ t('ticketBorrowing.accountSelectionHint') }}</p>
-                <input v-model="search" class="input" :placeholder="t('ticketBorrowing.searchAccounts')" :aria-label="t('ticketBorrowing.searchAccounts')" />
-                <div class="h-56 space-y-1 overflow-y-auto rounded-lg border p-2 dark:border-dark-600">
-                  <label v-for="account in pagedCandidates" :key="account.id" class="flex items-start gap-2 rounded p-2 text-sm hover:bg-gray-50 dark:hover:bg-dark-700">
-                    <input v-model="selection.account_ids" :value="account.id" type="checkbox" class="mt-1" :data-account-id="account.id" :disabled="account.is_target && !selection.account_ids.includes(account.id)" />
-                    <span class="min-w-0 break-words">{{ account.name }} <span class="text-gray-400">#{{ account.id }}</span><span v-if="account.is_target" class="block text-xs text-amber-600">{{ t('ticketBorrowing.sourceIsTarget') }}</span><span v-else-if="inSelectedGroup(account)" class="block text-xs text-blue-600">{{ t('ticketBorrowing.includedByGroup') }}</span></span>
-                  </label>
-                  <p v-if="!filteredAccounts.length" class="p-2 text-sm text-gray-500">{{ t(options.accounts.length ? 'ticketBorrowing.noMatches' : 'ticketBorrowing.emptySources') }}</p>
-                </div>
-                <BorrowListPagination v-if="filteredAccounts.length > candidatePageSize" v-model:page="candidatePage" v-model:page-size="candidatePageSize" :total="filteredAccounts.length" />
-                <div class="flex flex-wrap gap-3 text-xs"><button type="button" class="text-primary-600" @click="selectMatchingAccounts">{{ t('ticketBorrowing.selectMatching', { count: filteredAccounts.filter(a => !a.is_target).length }) }}</button><button type="button" class="text-gray-500" @click="clearMatchingAccounts">{{ t('ticketBorrowing.clearMatching') }}</button></div>
-              </fieldset>
-            </div>
-            <div v-if="missingGroups.length || missingAccounts.length" class="space-y-2 rounded-lg bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-900/20">
-              <p>{{ t('ticketBorrowing.missingSelection', { count: missingGroups.length + missingAccounts.length }) }}</p>
-              <div class="flex flex-wrap gap-2"><button v-for="id in missingGroups" :key="`g${id}`" type="button" class="btn btn-secondary btn-sm" @click="selection.group_ids = selection.group_ids.filter(v => v !== id)">{{ t('ticketBorrowing.removeMissingGroup', { id }) }}</button><button v-for="id in missingAccounts" :key="`a${id}`" type="button" class="btn btn-secondary btn-sm" @click="selection.account_ids = selection.account_ids.filter(v => v !== id)">{{ t('ticketBorrowing.removeMissingAccount', { id }) }}</button></div>
-            </div>
-          </fieldset>
-          <fieldset :disabled="busy || !selectionLoaded" class="card min-w-0 space-y-4 p-4 sm:p-5">
+          <BorrowSourceScopeEditor v-if="sourceEditor === 'scope'" :model-value="selection" :accounts="options.accounts" :groups="options.groups" :disabled="busy || loading || !selectionLoaded" @change="applyScope" />
+          <fieldset v-if="sourceEditor === 'defaults'" :disabled="busy || loading || !selectionLoaded" class="card min-w-0 space-y-4 p-4 sm:p-5">
             <h2 class="font-semibold">{{ t('ticketBorrowing.configureModels') }}</h2>
             <div class="grid gap-5 md:grid-cols-2">
               <label class="block space-y-2"><span class="input-label">{{ t('ticketBorrowing.defaultModel') }}</span><input v-model="selection.default_model" class="input" required maxlength="256" data-testid="default-model" /><span class="block text-xs text-gray-500">{{ t('ticketBorrowing.defaultModelHint') }}</span></label>
@@ -108,7 +75,7 @@
             </div>
             <div v-if="overrideCount" class="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-blue-50 p-3 text-sm dark:bg-blue-900/20"><p>{{ t('ticketBorrowing.overrideCount', { count: overrideCount }) }}</p><button type="button" class="btn btn-secondary btn-sm" data-testid="reset-models" @click="resetModels">{{ t('ticketBorrowing.resetModels') }}</button></div>
           </fieldset>
-          <fieldset :disabled="busy || !selectionLoaded" class="card min-w-0 overflow-hidden">
+          <fieldset :disabled="busy || loading || !selectionLoaded" class="card min-w-0 overflow-hidden">
             <div class="space-y-3 p-4 sm:p-5">
               <h2 class="font-semibold">{{ t('ticketBorrowing.reviewSources') }}</h2>
               <p class="text-sm" data-testid="selection-count">{{ t('ticketBorrowing.selectionCount', { count: preview.length, groups: selection.group_ids.length, accounts: selection.account_ids.length }) }}</p>
@@ -116,10 +83,18 @@
               <p class="text-xs text-gray-500">{{ t('ticketBorrowing.eligibilityHint') }}</p>
               <div class="flex flex-wrap gap-2"><input v-model="previewSearch" class="input sm:max-w-xs" :placeholder="t('ticketBorrowing.searchSelected')" :aria-label="t('ticketBorrowing.searchSelected')" /><Select v-model="previewFilter" class="w-full min-w-0 sm:max-w-xs" :aria-label="t('ticketBorrowing.filterSources')" :options="[{ value: 'all', label: t('ticketBorrowing.allSelected') }, { value: 'unavailable', label: t('ticketBorrowing.excludedSources') }, { value: 'overrides', label: t('ticketBorrowing.overriddenSources') }]" :searchable="false" :disabled="busy || !selectionLoaded" /></div>
             </div>
+            <div class="flex flex-wrap items-center gap-3 px-4 pb-3 text-sm">
+              <label class="flex items-center gap-2"><input type="checkbox" :checked="previewAllPage" :indeterminate="previewSomePage && !previewAllPage" :disabled="!pagedSources.length" data-testid="preview-select-page" @change="togglePreview(pagedSources.map(a => a.id), ($event.target as HTMLInputElement).checked)" />{{ t('ticketBorrowing.management.selectPage') }}</label>
+              <button type="button" class="text-primary-600" :disabled="!visibleSources.length" data-testid="preview-select-matching" @click="togglePreview(visibleSources.map(a => a.id), true)">{{ t('ticketBorrowing.scope.selectMatching', { count: visibleSources.length }) }}</button>
+              <span>{{ t('ticketBorrowing.scope.checked', { count: previewSelection.length }) }}</span>
+              <button type="button" class="text-primary-600" :disabled="!previewSelection.length" @click="previewSelection = []">{{ t('ticketBorrowing.scope.clearChecks') }}</button>
+              <button type="button" class="btn btn-secondary btn-sm" :disabled="!previewSelection.length" data-testid="preview-remove" @click="removeSources(previewSelection)">{{ t('ticketBorrowing.scope.remove', { count: previewSelection.length }) }}</button>
+            </div>
+            <p v-if="previewSelectionCleared" role="status" class="px-4 pb-2 text-xs text-amber-700">{{ t('ticketBorrowing.management.selectionCleared') }}</p>
             <p v-if="visibleSources.length" class="px-4 pb-2 text-xs text-gray-500 sm:hidden">{{ t('ticketBorrowing.scrollTableHint') }}</p>
             <div v-if="visibleSources.length" class="overflow-x-auto"><table class="w-full min-w-[680px] text-left text-sm"><thead class="bg-gray-50 text-gray-500 dark:bg-dark-700"><tr><th v-for="column in ['name', 'selectionOrigin', 'eligibility', 'poolBinding', 'model']" :key="column" scope="col" class="p-3 font-medium">{{ t(`ticketBorrowing.${column}`) }}</th></tr></thead><tbody class="divide-y dark:divide-dark-600">
               <tr v-for="account in pagedSources" :key="account.id" :data-source-account-id="account.id">
-                <td class="max-w-56 break-all p-3 align-top"><span class="font-medium">{{ account.name }}</span><span class="block text-xs text-gray-400">#{{ account.id }}</span></td>
+                <td class="max-w-56 break-all p-3 align-top"><label class="flex items-start gap-2"><input type="checkbox" class="mt-1" :checked="previewSelection.includes(account.id)" :aria-label="t('ticketBorrowing.scope.checkAccount', { id: account.id })" :data-preview-check="account.id" @change="togglePreview([account.id], ($event.target as HTMLInputElement).checked)" /><span class="font-medium">{{ account.name }}</span></label><span class="block text-xs text-gray-400">#{{ account.id }}</span></td>
                 <td class="max-w-48 break-words p-3 align-top text-xs text-gray-500">{{ selectionOrigin(account) }}</td>
                 <td class="max-w-56 p-3 align-top"><span :class="eligible(account) ? 'text-emerald-600' : 'text-amber-600'">{{ t(account.unavailable_reason ? 'ticketBorrowing.reasons.' + account.unavailable_reason : account.is_target ? 'ticketBorrowing.sourceIsTarget' : eligible(account) ? 'ticketBorrowing.eligibleSource' : 'ticketBorrowing.sourceUnavailable') }}</span><span v-if="sourceState(account.id)" class="mt-1 block text-xs text-gray-500">{{ t('ticketBorrowing.savedSourceResult') }}: {{ sourceState(account.id) }}</span></td>
                 <td class="max-w-56 break-all p-3 align-top text-xs" :data-pool-binding="account.id"><template v-if="sourceBinding(account.id)?.use_proxy_pool"><span v-if="sourceBinding(account.id)?.pool_entry_id">#{{ sourceBinding(account.id)?.pool_entry_id }} · {{ sourceBinding(account.id)?.pool_endpoint }}<span class="mt-1 block text-gray-500">{{ t('ticketBorrowing.fixedFingerprint') }}: {{ sourceBinding(account.id)?.fingerprint_id }}</span></span><span v-else class="text-amber-600">{{ t('ticketBorrowing.poolBindingWaiting') }}</span></template><span v-else class="text-gray-500">{{ t('ticketBorrowing.poolBindingWaiting') }}</span></td>
@@ -129,11 +104,18 @@
             <p v-else class="p-6 text-center text-sm text-gray-500">{{ t(preview.length ? 'ticketBorrowing.noMatches' : 'ticketBorrowing.selectSourceHint') }}</p>
             <BorrowListPagination data-testid="source-preview-pagination" v-if="visibleSources.length" v-model:page="page" v-model:page-size="previewPageSize" :total="visibleSources.length" />
           </fieldset>
-          <div class="space-y-2 rounded-xl border border-gray-200 bg-white p-4 dark:border-dark-600 dark:bg-dark-800" :class="{ 'sm:sticky sm:bottom-3 sm:z-10 sm:shadow-lg': selectionDirty || selectionConflict }" data-testid="selection-save-bar">
-            <p v-if="selectionConflict" role="alert" class="text-sm text-amber-600">{{ t('ticketBorrowing.remoteChange') }}</p>
-            <div class="flex flex-wrap items-center justify-between gap-3"><p class="text-sm text-gray-500">{{ t(!selectionLoaded ? 'ticketBorrowing.configurationNotLoaded' : selectionDirty ? 'ticketBorrowing.unsavedHint' : 'ticketBorrowing.selectionSaved') }}</p><div class="borrow-save-actions"><button type="button" class="btn btn-ghost" :disabled="busy || !selectionLoaded || !preview.length" @click="clearSelection">{{ t('ticketBorrowing.clearSelection') }}</button><button type="button" class="btn btn-secondary" :disabled="busy || (!selectionDirty && !selectionConflict)" data-testid="revert-selection" @click="revertSelection">{{ t('ticketBorrowing.revert') }}</button><button type="submit" class="btn btn-primary" data-testid="save-selection" :disabled="busy || loading || !selectionLoaded || !selectionDirty || selectionConflict">{{ t('ticketBorrowing.saveSelection') }}</button></div></div>
-          </div>
+
         </form>
+      </template>
+      <template v-if="sourceEditor" #footer>
+          <div class="space-y-2" data-testid="selection-save-bar">
+            <p data-testid="scope-summary" class="text-sm">{{ t('ticketBorrowing.scope.summary', scopeSummary) }}</p>
+            <p class="text-xs text-gray-500">{{ t('ticketBorrowing.scope.saveHint') }}</p>
+            <p v-if="scopeError" role="alert" class="text-sm text-red-600">{{ scopeError }}</p>
+            <button v-if="scopeUndo" type="button" class="text-sm text-primary-600" :disabled="busy || loading" data-testid="scope-undo" @click="undoScope">{{ t('ticketBorrowing.scope.undo') }}</button>
+            <p v-if="selectionConflict" role="alert" class="text-sm text-amber-600">{{ t('ticketBorrowing.remoteChange') }}</p>
+            <div class="flex flex-wrap items-center justify-between gap-3"><p class="text-sm text-gray-500">{{ t(!selectionLoaded ? 'ticketBorrowing.configurationNotLoaded' : selectionDirty ? 'ticketBorrowing.unsavedHint' : 'ticketBorrowing.selectionSaved') }}</p><div class="borrow-save-actions"><button type="button" class="btn btn-ghost" :disabled="busy || !selectionLoaded || !(selection.group_ids.length || selection.account_ids.length || selection.excluded_account_ids?.length)" data-testid="clear-source-scope" @click="clearSelection">{{ t('ticketBorrowing.clearSelection') }}</button><button type="button" class="btn btn-secondary" :disabled="busy || (!selectionDirty && !selectionConflict)" data-testid="revert-selection" @click="revertSelection">{{ t('ticketBorrowing.revert') }}</button><button type="submit" form="borrow-selection-form" class="btn btn-primary" data-testid="save-selection" :disabled="busy || loading || !selectionLoaded || !selectionDirty || selectionConflict">{{ t('ticketBorrowing.saveSelection') }}</button></div></div>
+          </div>
       </template>
     </BaseDialog>
     <BaseDialog :show="!!activeSource" :title="activeSource ? `${activeSource.name || '#' + activeSource.account_id} · #${activeSource.account_id}` : ''" width="normal" placement="right" :show-close-button="!busy" :close-on-escape="!busy" @close="!busy && (sourceDetailId = null)">
@@ -151,6 +133,7 @@
         <article v-for="target in activeTarget ? [activeTarget] : []" :key="target.account_id" class="min-w-0 space-y-4">
           <div class="flex flex-wrap items-start justify-between gap-3"><div class="min-w-0"><p class="break-all font-medium">{{ target.name }} <span class="text-gray-400">#{{ target.account_id }}</span></p><p class="mt-1 text-sm" :class="usable(target) ? 'text-emerald-600' : 'text-amber-600'">{{ t(usable(target) ? 'ticketBorrowing.ready' : 'ticketBorrowing.waiting') }}</p></div><span v-if="usable(target)" class="rounded-lg bg-emerald-50 px-3 py-1 text-sm text-emerald-700 dark:bg-emerald-900/20">{{ t('ticketBorrowing.remaining', { time: remaining(target) }) }}</span></div>
           <dl class="grid gap-4 rounded-lg border border-gray-100 p-3 text-sm dark:border-dark-700 sm:grid-cols-3"><div v-if="usable(target)" class="min-w-0"><dt class="text-xs text-gray-500">{{ t('ticketBorrowing.gateway') }}</dt><dd class="mt-1 break-all">{{ target.gateway }}</dd></div><div><dt class="text-xs text-gray-500">{{ t('ticketBorrowing.phase') }}</dt><dd class="mt-1">{{ reason(target.phase) }}</dd></div><div><dt class="text-xs text-gray-500">{{ t('ticketBorrowing.reason') }}</dt><dd class="mt-1">{{ reason(target.reason) }}</dd></div></dl>
+          <BorrowBusinessRoutes v-if="target.business_routes" :target="target" :now="now + offset" />
           <p v-if="target.scan_total" class="text-xs text-gray-500">{{ t('ticketBorrowing.scanProgress', { done: target.scan_completed, total: target.scan_total }) }} · {{ t('ticketBorrowing.scanProgressHint') }}</p>
           <div class="rounded-lg bg-gray-50 p-3 dark:bg-dark-800" data-testid="recovery-status">
             <p v-if="!backgroundRunning && (target.inflight ?? 0) > 0" class="text-sm text-amber-600">{{ t('ticketBorrowing.draining') }}</p>
@@ -161,6 +144,7 @@
               <div><dt class="text-xs text-gray-500">{{ t('ticketBorrowing.idleTime') }}</dt><dd class="mt-1">{{ idleTime(target) }}</dd></div>
               <div><dt class="text-xs text-gray-500">{{ t('ticketBorrowing.inflight') }}</dt><dd class="mt-1">{{ target.inflight ?? 0 }}</dd></div>
               <div><dt class="text-xs text-gray-500">{{ t('ticketBorrowing.consecutiveFailures') }}</dt><dd class="mt-1">{{ target.consecutive_failures ?? 0 }}</dd></div>
+              <div v-if="target.replenishment"><dt class="text-xs text-gray-500">{{ t('ticketBorrowing.replenishment.active') }}</dt><dd class="mt-1">{{ t('ticketBorrowing.replenishment.status', { source: target.replenishment.source_account_id, until: target.replenishment.until }) }}</dd></div>
               <div><dt class="text-xs text-gray-500">{{ t('ticketBorrowing.probeBudgetUsed') }}</dt><dd class="mt-1">{{ target.probe_requests_last_minute ?? 0 }} / {{ savedSettings?.recovery?.probe_requests_per_minute ?? '—' }}</dd></div>
               <div><dt class="text-xs text-gray-500">{{ t('ticketBorrowing.lastRequestFinished') }}</dt><dd class="mt-1">{{ target.last_request_finished_at ? new Date(target.last_request_finished_at).toLocaleTimeString() : '—' }}</dd></div>
             </dl>
@@ -175,6 +159,7 @@
 </template>
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import BorrowBusinessRoutes from '@/components/admin/BorrowBusinessRoutes.vue'
 import { onBeforeRouteLeave, RouterLink } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
@@ -184,6 +169,9 @@ import BaseDialog from '@/components/common/BaseDialog.vue'
 import BorrowListPagination from '@/components/admin/BorrowListPagination.vue'
 import BorrowSourceList from '@/components/admin/BorrowSourceList.vue'
 import BorrowTargetList from '@/components/admin/BorrowTargetList.vue'
+import BorrowSourceScopeEditor from '@/components/admin/BorrowSourceScopeEditor.vue'
+import { changeSourceScope, includedInScope, scopeWithinLimits } from '@/composables/borrowSourceScope'
+import { useBorrowBatchSelection } from '@/composables/useBorrowBatchSelection'
 import type { BorrowEditorState } from '@/composables/useBorrowEditorState'
 import type { BorrowProbePolicy as ProbePolicy } from '@/api/admin/ticketBorrowing'
 import SmartOpsNav from '@/components/admin/operations/SmartOpsNav.vue'
@@ -195,7 +183,7 @@ import type { BorrowProbeBatchAccount, BorrowProbeBatchInput, BorrowProbeBatchRe
 import type { BorrowRotationBatchAccount, BorrowRotationBatchInput, BorrowRotationBatchResult } from '@/api/admin/ticketBorrowing'
 import BorrowSettingsPanel from '@/components/admin/BorrowSettingsPanel.vue'
 import BorrowEventList from '@/components/admin/BorrowEventList.vue'
-import { ticketBorrowing as api, type BorrowSource, type BorrowTarget, type BorrowEvent, type BorrowSettings, type BorrowRecoverySettings, type BorrowSelection, type BorrowSourceOptions, type BorrowSourceOption, type BorrowRotationJob, type BorrowRotationState, type BorrowRotationPolicy } from '@/api/admin/ticketBorrowing'
+import { ticketBorrowing as api, defaultBorrowReplenishment, type BorrowSource, type BorrowTarget, type BorrowEvent, type BorrowSettings, type BorrowRecoverySettings, type BorrowSelection, type BorrowSourceOptions, type BorrowSourceOption, type BorrowRotationJob, type BorrowRotationState, type BorrowRotationPolicy } from '@/api/admin/ticketBorrowing'
 const { t, te } = useI18n()
 const appStore = useAppStore()
 const probeDrafts = ref<Record<number, boolean>>({})
@@ -227,16 +215,16 @@ const batchRotationResults = ref<BorrowRotationBatchResult[] | null>(null)
 const pendingRotationRequests = new Map<string, string>()
 const sources = ref<BorrowSource[]>([]), targets = ref<BorrowTarget[]>([]), events = ref<BorrowEvent[]>([])
 const defaultRecovery = (): BorrowRecoverySettings => ({ enabled: false, failure_threshold: 0, cooldown_seconds: [], probe_requests_per_minute: 12, source_requests_per_minute: 12 })
-const settings = ref<BorrowSettings & { recovery: BorrowRecoverySettings }>({ running: false, ttl_seconds: 230, min_route_remaining_seconds: 120, probe_concurrency: 2, renew_before_seconds: 180, prewarm_seconds: 0, recovery: defaultRecovery() })
-const selection = ref<BorrowSelection>({ revision: 0, group_ids: [], account_ids: [], default_model: 'gpt-6-luna', rotate_identity: false, use_proxy_pool: true, model_overrides: {} })
+const settings = ref<BorrowSettings & { recovery: BorrowRecoverySettings }>({ running: false, ttl_seconds: 230, continue_timeout_seconds: 7, min_route_remaining_seconds: 120, probe_concurrency: 2, renew_before_seconds: 180, prewarm_seconds: 0, recovery: defaultRecovery() })
+const selection = ref<BorrowSelection>({ revision: 0, group_ids: [], account_ids: [], excluded_account_ids: [], default_model: 'gpt-6-luna', rotate_identity: false, use_proxy_pool: true, model_overrides: {} })
 const savedSelection = ref<BorrowSelection>(), savedSettings = ref<BorrowSettings>()
 const options = ref<BorrowSourceOptions>({ accounts: [], groups: [], legacy_count: 0, restorable_count: 0 })
 const optionsLoaded = ref(false)
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value))
 function selectionKey(value: BorrowSelection) {
-  return JSON.stringify({ groups: [...value.group_ids].sort((a,b) => a-b), accounts: [...value.account_ids].sort((a,b) => a-b), model: value.default_model, rotate: value.rotate_identity, pool: !!value.use_proxy_pool, overrides: Object.entries(value.model_overrides).sort(([a],[b]) => Number(a)-Number(b)) })
+  return JSON.stringify({ groups: [...value.group_ids].sort((a,b) => a-b), accounts: [...value.account_ids].sort((a,b) => a-b), excluded: [...(value.excluded_account_ids ?? [])].sort((a,b) => a-b), model: value.default_model, rotate: value.rotate_identity, pool: !!value.use_proxy_pool, overrides: Object.entries(value.model_overrides).sort(([a],[b]) => Number(a)-Number(b)) })
 }
-function settingsKey(value: BorrowSettings) { const r = value.recovery ?? defaultRecovery(); return JSON.stringify([value.running, value.ttl_seconds, value.min_route_remaining_seconds ?? 120, value.probe_concurrency ?? 2, value.renew_before_seconds ?? 180, r.probe_requests_per_minute, r.source_requests_per_minute ?? 12]) }
+function settingsKey(value: BorrowSettings) { const r = value.recovery ?? defaultRecovery(); return JSON.stringify([value.running, value.ttl_seconds, value.continue_timeout_seconds ?? 7, value.min_route_remaining_seconds ?? 120, value.probe_concurrency ?? 2, value.renew_before_seconds ?? 180, r.probe_requests_per_minute, r.source_requests_per_minute ?? 12, value.replenishment ?? defaultBorrowReplenishment()]) }
 // Keep the edit baseline separate from the latest server snapshot. A refresh must not
 // replace a draft or silently advance its revision after another administrator's edit.
 const selectionBaseline = ref(''), settingsBaseline = ref('')
@@ -249,26 +237,19 @@ const backgroundRunning = computed(() => savedSettings.value?.running === true)
 function acceptSelection(value: BorrowSelection, force = false) {
   const keepDraft = selectionDirty.value && !force
   savedSelection.value = clone(value)
-  if (!keepDraft) { selection.value = { ...clone(value), use_proxy_pool: true, rotate_identity: false }; selectionBaseline.value = selectionKey(selection.value) }
+  if (!keepDraft) { selection.value = { ...clone(value), excluded_account_ids: [...(value.excluded_account_ids ?? [])], use_proxy_pool: true, rotate_identity: false }; scopeUndo.value = null; scopeError.value = ''; selectionBaseline.value = selectionKey(selection.value) }
 }
 function acceptSettings(value: BorrowSettings, force = false) {
   const keepDraft = settingsDirty.value && !force
   savedSettings.value = clone(value)
   if (value.server_now) offset = Date.parse(value.server_now) - Date.now()
-  if (!keepDraft) { settings.value = { ...clone(value), min_route_remaining_seconds: value.min_route_remaining_seconds ?? 120, probe_concurrency: value.probe_concurrency ?? 2, renew_before_seconds: value.renew_before_seconds ?? 180, recovery: { ...defaultRecovery(), ...clone(value.recovery ?? {}) } }; settingsBaseline.value = settingsKey(value) }
+  if (!keepDraft) { settings.value = { ...clone(value), continue_timeout_seconds: value.continue_timeout_seconds ?? 7, min_route_remaining_seconds: value.min_route_remaining_seconds ?? 120, probe_concurrency: value.probe_concurrency ?? 2, renew_before_seconds: value.renew_before_seconds ?? 180, recovery: { ...defaultRecovery(), ...clone(value.recovery ?? {}) } }; settingsBaseline.value = settingsKey(value) }
 }
 function revertSelection() { if (savedSelection.value) acceptSelection(savedSelection.value, true) }
 function revertSettings() { if (savedSettings.value) acceptSettings(savedSettings.value, true) }
-const search = ref(''), groupSearch = ref(''), previewSearch = ref(''), previewFilter = ref('all'), page = ref(1)
+const previewSearch = ref(''), previewFilter = ref('all'), page = ref(1)
 const matches = (id: number, name: string, query: string) => `${id} ${name}`.toLowerCase().includes(query.trim().toLowerCase())
-const filteredAccounts = computed(() => options.value.accounts.filter(a => matches(a.id, a.name, search.value)))
-const candidatePage = ref(1), candidatePageSize = ref(20)
-const pagedCandidates = computed(() => filteredAccounts.value.slice((candidatePage.value-1)*candidatePageSize.value, candidatePage.value*candidatePageSize.value))
-watch([search, candidatePageSize], () => { candidatePage.value = 1 })
-watch(() => filteredAccounts.value.length, count => { candidatePage.value = Math.min(candidatePage.value, Math.max(1, Math.ceil(count/candidatePageSize.value))) })
-const filteredGroups = computed(() => options.value.groups.filter(g => matches(g.id, g.name, groupSearch.value)))
-function inSelectedGroup(a: BorrowSourceOption) { return a.group_ids.some(id => selection.value.group_ids.includes(id)) }
-const preview = computed(() => options.value.accounts.filter(a => selection.value.account_ids.includes(a.id) || inSelectedGroup(a)))
+const preview = computed(() => options.value.accounts.filter(a => includedInScope(a, selection.value)))
 function eligible(a: BorrowSourceOption) { return !a.is_target && a.request_eligible === true }
 const eligibleCount = computed(() => preview.value.filter(eligible).length)
 const overrideCount = computed(() => preview.value.filter(a => selection.value.model_overrides[a.id] !== undefined).length)
@@ -278,12 +259,51 @@ const pageCount = computed(() => Math.max(1, Math.ceil(visibleSources.value.leng
 const pagedSources = computed(() => visibleSources.value.slice((page.value-1)*previewPageSize.value, page.value*previewPageSize.value))
 watch([previewSearch, previewFilter, previewPageSize], () => { page.value = 1 })
 watch(pageCount, value => { page.value = Math.min(page.value, value) })
-const missingAccounts = computed(() => selection.value.account_ids.filter(id => !options.value.accounts.some(a => a.id === id)))
-const missingGroups = computed(() => selection.value.group_ids.filter(id => !options.value.groups.some(g => g.id === id)))
+const scopeUndo = ref<Pick<BorrowSelection, 'group_ids' | 'account_ids' | 'excluded_account_ids'> | null>(null)
+const scopeError = ref('')
+const scopeSnapshot = (value: BorrowSelection) => ({ group_ids: [...value.group_ids], account_ids: [...value.account_ids], excluded_account_ids: [...(value.excluded_account_ids ?? [])] })
+function applyScope(value: BorrowSelection) {
+  if (busy.value || loading.value || !selectionLoaded.value) return
+  if (!scopeWithinLimits(value)) { scopeError.value = t('ticketBorrowing.scope.limit'); return }
+  if (options.value.accounts.some(a => includedInScope(a, selection.value) && !includedInScope(a, value) && rotationDrafts.value[a.id])) { scopeError.value = t('ticketBorrowing.scope.detailDraft'); return }
+  scopeUndo.value = scopeSnapshot(selection.value)
+  selection.value = value
+  scopeError.value = ''
+}
+function undoScope() {
+  if (!scopeUndo.value) return
+  selection.value = { ...selection.value, ...scopeUndo.value }
+  scopeUndo.value = null
+  scopeError.value = ''
+}
+const scopeSummary = computed(() => {
+  const before = new Set(options.value.accounts.filter(a => savedSelection.value && includedInScope(a, savedSelection.value)).map(a => a.id))
+  const after = new Set(preview.value.map(a => a.id))
+  return { added: [...after].filter(id => !before.has(id)).length, removed: [...before].filter(id => !after.has(id)).length, total: after.size, excluded: selection.value.excluded_account_ids?.length ?? 0 }
+})
+const { selected: previewSelection, allPage: previewAllPage, somePage: previewSomePage, toggle: togglePreview } = useBorrowBatchSelection(computed(() => pagedSources.value.map(a => a.id)), computed(() => preview.value.map(a => a.id)))
+const previewSelectionCleared = ref(false)
+watch([previewSearch, previewFilter], () => { previewSelectionCleared.value = previewSelection.value.length > 0; previewSelection.value = [] }, { flush: 'sync' })
+async function removeSources(ids: number[]) {
+  if (busy.value || loading.value || !selectionLoaded.value) return
+  if (ids.some(id => rotationDrafts.value[id])) { reportError(t('ticketBorrowing.scope.detailDraft')); return }
+  const frozenIds = [...ids]
+  sourceEditor.value = 'scope'
+  busy.value = true
+  try {
+    // Group membership can change while the saved-source list is polling.
+    // Refresh options before deciding which removed accounts need exclusions.
+    const latest = await api.sourceOptions()
+    if (disposed) return
+    options.value = latest
+    busy.value = false
+    applyScope(changeSourceScope(selection.value, latest.accounts, frozenIds, false))
+    if (!scopeError.value) { previewSelection.value = []; rotationSelection.value = [] }
+  } catch (e) { failure(e) }
+  finally { busy.value = false }
+}
 function selectionOrigin(a: BorrowSourceOption) { const names = a.group_ids.filter(id => selection.value.group_ids.includes(id)).map(id => options.value.groups.find(g => g.id === id)?.name ?? `#${id}`); if (selection.value.account_ids.includes(a.id)) names.push(t('ticketBorrowing.explicitAccount')); return names.join(' · ') }
-function clearSelection() { selection.value.group_ids = []; selection.value.account_ids = [] }
-function selectMatchingAccounts() { selection.value.account_ids = [...new Set([...selection.value.account_ids, ...filteredAccounts.value.filter(a => !a.is_target).map(a => a.id)])] }
-function clearMatchingAccounts() { const ids = new Set(filteredAccounts.value.map(a => a.id)); selection.value.account_ids = selection.value.account_ids.filter(id => !ids.has(id)) }
+function clearSelection() { applyScope({ ...selection.value, group_ids: [], account_ids: [], excluded_account_ids: [] }) }
 function resetModels() { for (const a of preview.value) delete selection.value.model_overrides[a.id] }
 const sourceIndex = computed(() => new Map(sources.value.map(s => [s.account_id, s])))
 function sourceBinding(id: number) { return sourceIndex.value.get(id) }
@@ -336,14 +356,20 @@ async function action(fn: () => Promise<unknown>, message = 'saved') {
   finally { busy.value = false }
 }
 async function saveSelection() {
+  if (!scopeWithinLimits(selection.value)) { scopeError.value = t('ticketBorrowing.scope.limit'); return }
   if (!selectionLoaded.value || !selectionDirty.value || selectionConflict.value || !selection.value.default_model.trim()) return
   await action(async () => {
-    const value = { ...clone(selection.value), default_model: selection.value.default_model.trim(), group_ids: [...new Set(selection.value.group_ids)], account_ids: [...new Set(selection.value.account_ids)], model_overrides: Object.fromEntries(Object.entries(selection.value.model_overrides).map(([id,model]) => [id, model.trim()]).filter(([,model]) => model)) }
+    const value = { ...clone(selection.value), default_model: selection.value.default_model.trim(), group_ids: [...new Set(selection.value.group_ids)], account_ids: [...new Set(selection.value.account_ids)], excluded_account_ids: [...new Set(selection.value.excluded_account_ids ?? [])], model_overrides: Object.fromEntries(Object.entries(selection.value.model_overrides).map(([id,model]) => [id, model.trim()]).filter(([,model]) => model)) }
     acceptSelection(await api.saveSelection(value), true)
   })
 }
 async function restore() { if (window.confirm(t('ticketBorrowing.restoreConfirm'))) await action(() => api.restoreSources(), 'restored') }
 async function saveSettings() {
+  const p = settings.value.replenishment ?? defaultBorrowReplenishment()
+  const inRange = (value: number, min: number, max: number) => Number.isInteger(value) && value >= min && value <= max
+  if (!inRange(p.inventory, 1, 4) || !inRange(p.interval_seconds, 1, 60) || !inRange(p.hold_seconds, 1, 150) || !inRange(p.maintenance_interval_seconds ?? Math.max(30, p.interval_seconds), Math.max(10, p.interval_seconds), 300)) { reportError(t('ticketBorrowing.replenishment.invalid')); return }
+  const timeout = settings.value.continue_timeout_seconds
+  if (!Number.isInteger(timeout) || timeout == null || timeout < 1 || timeout > 45) { reportError(t('ticketBorrowing.probePolicy.continueTimeoutError')); return }
   const { probe_requests_per_minute: target, source_requests_per_minute: source } = settings.value.recovery
   const { probe_concurrency: concurrency, renew_before_seconds: renew } = settings.value
   if (!Number.isInteger(concurrency) || concurrency == null || concurrency < 1 || concurrency > 32 || !Number.isInteger(renew) || renew == null || renew < 0 || renew > 240) { reportError(t('ticketBorrowing.reasons.borrow_probe_policy_invalid')); return }
@@ -379,7 +405,7 @@ async function loadEvents(older: boolean) {
 const rotationSources = computed(() => sources.value.filter(s => s.account_id > 0 && s.use_proxy_pool && s.unavailable_reason !== 'source_is_target'))
 watch(rotationSources, rows => {
  rotationDrafts.value = Object.fromEntries(Object.entries(rotationDrafts.value).filter(([id]) => rows.some(s => s.account_id === Number(id))))
- rotationSelection.value = rotationSelection.value.filter(id => rows.some(s => s.account_id === id))
+ rotationSelection.value = rotationSelection.value.filter(id => sources.value.some(s => s.account_id === id))
 }, {immediate: true})
 const rotationIndex = computed(() => new Map(rotations.value.map(r => [r.account_id, r])))
 function rotationState(id: number) { return rotationIndex.value.get(id) }
@@ -421,7 +447,7 @@ function openBatchRotation() {
  // Freeze the account scope and revisions while the dialog is open. Polling must
  // not silently add accounts or rebase edits over another administrator's save.
  batchRotationAccounts.value = rotationSources.value.map(s => ({ account_id: s.account_id, name: s.name, revision: rotationState(s.account_id)?.revision ?? 0 }))
- batchRotationSelected.value = [...rotationSelection.value]
+ batchRotationSelected.value = rotationSelection.value.filter(id => rotationSources.value.some(s => s.account_id === id))
  batchRotationResults.value = null
  batchRotationError.value = ''
  error.value = ''

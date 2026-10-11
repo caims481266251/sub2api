@@ -42,7 +42,7 @@ func IsOpenAITurnAdmissionError(err error) bool {
 // unmarked: an earlier send may already have executed the request.
 func markOpenAIInitialAdmissionError(err error) error {
 	var denied *OpenAITurnAdmissionError
-	if !errors.As(err, &denied) || denied.Reason != "account_binding_changed" {
+	if !errors.As(err, &denied) || (denied.Reason != "account_binding_changed" && denied.Reason != "borrow_route_unavailable") {
 		return err
 	}
 	copy := *denied
@@ -361,6 +361,9 @@ func (s *OpenAIGatewayService) admitOpenAITurnWithGroup(
 		return nil, err
 	}
 	// 会话中途被收窄了分组内的可用模型、或后续 turn 换成了不允许的模型时，要求客户端重连重新选号。
+	if !borrowHTTPContinuationAllowsAccount(ctx, latest.ID) {
+		return nil, denyOpenAITurn("borrow_continuation_target")
+	}
 	if enforceGroup && !latest.IsModelAllowedInGroup(&groupID, outboundModel) {
 		return nil, denyOpenAITurn("model_not_allowed_in_group")
 	}
@@ -369,7 +372,7 @@ func (s *OpenAIGatewayService) admitOpenAITurnWithGroup(
 	}
 	if s.borrowRoutes != nil {
 		if err := s.borrowRoutes.Check(ctx, latest.ID, outboundModel, "http"); err != nil {
-			return nil, denyOpenAITurn("borrow_route_unavailable")
+			return nil, &OpenAITurnAdmissionError{Reason: "borrow_route_unavailable", cause: err}
 		}
 	}
 	if openAITurnRouteFingerprint(latest) != openAITurnRouteFingerprint(selected) {

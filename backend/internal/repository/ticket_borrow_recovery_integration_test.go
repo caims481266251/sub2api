@@ -129,6 +129,7 @@ func TestTicketBorrowBudgetIndependentOfLegacySwitchAndCrashDoesNotExtendWait(t 
 	cfg.Recovery.Enabled = false
 	cfg.Recovery.ProbeRequestsPerMinute = 2
 	require.NoError(t, r.SaveSettings(ctx, cfg))
+	renewBorrowTestJob(t, r, q)
 	for range 2 {
 		request := recoveryRequest(t, r, q)
 		require.NoError(t, r.EndTargetRequest(ctx, request, 200, "eof"))
@@ -209,4 +210,16 @@ func TestTicketBorrowRecoveryFiveBusinessRequestsDoNotSerializeOrLoseActivity(t 
 	got, err := r.Route(ctx, id, "identity", route.ID)
 	require.NoError(t, err)
 	require.WithinDuration(t, route.ExpiresAt, got.ExpiresAt, time.Millisecond)
+}
+
+// Configuration edits fence the old batch. Tests focused on budgets/policy
+// start a fresh permit after draining, rather than silently rebasing a lease.
+func renewBorrowTestJob(t *testing.T, r service.TicketBorrowRepository, q service.BorrowRequest) {
+	t.Helper()
+	ctx := t.Context()
+	require.NoError(t, r.FinishJob(ctx, "target", q.TargetID, q.BatchID, "configuration_changed", 0))
+	require.NoError(t, r.RefreshTarget(ctx, q.TargetID))
+	ok, err := r.AcquireJob(service.WithBorrowAcquisition(ctx, service.BorrowAcquisition{TargetID: q.TargetID, Revision: q.Revision, Identity: q.Identity}), "target", q.TargetID, q.BatchID)
+	require.NoError(t, err)
+	require.True(t, ok)
 }

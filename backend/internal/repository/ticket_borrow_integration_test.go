@@ -165,13 +165,8 @@ func TestTicketBorrowSessionsReplacementSourceDeleteAndFreshRepository(t *testin
 	replacement.ID = uuid.NewString()
 	replacement.CookieHash = uuid.NewString()
 	replacement.ExpiresAt = now.Add(4 * time.Minute)
-	// Further publication is rejected while a route is outside the renewal window.
-	// Seed a historical overlapping route to retain coverage of old sessions
-	// created before that policy was introduced.
-	require.ErrorIs(t, r.Publish(ctx, &replacement, "worker"), service.ErrBorrowConflict)
-	_, e = integrationDB.ExecContext(ctx, `INSERT INTO ticket_borrow_routes(id,target_id,target_revision,source_id,identity_hash,cookie_hash,gateway,secret,expires_at)
- SELECT $1,target_id,target_revision,source_id,identity_hash,$2,gateway,secret,$3 FROM ticket_borrow_routes WHERE id=$4`, replacement.ID, replacement.CookieHash, replacement.ExpiresAt, old.ID)
-	require.NoError(t, e)
+	// A completed valid candidate is publishable independently of new-batch readiness.
+	require.NoError(t, r.Publish(ctx, &replacement, "worker"))
 	bound, e = r.BindSession(ctx, id, "conversation", replacement.ID)
 	require.NoError(t, e)
 	require.Equal(t, old.ID, bound)

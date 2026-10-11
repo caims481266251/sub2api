@@ -117,6 +117,12 @@ func (s *TicketBorrowService) SaveProbePolicies(ctx context.Context, in BorrowPr
 }
 
 func borrowTargetNeedsProbe(t BorrowTarget) bool {
+	if t.BorrowInventory != nil {
+		return t.BlockedReason == "" && !t.NextAt.After(t.BorrowInventory.ServerNow)
+	}
+	if t.Replenishment != nil && !t.Replenishment.NextAt.After(t.ServerNow) {
+		return true
+	}
 	return !t.Ready || t.ExpiresAt == nil || t.ExpiresAt.Sub(t.ServerNow) <= time.Duration(t.ProbePolicy.effective().RenewBeforeSeconds)*time.Second
 }
 

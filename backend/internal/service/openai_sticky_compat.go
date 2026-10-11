@@ -152,6 +152,9 @@ func (s *OpenAIGatewayService) getStickySessionAccountID(ctx context.Context, gr
 }
 
 func (s *OpenAIGatewayService) setStickySessionAccountID(ctx context.Context, groupID *int64, sessionHash string, accountID int64, ttl time.Duration) error {
+	if borrowPreferredPass(ctx) {
+		return nil // Commit only an acquired preferred result; normal scheduling keeps its binding rules.
+	}
 	if s == nil || s.cache == nil || accountID <= 0 {
 		return nil
 	}
@@ -200,6 +203,9 @@ func (s *OpenAIGatewayService) refreshStickySessionTTL(ctx context.Context, grou
 }
 
 func (s *OpenAIGatewayService) deleteStickySessionAccountID(ctx context.Context, groupID *int64, sessionHash string) error {
+	if borrowPreferredPass(ctx) {
+		return nil // A speculative preference pass must not erase existing affinity.
+	}
 	if s == nil || s.cache == nil {
 		return nil
 	}

@@ -105,7 +105,7 @@ func TestTicketBorrowMinimumRemainingBoundRouteAndCookieDeadline(t *testing.T) {
 	require.Equal(t, old.ID, bound)
 	_, err = r.Route(ctx, id, "identity", bound)
 	require.ErrorIs(t, err, service.ErrBorrowUnavailable, "continuations cannot silently switch routes")
-	require.ErrorIs(t, r.CheckAcquisition(ctx, service.BorrowAcquisition{TargetID: id, Revision: q.Revision, Lease: q.BatchID, Identity: "identity"}), service.ErrBorrowRouteReady)
+	require.NoError(t, r.CheckAcquisition(ctx, service.BorrowAcquisition{TargetID: id, Revision: q.Revision, Lease: q.BatchID, Identity: "identity"}), "live batch is separate from new-batch admission")
 }
 
 func TestTicketBorrowMinimumRemainingMigration(t *testing.T) {

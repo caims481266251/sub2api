@@ -22,6 +22,7 @@ func TestTicketBorrowSourceBudgetSharedAcrossSourcesAndIndependentOfTargets(t *t
 	cfg.Recovery.SourceRequestsPerMinute = 6
 	cfg.Recovery.ProbeRequestsPerMinute = 2
 	require.NoError(t, r.SaveSettings(ctx, cfg))
+	renewBorrowTestJob(t, r, q)
 	ids := []int64{}
 	for range 3 {
 		s := &service.BorrowSource{Name: "budget", Model: "gpt-6-luna", Enabled: true, SubjectHash: uuid.NewString(), Secret: service.BorrowSourceSecret{Credentials: map[string]any{"chatgpt_account_id": uuid.NewString()}}}
@@ -83,6 +84,7 @@ func TestTicketBorrowSourceBudgetSharedAcrossSourcesAndIndependentOfTargets(t *t
 	r = NewTicketBorrowRepository(integrationDB, r.(*ticketBorrowRepository).encryptor)
 	status.Recovery.SourceRequestsPerMinute = 7
 	require.NoError(t, r.SaveSettings(ctx, status))
+	renewBorrowTestJob(t, r, q)
 	require.NoError(t, r.ReserveSourceAttempt(ctx, ids[0], "source-worker"))
 	require.ErrorIs(t, r.ReserveSourceAttempt(ctx, ids[1], "source-worker"), service.ErrBorrowRequestBudget)
 	q.ID = uuid.NewString()
@@ -96,6 +98,7 @@ func TestTicketBorrowBudgetLoweringUsesCorrectReleaseAndPreservesUpstreamWait(t 
 	require.NoError(t, err)
 	cfg.Recovery.ProbeRequestsPerMinute = 6
 	require.NoError(t, r.SaveSettings(ctx, cfg))
+	renewBorrowTestJob(t, r, q)
 	for range 3 {
 		request := recoveryRequest(t, r, q)
 		require.NoError(t, r.EndTargetRequest(ctx, request, 200, "eof"))
@@ -108,6 +111,7 @@ func TestTicketBorrowBudgetLoweringUsesCorrectReleaseAndPreservesUpstreamWait(t 
 	require.NoError(t, err)
 	cfg.Recovery.ProbeRequestsPerMinute = 2
 	require.NoError(t, r.SaveSettings(ctx, cfg))
+	renewBorrowTestJob(t, r, q)
 	q.ID = uuid.NewString()
 	err = r.BeginTargetRequest(ctx, q)
 	var wait *service.BorrowBudgetWaitError
@@ -126,7 +130,10 @@ func TestTicketBorrowBudgetLoweringUsesCorrectReleaseAndPreservesUpstreamWait(t 
 	require.Equal(t, before.UpstreamWaitUntil, after.UpstreamWaitUntil)
 	require.Nil(t, after.BudgetWaitUntil)
 	q.ID = uuid.NewString()
-	require.ErrorIs(t, r.BeginTargetRequest(ctx, q), service.ErrBorrowRecoveryWaiting)
+	require.ErrorIs(t, r.BeginTargetRequest(ctx, q), service.ErrBorrowUnavailable, "settings change invalidates the old batch")
+	ok, e := r.AcquireJob(ctx, "target", id, "new-during-cooldown")
+	require.NoError(t, e)
+	require.False(t, ok)
 	// A stale settings save is rejected atomically and cannot clear that limit.
 	require.ErrorIs(t, r.SaveSettings(ctx, cfg), service.ErrBorrowConflict)
 	after, err = r.Target(context.Background(), id)

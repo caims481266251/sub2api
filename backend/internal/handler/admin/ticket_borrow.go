@@ -30,7 +30,7 @@ func borrowError(c *gin.Context, err error) {
 		return
 	}
 	switch err.Error() {
-	case "borrow_probe_policy_invalid", "borrow_selection_invalid", "borrow_restore_multiple_proxies", "borrow_source_name_invalid", "borrow_source_model_invalid", "borrow_source_credentials_required", "borrow_proxy_limit", "borrow_proxy_invalid", "borrow_settings_invalid", "borrow_target_unsupported", "borrow_legacy_config_conflict", "borrow_source_is_normal_account":
+	case "borrow_shadow_unsupported", "borrow_probe_policy_invalid", "borrow_selection_invalid", "borrow_restore_multiple_proxies", "borrow_source_name_invalid", "borrow_source_model_invalid", "borrow_source_credentials_required", "borrow_proxy_limit", "borrow_proxy_invalid", "borrow_settings_invalid", "borrow_target_unsupported", "borrow_legacy_config_conflict", "borrow_source_is_normal_account":
 		response.BadRequest(c, err.Error())
 	default:
 		response.ErrorWithDetails(c, 503, "Borrowing operation failed; check configuration and credential encryption", "borrow_operation_failed", nil)

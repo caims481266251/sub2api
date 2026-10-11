@@ -39,7 +39,7 @@ func (s *TicketBorrowService) RestoreSources(ctx context.Context) ([]int64, erro
 func normalizeBorrowSelection(v *BorrowSelection) error {
 	// Source model requests always use a persisted borrowing exit.
 	v.UseProxyPool, v.RotateIdentity = true, false
-	if v.Revision <= 0 || len(v.GroupIDs) > 1000 || len(v.AccountIDs) > 1000 || len(v.ModelOverrides) > 1000 {
+	if v.Revision <= 0 || len(v.GroupIDs) > 1000 || len(v.AccountIDs) > 1000 || len(v.ExcludedAccountIDs) > 1000 || len(v.ModelOverrides) > 1000 {
 		return errors.New("borrow_selection_invalid")
 	}
 	validModel := func(model string) bool {
@@ -69,6 +69,24 @@ func normalizeBorrowSelection(v *BorrowSelection) error {
 	}
 	if v.AccountIDs, err = dedupe(v.AccountIDs); err != nil {
 		return err
+	}
+	// A nil exclusion list means an older client omitted the field. Preserve it
+	// through normalization so the repository can retain the saved exclusions.
+	if v.ExcludedAccountIDs != nil {
+		if v.ExcludedAccountIDs, err = dedupe(v.ExcludedAccountIDs); err != nil {
+			return err
+		}
+		excluded := make(map[int64]bool, len(v.ExcludedAccountIDs))
+		for _, id := range v.ExcludedAccountIDs {
+			excluded[id] = true
+		}
+		accounts := make([]int64, 0, len(v.AccountIDs))
+		for _, id := range v.AccountIDs {
+			if !excluded[id] {
+				accounts = append(accounts, id)
+			}
+		}
+		v.AccountIDs = accounts
 	}
 	if v.ModelOverrides == nil {
 		v.ModelOverrides = map[int64]string{}

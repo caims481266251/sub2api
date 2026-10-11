@@ -142,10 +142,13 @@ func (r *ticketBorrowRepository) RefreshSource(ctx context.Context, id, revision
 }
 func (r *ticketBorrowRepository) Settings(ctx context.Context) (service.BorrowSettings, error) {
 	var s service.BorrowSettings
-	var recovery []byte
-	err := r.db.QueryRowContext(ctx, `SELECT revision,running,ttl_seconds,prewarm_seconds,recovery,min_route_remaining_seconds,probe_concurrency,renew_before_seconds FROM ticket_borrow_settings WHERE id=1`).Scan(&s.Revision, &s.Running, &s.TTLSeconds, &s.PrewarmSeconds, &recovery, &s.MinRouteRemainingSeconds, &s.ProbeConcurrency, &s.RenewBeforeSeconds)
+	var recovery, replenishment []byte
+	err := r.db.QueryRowContext(ctx, `SELECT revision,running,ttl_seconds,prewarm_seconds,recovery,min_route_remaining_seconds,probe_concurrency,renew_before_seconds,continue_timeout_seconds,replenishment FROM ticket_borrow_settings WHERE id=1`).Scan(&s.Revision, &s.Running, &s.TTLSeconds, &s.PrewarmSeconds, &recovery, &s.MinRouteRemainingSeconds, &s.ProbeConcurrency, &s.RenewBeforeSeconds, &s.ContinueTimeoutSeconds, &replenishment)
 	if err == nil {
 		err = json.Unmarshal(recovery, &s.Recovery)
+		if err == nil {
+			err = json.Unmarshal(replenishment, &s.Replenishment)
+		}
 		service.NormalizeBorrowSettings(&s)
 		if err == nil {
 			s.SourceBudget, s.ServerNow, err = r.sourceBudgetStatus(ctx, s.Recovery.SourceRequestsPerMinute)
@@ -155,6 +158,18 @@ func (r *ticketBorrowRepository) Settings(ctx context.Context) (service.BorrowSe
 }
 func (r *ticketBorrowRepository) SaveSettings(ctx context.Context, s service.BorrowSettings) error {
 	service.NormalizeBorrowSettings(&s)
+	if err := s.Replenishment.Validate(); err != nil {
+		return err
+	}
+	var replenishment any
+	if s.Replenishment != nil {
+		policy := *s.Replenishment
+		raw, err := json.Marshal(policy)
+		if err != nil {
+			return err
+		}
+		replenishment = string(raw)
+	}
 	var recovery any
 	if s.Recovery != nil {
 		raw, err := json.Marshal(s.Recovery)
@@ -173,7 +188,29 @@ func (r *ticketBorrowRepository) SaveSettings(ctx context.Context, s service.Bor
 	if _, err = tx.ExecContext(ctx, `SELECT account_id FROM ticket_borrow_targets ORDER BY account_id FOR UPDATE`); err != nil {
 		return err
 	}
-	res, err := tx.ExecContext(ctx, `UPDATE ticket_borrow_settings SET running=$1,ttl_seconds=$2,prewarm_seconds=$3,revision=revision+1,recovery=COALESCE($5::jsonb,recovery),min_route_remaining_seconds=COALESCE($6,min_route_remaining_seconds),probe_concurrency=COALESCE($7,probe_concurrency),renew_before_seconds=COALESCE($8,renew_before_seconds) WHERE id=1 AND revision=$4`, s.Running, s.TTLSeconds, s.PrewarmSeconds, s.Revision, recovery, s.MinRouteRemainingSeconds, s.ProbeConcurrency, s.RenewBeforeSeconds)
+	if s.Replenishment != nil {
+		var saved []byte
+		if err = tx.QueryRowContext(ctx, `SELECT replenishment FROM ticket_borrow_settings WHERE id=1 FOR UPDATE`).Scan(&saved); err != nil {
+			return err
+		}
+		var previous service.BorrowReplenishmentSettings
+		if err = json.Unmarshal(saved, &previous); err != nil {
+			return err
+		}
+		if s.Replenishment.MaintenanceIntervalSeconds == nil {
+			seconds := previous.MaintenanceSeconds()
+			s.Replenishment.MaintenanceIntervalSeconds = &seconds
+		}
+		if err = s.Replenishment.Validate(); err != nil {
+			return err
+		}
+		raw, e := json.Marshal(s.Replenishment)
+		if e != nil {
+			return e
+		}
+		replenishment = string(raw)
+	}
+	res, err := tx.ExecContext(ctx, `UPDATE ticket_borrow_settings SET running=$1,ttl_seconds=$2,prewarm_seconds=$3,revision=revision+1,recovery=COALESCE($5::jsonb,recovery),min_route_remaining_seconds=COALESCE($6,min_route_remaining_seconds),probe_concurrency=COALESCE($7,probe_concurrency),renew_before_seconds=COALESCE($8,renew_before_seconds),continue_timeout_seconds=COALESCE($9,continue_timeout_seconds),replenishment=COALESCE($10::jsonb,replenishment) WHERE id=1 AND revision=$4`, s.Running, s.TTLSeconds, s.PrewarmSeconds, s.Revision, recovery, s.MinRouteRemainingSeconds, s.ProbeConcurrency, s.RenewBeforeSeconds, s.ContinueTimeoutSeconds, replenishment)
 	if err != nil {
 		return err
 	}
@@ -181,10 +218,18 @@ func (r *ticketBorrowRepository) SaveSettings(ctx context.Context, s service.Bor
 	if n != 1 {
 		return service.ErrBorrowConflict
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE ticket_borrow_targets SET budget_wait_until=NULL WHERE budget_wait_until IS NOT NULL`); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE ticket_borrow_targets SET budget_wait_until=NULL,refresh_generation=refresh_generation+1,next_probe_at=clock_timestamp(),next_attempt_at=clock_timestamp()`); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE ticket_borrow_sources SET next_attempt_at=clock_timestamp() WHERE last_reason='source_request_budget'`); err != nil {
+		return err
+	}
+	// Shrinking inventory retires excess rows immediately, without revoking streams or bindings.
+	if _, err = tx.ExecContext(ctx, `WITH ranked AS (
+ SELECT r.id,row_number() OVER(PARTITION BY r.target_id,r.target_revision,r.identity_hash ORDER BY LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at)) DESC,r.checked_at ASC,r.id ASC) n
+ FROM ticket_borrow_routes r LEFT JOIN ticket_borrow_cookie_deadlines d ON d.cookie_hash=r.cookie_hash
+ WHERE r.inventory_eligible AND NOT r.validation_only AND r.revoked_at IS NULL)
+ UPDATE ticket_borrow_routes r SET inventory_eligible=false FROM ranked,ticket_borrow_settings cfg WHERE cfg.id=1 AND (cfg.replenishment->>'enabled')::boolean AND r.id=ranked.id AND ranked.n>(cfg.replenishment->>'inventory')::int`); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -306,6 +351,8 @@ func (r *ticketBorrowRepository) AcquireJob(ctx context.Context, kind string, id
 	}
 	defer tx.Rollback()
 	extra := ""
+	var inventory *service.BorrowInventory
+	var acquisition service.BorrowAcquisition
 	if kind == "target" {
 		// Lock/reap before eligibility so orphaned requests conservatively extend silence.
 		if _, err = tx.ExecContext(ctx, `SELECT account_id FROM ticket_borrow_targets WHERE account_id=$1 FOR UPDATE`, id); err != nil {
@@ -316,11 +363,19 @@ func (r *ticketBorrowRepository) AcquireJob(ctx context.Context, kind string, id
 		}
 		a, _ := service.BorrowAcquisitionFromContext(ctx)
 		a.TargetID, a.Lease = id, ""
+		acquisition = a
 		if err = checkBorrowAcquisition(ctx, tx, a, true); err != nil {
 			if errors.Is(err, service.ErrBorrowRouteReady) || errors.Is(err, service.ErrBorrowRecoveryWaiting) || errors.Is(err, service.ErrBorrowRequestBudget) || errors.Is(err, service.ErrBorrowPaused) {
 				return false, nil
 			}
 			return false, err
+		}
+		inventory, err = borrowInventory(ctx, tx, id, a.Identity)
+		if err != nil {
+			return false, err
+		}
+		if inventory.BlockedReason != "" || inventory.NextAt.After(inventory.ServerNow) {
+			return false, nil
 		}
 		extra = ",phase='acquiring',refresh_requested=false,cooldown_seconds=0"
 	}
@@ -329,13 +384,26 @@ func (r *ticketBorrowRepository) AcquireJob(ctx context.Context, kind string, id
 		suffix += " AND COALESCE(upstream_wait_until<=clock_timestamp(),true) AND COALESCE(budget_wait_until<=clock_timestamp(),true) AND NOT EXISTS(SELECT 1 FROM ticket_borrow_requests x WHERE x.target_id=$1 AND x.kind='probe' AND x.finished_at IS NULL AND x.lease_until>clock_timestamp())"
 	}
 	if kind == "source" {
-		suffix += " AND deleted_at IS NULL AND NOT EXISTS(SELECT 1 FROM ticket_borrow_rotation_accounts x WHERE x.account_id=ticket_borrow_sources.account_id AND x.phase='draining' AND x.active_job IS NOT NULL)"
+		suffix += " AND next_attempt_at<=NOW() AND deleted_at IS NULL AND NOT EXISTS(SELECT 1 FROM ticket_borrow_rotation_accounts x WHERE x.account_id=ticket_borrow_sources.account_id AND x.phase='draining' AND x.active_job IS NOT NULL)"
 	}
-	res, err := tx.ExecContext(ctx, `UPDATE `+table+` SET lease_token=$2,lease_until=NOW()+INTERVAL '180 seconds',cursor=cursor+1`+extra+` WHERE `+key+`=$1 AND enabled AND next_attempt_at<=NOW() AND (lease_until IS NULL OR lease_until<=NOW())`+suffix, id, token)
+	res, err := tx.ExecContext(ctx, `UPDATE `+table+` SET lease_token=$2,lease_until=NOW()+INTERVAL '180 seconds',cursor=cursor+1`+extra+` WHERE `+key+`=$1 AND enabled AND (lease_until IS NULL OR lease_until<=NOW())`+suffix, id, token)
 	if err != nil {
 		return false, err
 	}
 	n, _ := res.RowsAffected()
+	if n == 1 && kind == "target" {
+		_, err = tx.ExecContext(ctx, `UPDATE ticket_borrow_targets t SET last_batch_started_at=clock_timestamp(),last_inventory_state=$3,
+ lease_generation=refresh_generation,processed_generation=refresh_generation,lease_settings_revision=cfg.revision,lease_policy_revision=t.probe_policy_revision,
+ lease_identity=$4,lease_account_signature=`+borrowAccountSignature+`,next_probe_at=clock_timestamp(),next_attempt_at=clock_timestamp()
+ FROM ticket_borrow_settings cfg,accounts a WHERE cfg.id=1 AND a.id=t.account_id AND t.account_id=$1 AND t.lease_token=$2`, id, token, inventory.State, acquisition.Identity)
+		if err != nil {
+			return false, err
+		}
+		_, err = tx.ExecContext(ctx, `UPDATE ticket_borrow_replenishment w SET attempts=w.attempts+1,next_at=clock_timestamp()+(active.replenishment->>'interval_seconds')::int*INTERVAL '1 second' FROM ticket_borrow_active_replenishment active WHERE w.target_id=$1 AND active.target_id=w.target_id`, id)
+		if err != nil {
+			return false, err
+		}
+	}
 	if err = tx.Commit(); err != nil {
 		return false, err
 	}
@@ -346,15 +414,43 @@ func (r *ticketBorrowRepository) FinishJob(ctx context.Context, kind string, id 
 	if err != nil {
 		return err
 	}
-	phase := ""
 	if kind == "target" {
-		phase = ",phase=CASE WHEN upstream_wait_until>clock_timestamp() THEN 'upstream_waiting' WHEN budget_wait_until>clock_timestamp() THEN 'budget_waiting' ELSE 'waiting' END"
+		tx, e := r.db.BeginTx(ctx, nil)
+		if e != nil {
+			return e
+		}
+		defer tx.Rollback()
+		var identity string
+		e = tx.QueryRowContext(ctx, `SELECT lease_identity FROM ticket_borrow_targets WHERE account_id=$1 AND lease_token=$2 FOR UPDATE`, id, token).Scan(&identity)
+		if e == sql.ErrNoRows {
+			return nil
+		}
+		if e != nil {
+			return e
+		}
+		_, e = tx.ExecContext(ctx, `UPDATE ticket_borrow_targets SET lease_until=NULL,lease_token='',last_reason=$3,
+ processed_generation=GREATEST(processed_generation,lease_generation),
+ next_attempt_at=CASE WHEN refresh_generation>lease_generation THEN clock_timestamp() ELSE clock_timestamp()+$4*INTERVAL '1 millisecond' END,
+ phase=CASE WHEN upstream_wait_until>clock_timestamp() THEN 'upstream_waiting' WHEN budget_wait_until>clock_timestamp() THEN 'budget_waiting' ELSE 'waiting' END,updated_at=clock_timestamp()
+ WHERE account_id=$1 AND lease_token=$2`, id, token, reason, delay.Milliseconds())
+		if e != nil {
+			return e
+		}
+		inv, e := borrowInventory(ctx, tx, id, identity)
+		if e != nil {
+			return e
+		}
+		if _, e = tx.ExecContext(ctx, `UPDATE ticket_borrow_targets SET next_probe_at=$2 WHERE account_id=$1`, id, inv.NextAt); e != nil {
+			return e
+		}
+		return tx.Commit()
 	}
-	_, err = r.db.ExecContext(ctx, `UPDATE `+table+` SET lease_until=NULL,lease_token='',last_reason=$3,next_attempt_at=NOW()+$4*INTERVAL '1 millisecond',updated_at=NOW()`+phase+` WHERE `+key+`=$1 AND lease_token=$2`, id, token, reason, delay.Milliseconds())
+	_, err = r.db.ExecContext(ctx, `UPDATE `+table+` SET lease_until=NULL,lease_token='',last_reason=$3,next_attempt_at=NOW()+$4*INTERVAL '1 millisecond',updated_at=NOW() WHERE `+key+`=$1 AND lease_token=$2`, id, token, reason, delay.Milliseconds())
 	return err
 }
+
 func (r *ticketBorrowRepository) RefreshTarget(ctx context.Context, id int64) error {
-	_, err := r.db.ExecContext(ctx, `UPDATE ticket_borrow_targets SET next_attempt_at=NOW(),refresh_requested=true WHERE account_id=$1 AND enabled`, id)
+	_, err := r.db.ExecContext(ctx, `UPDATE ticket_borrow_targets SET next_attempt_at=NOW(),next_probe_at=NOW(),refresh_requested=true,refresh_generation=refresh_generation+1 WHERE account_id=$1 AND enabled`, id)
 	return err
 }
 func (r *ticketBorrowRepository) Now(ctx context.Context) (time.Time, error) {
@@ -364,10 +460,24 @@ func (r *ticketBorrowRepository) Now(ctx context.Context) (time.Time, error) {
 }
 func (r *ticketBorrowRepository) ObserveCookie(ctx context.Context, hash string, ttl time.Duration) (time.Time, error) {
 	var expires time.Time
-	err := r.db.QueryRowContext(ctx, `INSERT INTO ticket_borrow_cookie_deadlines(cookie_hash,expires_at) VALUES($1,NOW()+$2*INTERVAL '1 millisecond') ON CONFLICT(cookie_hash) DO UPDATE SET expires_at=LEAST(ticket_borrow_cookie_deadlines.expires_at,EXCLUDED.expires_at) RETURNING expires_at`, hash, ttl.Milliseconds()).Scan(&expires)
+	err := r.db.QueryRowContext(ctx, `INSERT INTO ticket_borrow_cookie_deadlines(cookie_hash,expires_at) VALUES($1,clock_timestamp()+$2*INTERVAL '1 millisecond')
+ ON CONFLICT(cookie_hash) DO UPDATE SET expires_at=EXCLUDED.expires_at
+ WHERE EXCLUDED.expires_at<ticket_borrow_cookie_deadlines.expires_at RETURNING expires_at`, hash, ttl.Milliseconds()).Scan(&expires)
+	if err == sql.ErrNoRows {
+		err = r.db.QueryRowContext(ctx, `SELECT expires_at FROM ticket_borrow_cookie_deadlines WHERE cookie_hash=$1`, hash).Scan(&expires)
+		return expires, err
+	}
+	if err == nil {
+		_, err = r.db.ExecContext(ctx, `UPDATE ticket_borrow_targets SET refresh_generation=refresh_generation+1,next_probe_at=clock_timestamp(),next_attempt_at=clock_timestamp()
+ WHERE account_id IN(SELECT target_id FROM ticket_borrow_routes WHERE cookie_hash=$1 AND revoked_at IS NULL AND inventory_eligible AND NOT validation_only)`, hash)
+	}
 	return expires, err
 }
+
 func (r *ticketBorrowRepository) Publish(ctx context.Context, route *service.BorrowRoute, lease string) error {
+	if route.Shadow {
+		return errors.New("borrow_shadow_unsupported")
+	}
 	secret, err := r.seal(route.Secret)
 	if err != nil {
 		return err
@@ -377,51 +487,81 @@ func (r *ticketBorrowRepository) Publish(ctx context.Context, route *service.Bor
 		return err
 	}
 	defer tx.Rollback()
+	if err = lockBorrowRotation(ctx, tx); err != nil {
+		return err
+	}
 	if _, err = tx.ExecContext(ctx, `SELECT account_id FROM ticket_borrow_targets WHERE account_id=$1 FOR UPDATE`, route.TargetID); err != nil {
+		return err
+	}
+	policy, err := borrowReplenishmentPolicy(ctx, tx, route.TargetID)
+	if err != nil {
 		return err
 	}
 	if err = checkBorrowAcquisition(ctx, tx, service.BorrowAcquisition{TargetID: route.TargetID, Revision: route.TargetRevision, Lease: lease, Identity: route.IdentityHash}, false); err != nil {
 		return service.ErrBorrowConflict
 	}
-	res, err := tx.ExecContext(ctx, `INSERT INTO ticket_borrow_routes(id,target_id,target_revision,source_id,identity_hash,cookie_hash,gateway,secret,expires_at)
- SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9 WHERE $9>clock_timestamp()
+	var sufficient bool
+	if err = tx.QueryRowContext(ctx, `SELECT LEAST($1::timestamptz,COALESCE((SELECT expires_at FROM ticket_borrow_cookie_deadlines WHERE cookie_hash=$2),$1::timestamptz))>clock_timestamp()+min_route_remaining_seconds*INTERVAL '1 second' FROM ticket_borrow_settings WHERE id=1`, route.ExpiresAt, route.CookieHash).Scan(&sufficient); err != nil {
+		return err
+	}
+	if !sufficient {
+		return service.ErrBorrowCandidateExpiry
+	}
+	res, err := tx.ExecContext(ctx, `INSERT INTO ticket_borrow_routes(id,target_id,target_revision,source_id,identity_hash,cookie_hash,gateway,secret,expires_at,inventory_eligible,validation_only,checked_at)
+ SELECT $1,$2,$3,$4,$5,$6::varchar,$7,$8,$9::timestamptz,true,false,clock_timestamp()
+ WHERE LEAST($9,COALESCE((SELECT expires_at FROM ticket_borrow_cookie_deadlines WHERE cookie_hash=$6),$9))>clock_timestamp()+(SELECT min_route_remaining_seconds FROM ticket_borrow_settings WHERE id=1)*INTERVAL '1 second'
  ON CONFLICT(target_id,target_revision,identity_hash,cookie_hash) DO NOTHING`, route.ID, route.TargetID, route.TargetRevision, route.SourceID, route.IdentityHash, route.CookieHash, route.Gateway, secret, route.ExpiresAt)
 	if err != nil {
 		return err
 	}
 	n, _ := res.RowsAffected()
 	if n != 1 {
-		return service.ErrBorrowConflict
+		return service.ErrBorrowCandidateDuplicate
+	}
+	if route.CandidateID != "" {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO ticket_borrow_candidate_results(target_id,target_revision,identity_hash,cookie_hash,candidate_id,batch_id,verdict,publication,expires_at)
+ VALUES($1,$2,$3,$4,$5,$6,'healthy','target_probe_passed',$7) ON CONFLICT(target_id,target_revision,identity_hash,cookie_hash) DO NOTHING`, route.TargetID, route.TargetRevision, route.IdentityHash, route.CookieHash, route.CandidateID, lease, route.ExpiresAt); err != nil {
+			return err
+		}
+	}
+	if err = trimBorrowInventory(ctx, tx, route, policy); err != nil {
+		return err
+	}
+	if err = armBorrowReplenishment(ctx, tx, route, policy); err != nil {
+		return err
 	}
 	return tx.Commit()
 }
+
+// Eligibility checks remain read-only. Business requests reserve atomically.
 func (r *ticketBorrowRepository) Route(ctx context.Context, id int64, identity, preferred string) (*service.BorrowRoute, error) {
-	var route service.BorrowRoute
-	var secret string
-	// Read the current global floor on every lookup, including bound routes and
-	// the final transport admission check. Never revoke a route or cancel a stream
-	// just because it has crossed the admission floor.
-	err := r.db.QueryRowContext(ctx, `SELECT r.id,r.target_id,r.target_revision,r.source_id,r.identity_hash,r.cookie_hash,r.gateway,LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at)),r.secret,
- LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at))-s.min_route_remaining_seconds*INTERVAL '1 second'
- FROM ticket_borrow_routes r LEFT JOIN ticket_borrow_cookie_deadlines d ON d.cookie_hash=r.cookie_hash JOIN ticket_borrow_targets t ON t.account_id=r.target_id AND t.revision=r.target_revision
- JOIN accounts a ON a.id=t.account_id JOIN ticket_borrow_settings s ON s.id=1
- WHERE t.account_id=$1 AND t.enabled AND a.deleted_at IS NULL AND a.status='active' AND a.schedulable AND (NOT a.auto_pause_on_expired OR a.expires_at IS NULL OR a.expires_at>clock_timestamp()) AND NOT EXISTS(SELECT 1 FROM ticket_borrow_rotation_accounts x WHERE x.account_id=t.account_id AND x.phase='draining' AND x.active_job IS NOT NULL) AND r.revoked_at IS NULL AND LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at))>clock_timestamp()+s.min_route_remaining_seconds*INTERVAL '1 second' AND r.identity_hash=$2 AND ($3='' OR r.id=$3)
- ORDER BY LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at)) DESC,r.checked_at DESC LIMIT 1`, id, identity, preferred).Scan(&route.ID, &route.TargetID, &route.TargetRevision, &route.SourceID, &route.IdentityHash, &route.CookieHash, &route.Gateway, &route.ExpiresAt, &secret, &route.UsableUntil)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, service.ErrBorrowUnavailable
-	}
-	if err != nil {
-		return nil, err
-	}
-	if err = r.open(secret, &route.Secret); err != nil {
-		return nil, err
-	}
-	return &route, nil
+	return r.readRoute(ctx, r.db, id, identity, preferred)
 }
 func (r *ticketBorrowRepository) Revoke(ctx context.Context, id int64, routeID, reason string) error {
-	_, err := r.db.ExecContext(ctx, `UPDATE ticket_borrow_routes SET revoked_at=NOW(),reason=$3 WHERE target_id=$1 AND id=$2 AND revoked_at IS NULL`, id, routeID, reason)
-	return err
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `SELECT account_id FROM ticket_borrow_targets WHERE account_id=$1 FOR UPDATE`, id); err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx, `UPDATE ticket_borrow_routes SET revoked_at=clock_timestamp(),reason=$3 WHERE target_id=$1 AND id=$2 AND revoked_at IS NULL`, id, routeID, reason)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		if _, err = tx.ExecContext(ctx, `UPDATE ticket_borrow_targets SET refresh_generation=refresh_generation+1,next_probe_at=clock_timestamp(),next_attempt_at=clock_timestamp() WHERE account_id=$1`, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
+
 func (r *ticketBorrowRepository) Event(ctx context.Context, e service.BorrowEvent) error {
 	if e.Stage == "business" {
 		return nil
@@ -477,7 +617,7 @@ func (r *ticketBorrowRepository) BindSession(ctx context.Context, id int64, hash
 }
 func (r *ticketBorrowRepository) CandidateKnown(ctx context.Context, id int64, identity, cookie string) (bool, error) {
 	var known bool
-	err := r.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM ticket_borrow_rejections WHERE target_id=$1 AND identity_hash=$2 AND cookie_hash=$3 AND expires_at>NOW()) OR EXISTS(SELECT 1 FROM ticket_borrow_routes WHERE target_id=$1 AND identity_hash=$2 AND cookie_hash=$3 AND expires_at>NOW())`, id, identity, cookie).Scan(&known)
+	err := r.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM ticket_borrow_rejections WHERE target_id=$1 AND identity_hash=$2 AND cookie_hash=$3 AND expires_at>NOW()) OR EXISTS(SELECT 1 FROM ticket_borrow_routes WHERE target_id=$1 AND identity_hash=$2 AND cookie_hash=$3 AND expires_at>NOW()) OR EXISTS(SELECT 1 FROM ticket_borrow_candidate_results WHERE target_id=$1 AND identity_hash=$2 AND cookie_hash=$3 AND expires_at>NOW())`, id, identity, cookie).Scan(&known)
 	return known, err
 }
 func (r *ticketBorrowRepository) RejectCandidate(ctx context.Context, id int64, identity, cookie string, expires time.Time) error {
@@ -499,7 +639,7 @@ func (r *ticketBorrowRepository) Cleanup(ctx context.Context) error {
 		return err
 	}
 	// Keep other diagnostic history and continuation tombstones as before.
-	for _, query := range []string{`DELETE FROM ticket_borrow_rotation_jobs WHERE finished_at<clock_timestamp()-INTERVAL '7 days' AND NOT EXISTS(SELECT 1 FROM ticket_borrow_rotation_accounts x WHERE x.active_job=ticket_borrow_rotation_jobs.id)`, `DELETE FROM ticket_borrow_requests WHERE finished_at<clock_timestamp()-INTERVAL '7 days'`, `DELETE FROM ticket_borrow_routes WHERE expires_at<NOW()-INTERVAL '1 day'`, `DELETE FROM ticket_borrow_rejections WHERE expires_at<NOW()`, `DELETE FROM ticket_borrow_cookie_deadlines WHERE observed_at<NOW()-INTERVAL '30 days'`} {
+	for _, query := range []string{`DELETE FROM ticket_borrow_source_intents WHERE expires_at<=clock_timestamp()`, `DELETE FROM ticket_borrow_candidate_results WHERE expires_at<clock_timestamp()-INTERVAL '7 days'`, `DELETE FROM ticket_borrow_route_leases WHERE lease_until<=clock_timestamp()`, `DELETE FROM ticket_borrow_rotation_jobs WHERE finished_at<clock_timestamp()-INTERVAL '7 days' AND NOT EXISTS(SELECT 1 FROM ticket_borrow_rotation_accounts x WHERE x.active_job=ticket_borrow_rotation_jobs.id)`, `DELETE FROM ticket_borrow_requests WHERE finished_at<clock_timestamp()-INTERVAL '7 days'`, `DELETE FROM ticket_borrow_routes WHERE expires_at<NOW()-INTERVAL '1 day'`, `DELETE FROM ticket_borrow_rejections WHERE expires_at<NOW()`, `DELETE FROM ticket_borrow_cookie_deadlines WHERE observed_at<NOW()-INTERVAL '30 days'`} {
 		if _, err := r.db.ExecContext(ctx, query); err != nil {
 			return err
 		}

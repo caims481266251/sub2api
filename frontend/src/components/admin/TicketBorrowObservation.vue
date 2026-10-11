@@ -24,6 +24,9 @@ const seconds = (value?: number) => value === undefined ? undefined : `${(value 
 const rows = computed(() => {
   const d = props.details
   const entries: [string, string | number | undefined][] = [
+    ['replenishmentUntil', d.replenishment?.until], ['replenishmentMode', d.replenishment?.shadow === undefined ? undefined : t(d.replenishment.shadow ? 'ticketBorrowing.replenishment.shadow' : 'ticketBorrowing.replenishment.publish')],
+    ['replenishmentInventory', d.replenishment?.inventory], ['replenishmentExit', d.replenishment?.exit_reason],
+    ['sourceEnvironmentVersion', d.source_environment_version ?? d.replenishment?.environment_version],
     ['rotationJob', d.rotation?.job_id], ['rotationRole', d.rotation?.role], ['rotationTrigger', d.rotation?.trigger], ['rotationProxy', d.rotation ? d.rotation.previous_entry_id === d.rotation.entry_id ? `#${d.rotation.entry_id}` : `${d.rotation.previous_entry_id || '—'} → ${d.rotation.entry_id}` : undefined], ['rotationVersion', d.rotation?.environment_version], ['rotationChoice', d.rotation?.selection_kind ? t(`ticketBorrowing.rotation.choices.${d.rotation.selection_kind}`) : undefined],
     ['gateway', d.gateway], ['sourceModel', d.source_model],
     ['cookieAgeAtProbe', seconds(d.cookie_age_at_probe_ms)], ['remainingAtProbe', seconds(d.remaining_at_probe_ms)],

@@ -25,6 +25,7 @@ func borrowSelectionFixture(t *testing.T, r service.TicketBorrowRepository) serv
 	})
 	s.GroupIDs = []int64{}
 	s.AccountIDs = []int64{}
+	s.ExcludedAccountIDs = []int64{}
 	s.ModelOverrides = map[int64]string{}
 	return s
 }
@@ -97,6 +98,15 @@ func TestTicketBorrowNormalSelectionMembershipAndRouteSurvival(t *testing.T) {
 	require.NoError(t, r.Publish(ctx, route, "normal-route"))
 	selection, e = r.Selection(ctx)
 	require.NoError(t, e)
+	selection.ExcludedAccountIDs = []int64{a.ID}
+	require.NoError(t, r.SaveSelection(ctx, selection))
+	_, e = r.Source(ctx, source.ID)
+	require.ErrorIs(t, e, service.ErrBorrowUnavailable)
+	_, e = r.Route(ctx, targetID, "identity", route.ID)
+	require.NoError(t, e)
+	selection, e = r.Selection(ctx)
+	require.NoError(t, e)
+	selection.ExcludedAccountIDs = []int64{}
 	selection.AccountIDs = []int64{}
 	require.NoError(t, r.SaveSelection(ctx, selection))
 	_, e = r.Source(ctx, source.ID)

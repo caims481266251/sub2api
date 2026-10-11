@@ -1765,6 +1765,12 @@ func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDBBeforeProfit(ct
 	if account == nil {
 		return nil
 	}
+	if !borrowSchedulingAllowsAccount(ctx, account.ID) {
+		return nil
+	}
+	if !borrowHTTPContinuationAllowsAccount(ctx, account.ID) {
+		return nil
+	}
 	if s.borrowRoutes != nil && account.IsOpenAI() {
 		if err := s.borrowRoutes.Check(ctx, account.ID, s.openAICodexTicketOutboundModel(account, requestedModel, requireCompact), "http"); err != nil {
 			observeBorrowSelectionFailure(ctx, err)

@@ -20,13 +20,14 @@ type BorrowSourceSecret struct {
 	Fingerprint *BorrowFingerprint      `json:"fingerprint,omitempty"`
 }
 type BorrowSelection struct {
-	UseProxyPool   bool             `json:"use_proxy_pool"`
-	Revision       int64            `json:"revision"`
-	GroupIDs       []int64          `json:"group_ids"`
-	AccountIDs     []int64          `json:"account_ids"`
-	DefaultModel   string           `json:"default_model"`
-	RotateIdentity bool             `json:"rotate_identity"`
-	ModelOverrides map[int64]string `json:"model_overrides"`
+	UseProxyPool       bool             `json:"use_proxy_pool"`
+	Revision           int64            `json:"revision"`
+	ExcludedAccountIDs []int64          `json:"excluded_account_ids"`
+	GroupIDs           []int64          `json:"group_ids"`
+	AccountIDs         []int64          `json:"account_ids"`
+	DefaultModel       string           `json:"default_model"`
+	RotateIdentity     bool             `json:"rotate_identity"`
+	ModelOverrides     map[int64]string `json:"model_overrides"`
 }
 type BorrowSourceOption struct {
 	RequestEligible   bool    `json:"request_eligible"`
@@ -50,6 +51,8 @@ type BorrowSourceOptions struct {
 	RestorableCount int                  `json:"restorable_count"`
 }
 type BorrowSource struct {
+	EnvironmentVersion        int64              `json:"environment_version"`
+	RotationRevision          int64              `json:"-"`
 	CanRotate                 bool               `json:"can_rotate"`
 	RotationUnavailableReason string             `json:"rotation_unavailable_reason"`
 	LeaseUntil                *time.Time         `json:"-"`
@@ -135,17 +138,18 @@ func BorrowAcquisitionFromContext(ctx context.Context) (BorrowAcquisition, bool)
 }
 
 type BorrowRequest struct {
-	Identity    string             `json:"-"`
-	ID          string             `json:"id"`
-	TargetID    int64              `json:"target_id"`
-	Kind        string             `json:"kind"`
-	BatchID     string             `json:"batch_id"`
-	SourceID    int64              `json:"source_id"`
-	Phase       string             `json:"phase"`
-	Revision    int64              `json:"-"`
-	CandidateID string             `json:"candidate_id,omitempty"`
-	RouteID     string             `json:"route_id,omitempty"`
-	Environment *BorrowEnvironment `json:"environment,omitempty"`
+	ContinueTimeoutSeconds int                `json:"continue_timeout_seconds,omitempty"`
+	Identity               string             `json:"-"`
+	ID                     string             `json:"id"`
+	TargetID               int64              `json:"target_id"`
+	Kind                   string             `json:"kind"`
+	BatchID                string             `json:"batch_id"`
+	SourceID               int64              `json:"source_id"`
+	Phase                  string             `json:"phase"`
+	Revision               int64              `json:"-"`
+	CandidateID            string             `json:"candidate_id,omitempty"`
+	RouteID                string             `json:"route_id,omitempty"`
+	Environment            *BorrowEnvironment `json:"environment,omitempty"`
 }
 
 // BorrowEnvironment is an explicit allowlist of diagnostic fields. Raw request
@@ -162,34 +166,45 @@ type BorrowEnvironment struct {
 }
 
 type BorrowCandidateDetails struct {
-	Rotation               *BorrowRotationAudit `json:"rotation,omitempty"`
-	CandidateID            string               `json:"candidate_id"`
-	BatchID                string               `json:"batch_id"`
-	SourceAccountID        int64                `json:"source_account_id,omitempty"`
-	SourceModel            string               `json:"source_model,omitempty"`
-	SourceFormat           string               `json:"source_format,omitempty"`
-	SourceRevision         int64                `json:"source_revision,omitempty"`
-	TargetRevision         int64                `json:"target_revision,omitempty"`
-	Source                 BorrowEnvironment    `json:"source"`
-	Target                 BorrowEnvironment    `json:"target"`
-	TargetIdentityHash     string               `json:"target_identity_hash,omitempty"`
-	CookieHash             string               `json:"cookie_hash,omitempty"`
-	Gateway                string               `json:"gateway,omitempty"`
-	CookieObservedAt       *time.Time           `json:"cookie_observed_at,omitempty"`
-	ExpiresAt              *time.Time           `json:"expires_at,omitempty"`
-	CookieAgeMS            *int64               `json:"cookie_age_ms,omitempty"`
-	RemainingMS            *int64               `json:"remaining_ms,omitempty"`
-	VerificationPreparedAt *time.Time           `json:"verification_prepared_at,omitempty"`
-	CookieAgeAtProbeMS     *int64               `json:"cookie_age_at_probe_ms,omitempty"`
-	RemainingAtProbeMS     *int64               `json:"remaining_at_probe_ms,omitempty"`
-	SourceAttempts         int                  `json:"source_attempts,omitempty"`
-	ProbeRetries           int                  `json:"probe_retries,omitempty"`
-	ProbeVerdict           string               `json:"probe_verdict,omitempty"`
-	ProbeFailure           string               `json:"probe_failure,omitempty"`
-	MintStatus             int                  `json:"mint_status,omitempty"`
-	ContinueStatus         int                  `json:"continue_status,omitempty"`
+	SourceQueueMS       int64 `json:"source_queue_ms,omitempty"`
+	SourcePreparationMS int64 `json:"source_preparation_ms,omitempty"`
+	SourceNetworkMS     int64 `json:"source_network_ms,omitempty"`
+	PublicationMS       int64 `json:"publication_ms,omitempty"`
+
+	SourceSubjectHash        string                    `json:"-"`
+	Replenishment            *BorrowReplenishmentAudit `json:"replenishment,omitempty"`
+	SourceEnvironmentVersion int64                     `json:"source_environment_version,omitempty"`
+	SourceRotationRevision   int64                     `json:"source_rotation_revision,omitempty"`
+	Rotation                 *BorrowRotationAudit      `json:"rotation,omitempty"`
+	CandidateID              string                    `json:"candidate_id"`
+	BatchID                  string                    `json:"batch_id"`
+	SourceAccountID          int64                     `json:"source_account_id,omitempty"`
+	SourceModel              string                    `json:"source_model,omitempty"`
+	SourceFormat             string                    `json:"source_format,omitempty"`
+	SourceRevision           int64                     `json:"source_revision,omitempty"`
+	TargetRevision           int64                     `json:"target_revision,omitempty"`
+	Source                   BorrowEnvironment         `json:"source"`
+	Target                   BorrowEnvironment         `json:"target"`
+	TargetIdentityHash       string                    `json:"target_identity_hash,omitempty"`
+	CookieHash               string                    `json:"cookie_hash,omitempty"`
+	Gateway                  string                    `json:"gateway,omitempty"`
+	CookieObservedAt         *time.Time                `json:"cookie_observed_at,omitempty"`
+	ExpiresAt                *time.Time                `json:"expires_at,omitempty"`
+	CookieAgeMS              *int64                    `json:"cookie_age_ms,omitempty"`
+	RemainingMS              *int64                    `json:"remaining_ms,omitempty"`
+	VerificationPreparedAt   *time.Time                `json:"verification_prepared_at,omitempty"`
+	CookieAgeAtProbeMS       *int64                    `json:"cookie_age_at_probe_ms,omitempty"`
+	RemainingAtProbeMS       *int64                    `json:"remaining_at_probe_ms,omitempty"`
+	SourceAttempts           int                       `json:"source_attempts,omitempty"`
+	ProbeRetries             int                       `json:"probe_retries,omitempty"`
+	ProbeVerdict             string                    `json:"probe_verdict,omitempty"`
+	ProbeFailure             string                    `json:"probe_failure,omitempty"`
+	MintStatus               int                       `json:"mint_status,omitempty"`
+	ContinueStatus           int                       `json:"continue_status,omitempty"`
 }
 type BorrowSettings struct {
+	Replenishment          *BorrowReplenishmentSettings `json:"replenishment,omitempty"`
+	ContinueTimeoutSeconds *int                         `json:"continue_timeout_seconds,omitempty"`
 	// Nil on writes preserves the saved value for older API clients.
 	MinRouteRemainingSeconds *int                    `json:"min_route_remaining_seconds,omitempty"`
 	ProbeConcurrency         *int                    `json:"probe_concurrency,omitempty"`
@@ -210,36 +225,42 @@ type BorrowBudgetStatus struct {
 	AvailableAt *time.Time `json:"available_at,omitempty"`
 }
 type BorrowTarget struct {
-	ProbePolicy             BorrowProbePolicy `json:"probe_policy"`
-	UpstreamWaitUntil       *time.Time        `json:"upstream_wait_until,omitempty"`
-	UpstreamWaitReason      string            `json:"upstream_wait_reason,omitempty"`
-	BudgetWaitUntil         *time.Time        `json:"budget_wait_until,omitempty"`
-	CooldownUntil           *time.Time        `json:"cooldown_until,omitempty"`
-	CooldownSeconds         int               `json:"cooldown_seconds"`
-	RecoveryLevel           int               `json:"recovery_level"`
-	ConsecutiveFailures     int               `json:"consecutive_failures"`
-	RecoveryEpoch           int64             `json:"recovery_epoch"`
-	LastRequestStartedAt    *time.Time        `json:"last_request_started_at,omitempty"`
-	LastRequestFinishedAt   *time.Time        `json:"last_request_finished_at,omitempty"`
-	Inflight                int               `json:"inflight"`
-	ProbeRequestsLastMinute int               `json:"probe_requests_last_minute"`
-	AccountID               int64             `json:"account_id"`
-	Name                    string            `json:"name"`
-	Enabled                 bool              `json:"enabled"`
-	Revision                int64             `json:"revision"`
-	Cursor                  int64             `json:"-"`
-	ScanSources             []int64           `json:"-"`
-	ScanOffset              int               `json:"scan_completed"`
-	ScanTotal               int               `json:"scan_total"`
-	RefreshRequested        bool              `json:"refresh_requested"`
-	Phase                   string            `json:"phase"`
-	Reason                  string            `json:"reason"`
-	NextAttemptAt           time.Time         `json:"next_attempt_at"`
-	Ready                   bool              `json:"ready"`
-	Gateway                 string            `json:"gateway,omitempty"`
-	ExpiresAt               *time.Time        `json:"expires_at,omitempty"`
-	UsableUntil             *time.Time        `json:"usable_until,omitempty"`
-	ServerNow               time.Time         `json:"server_now"`
+	*BorrowInventory
+
+	BusinessRoutes          []BorrowRouteStatus       `json:"business_routes,omitempty"`
+	BusinessInflight        int                       `json:"business_inflight"`
+	BusinessConcurrency     int                       `json:"business_concurrency"`
+	Replenishment           *BorrowReplenishmentState `json:"replenishment,omitempty"`
+	ProbePolicy             BorrowProbePolicy         `json:"probe_policy"`
+	UpstreamWaitUntil       *time.Time                `json:"upstream_wait_until,omitempty"`
+	UpstreamWaitReason      string                    `json:"upstream_wait_reason,omitempty"`
+	BudgetWaitUntil         *time.Time                `json:"budget_wait_until,omitempty"`
+	CooldownUntil           *time.Time                `json:"cooldown_until,omitempty"`
+	CooldownSeconds         int                       `json:"cooldown_seconds"`
+	RecoveryLevel           int                       `json:"recovery_level"`
+	ConsecutiveFailures     int                       `json:"consecutive_failures"`
+	RecoveryEpoch           int64                     `json:"recovery_epoch"`
+	LastRequestStartedAt    *time.Time                `json:"last_request_started_at,omitempty"`
+	LastRequestFinishedAt   *time.Time                `json:"last_request_finished_at,omitempty"`
+	Inflight                int                       `json:"inflight"`
+	ProbeRequestsLastMinute int                       `json:"probe_requests_last_minute"`
+	AccountID               int64                     `json:"account_id"`
+	Name                    string                    `json:"name"`
+	Enabled                 bool                      `json:"enabled"`
+	Revision                int64                     `json:"revision"`
+	Cursor                  int64                     `json:"-"`
+	ScanSources             []int64                   `json:"-"`
+	ScanOffset              int                       `json:"scan_completed"`
+	ScanTotal               int                       `json:"scan_total"`
+	RefreshRequested        bool                      `json:"refresh_requested"`
+	Phase                   string                    `json:"phase"`
+	Reason                  string                    `json:"reason"`
+	NextAttemptAt           time.Time                 `json:"next_attempt_at"`
+	Ready                   bool                      `json:"ready"`
+	Gateway                 string                    `json:"gateway,omitempty"`
+	ExpiresAt               *time.Time                `json:"expires_at,omitempty"`
+	UsableUntil             *time.Time                `json:"usable_until,omitempty"`
+	ServerNow               time.Time                 `json:"server_now"`
 }
 type BorrowRouteSecret struct {
 	Endpoint string                  `json:"endpoint"`
@@ -249,6 +270,15 @@ type BorrowRouteSecret struct {
 	Profile  *tlsfingerprint.Profile `json:"profile,omitempty"`
 }
 type BorrowRoute struct {
+	CandidateID string `json:"-"`
+
+	SourceSubjectHash        string `json:"-"`
+	TargetSubjectHash        string `json:"-"`
+	SourceRevision           int64  `json:"-"`
+	SourceEnvironmentVersion int64  `json:"-"`
+	SourceRotationRevision   int64  `json:"-"`
+	Shadow                   bool   `json:"-"`
+
 	ID             string            `json:"id"`
 	TargetID       int64             `json:"target_id"`
 	TargetRevision int64             `json:"target_revision"`
@@ -259,6 +289,25 @@ type BorrowRoute struct {
 	ExpiresAt      time.Time         `json:"expires_at"`
 	UsableUntil    time.Time         `json:"usable_until"`
 	Secret         BorrowRouteSecret `json:"-"`
+}
+
+// Only sanitized route metadata is exposed to the management page.
+type BorrowRouteStatus struct {
+	ID                string    `json:"id"`
+	Gateway           string    `json:"gateway"`
+	SourceAccountID   int64     `json:"source_account_id"`
+	ExpiresAt         time.Time `json:"expires_at"`
+	UsableUntil       time.Time `json:"usable_until"`
+	InventoryEligible bool      `json:"inventory_eligible"`
+	Usable            bool      `json:"usable"`
+	Inflight          int       `json:"inflight"`
+}
+
+type BorrowRouteLeaseRepository interface {
+	ReserveRoute(ctx context.Context, targetID int64, identity, preferred, session, lease string) (*BorrowRoute, error)
+	RenewRoute(ctx context.Context, lease string) error
+	ReleaseRoute(ctx context.Context, lease string) error
+	RouteStatuses(ctx context.Context, targetID int64, identity string) ([]BorrowRouteStatus, error)
 }
 type BorrowEvent struct {
 	Details         *BorrowCandidateDetails `json:"details,omitempty"`

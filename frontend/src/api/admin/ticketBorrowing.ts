@@ -12,6 +12,7 @@ export interface BorrowSourceInput {
   rotate_identity: boolean; credentials?: Record<string, unknown>; proxies?: string[]
 }
 export interface BorrowSelection {
+  excluded_account_ids?: number[]
   use_proxy_pool?: boolean
   revision: number; group_ids: number[]; account_ids: number[]; default_model: string
   rotate_identity: boolean; model_overrides: Record<number, string>
@@ -27,6 +28,12 @@ export interface BorrowProbeBatchInput {
 }
 export interface BorrowProbeBatchResult { account_id: number; status: 'saved' | 'failed'; reason?: string }
 export interface BorrowTarget {
+ inventory_count?: number; desired_inventory?: number; maintenance_state?: 'search' | 'refill' | 'renew' | 'healthy'; next_probe_at?: string; earliest_admit_until?: string; refresh_generation?: number; blocked_reason?: string
+
+ business_routes?: BorrowRouteStatus[]
+ business_inflight?: number
+ business_concurrency?: number
+ replenishment?: { source_id: number; source_account_id: number; environment_version: number; until: string; next_at: string; attempts: number }
   probe_policy?: BorrowProbePolicy
   upstream_wait_until?: string; upstream_wait_reason?: string; budget_wait_until?: string
   cooldown_until?: string; cooldown_seconds?: number; recovery_level?: number; recovery_epoch?: number
@@ -37,12 +44,21 @@ export interface BorrowTarget {
  ready: boolean; phase: string; reason: string; gateway?: string
   expires_at?: string; usable_until?: string; server_now: string; next_attempt_at: string
 }
+export interface BorrowRouteStatus {
+ id: string; gateway: string; source_account_id: number
+ expires_at: string; usable_until: string
+ inventory_eligible: boolean; usable: boolean; inflight: number
+}
 export interface BorrowRecoverySettings { enabled: boolean; failure_threshold: number; cooldown_seconds: number[]; probe_requests_per_minute: number; source_requests_per_minute?: number }
-export interface BorrowSettings { revision?:number; running: boolean; ttl_seconds: number; min_route_remaining_seconds?: number; probe_concurrency?: number; renew_before_seconds?: number; prewarm_seconds: number; recovery?: BorrowRecoverySettings; server_now?: string; source_budget?: { used: number; limit: number; available_at?: string } }
+export interface BorrowReplenishmentSettings { enabled: boolean; inventory: number; interval_seconds: number; hold_seconds: number; maintenance_interval_seconds?: number }
+export const defaultBorrowReplenishment = (): BorrowReplenishmentSettings => ({ enabled: false, inventory: 2, interval_seconds: 10, hold_seconds: 150, maintenance_interval_seconds: 30 })
+export interface BorrowSettings { replenishment?: BorrowReplenishmentSettings; continue_timeout_seconds?: number; revision?:number; running: boolean; ttl_seconds: number; min_route_remaining_seconds?: number; probe_concurrency?: number; renew_before_seconds?: number; prewarm_seconds: number; recovery?: BorrowRecoverySettings; server_now?: string; source_budget?: { used: number; limit: number; available_at?: string } }
 export interface BorrowEnvironment {
   identity_hash?: string; profile_hash?: string; configured_proxy_hash?: string; client_version?: string; body_hash?: string
 }
 export interface BorrowCandidateDetails {
+ replenishment?: { environment_version?: number; until?: string; shadow?: boolean; inventory?: number; exit_reason?: string }
+ source_environment_version?: number; source_rotation_revision?: number
  rotation?: {skipped?: boolean; job_id: string; role: string; trigger: string; account_id: number; previous_entry_id: number; entry_id: number; environment_version: number; selection_kind?: string}
   candidate_id: string; batch_id: string; source_account_id?: number; source_model?: string; source_format?: string
   source_revision?: number; target_revision?: number; source: BorrowEnvironment; target: BorrowEnvironment

@@ -35,14 +35,16 @@ func borrowResponseKey(id string) string {
 // are owned by the normal request logger, never by borrowing telemetry.
 type borrowObservedBody struct {
 	io.ReadCloser
-	recoveryContext context.Context
-	owner           *TicketBorrowService
-	target, source  int64
-	route           string
-	pending         []byte
-	dropping        bool
-	bound           bool
-	mu              sync.Mutex
+	recoveryContext  context.Context
+	owner            *TicketBorrowService
+	target, source   int64
+	effectiveSession string
+	httpContinuation bool
+	route            string
+	pending          []byte
+	dropping         bool
+	bound            bool
+	mu               sync.Mutex
 }
 
 func (b *borrowObservedBody) Read(p []byte) (int, error) {
@@ -99,7 +101,12 @@ func (b *borrowObservedBody) line(line []byte) {
 	BorrowBusinessRecoveryFromContext(b.recoveryContext).ObserveSSE(b.recoveryContext, payload, event.Type)
 	if !b.bound && event.Response.ID != "" && strings.HasPrefix(event.Type, "response.") {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		_, err := b.owner.repo.BindSession(ctx, b.target, borrowResponseKey(event.Response.ID), b.route)
+		var err error
+		if b.httpContinuation {
+			err = b.owner.repo.(BorrowHTTPContinuationRepository).BindHTTPContinuationResponse(ctx, b.target, borrowResponseKey(event.Response.ID), b.route, b.effectiveSession)
+		} else {
+			_, err = b.owner.repo.BindSession(ctx, b.target, borrowResponseKey(event.Response.ID), b.route)
+		}
 		cancel()
 		b.bound = err == nil
 	}

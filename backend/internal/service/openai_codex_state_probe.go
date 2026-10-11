@@ -291,7 +291,7 @@ func retryOpenAICodexStateRouteShot(ctx context.Context, result *OpenAICodexStat
 		if errors.Is(err, ErrBorrowProbeBusy) || errors.Is(err, ErrBorrowRecoveryWaiting) || errors.Is(err, ErrBorrowPaused) || errors.Is(err, ErrBorrowRequestBudget) || errors.Is(err, ErrBorrowRouteReady) {
 			return shot, err
 		}
-		if attempt >= 2 || ctx.Err() != nil || errors.Is(err, errOpenAICodexStateRouteChanged) {
+		if attempt >= 2 || ctx.Err() != nil || errors.Is(err, errOpenAICodexStateRouteChanged) || borrowContinueTimedOut(err) {
 			return shot, err
 		}
 		if !openAICodexShotRetryable(ctx, shot, err, mint) {
@@ -373,6 +373,20 @@ func (r *OpenAICodexStateProbeResult) shotUsable(ctx context.Context, step strin
 	}
 
 	if err != nil {
+		// Explicit authentication and rate-limit responses remain authoritative
+		// even when reading their body reaches the continuation deadline.
+		if shot.status == http.StatusUnauthorized || shot.status == http.StatusForbidden {
+			r.fail(OpenAICodexStateFailureAccountError, fmt.Sprintf("%s被上游拒绝（HTTP %d）", step, shot.status), shot.detail)
+			return false
+		}
+		if shot.status == http.StatusTooManyRequests {
+			r.fail(OpenAICodexStateFailureRateLimited, step+"被上游限流（HTTP 429）", shot.detail)
+			return false
+		}
+		if borrowContinueTimedOut(err) {
+			r.fail(borrowContinueTimeoutReason, step+"超过配置的请求时限", err.Error())
+			return false
+		}
 		if ctx.Err() != nil {
 			r.fail(OpenAICodexStateFailureCancelled, step+"请求被取消或超时", "")
 			return false
@@ -482,7 +496,16 @@ func fireOpenAICodexStateShotRequest(ctx context.Context, headers http.Header, m
 		}
 	}()
 	ctx = context.WithValue(ctx, openAICodexStateProbeContextKey{}, true)
-	shotCtx, cancel := context.WithTimeout(ctx, openAICodexStateProbeShotTimeout)
+	var shotCtx context.Context
+	var cancel context.CancelFunc
+	if q, ok := ctx.Value(borrowProbeRequestKey{}).(BorrowRequest); ok && q.Kind == "probe" && strings.TrimSpace(turnState) != "" {
+		// The borrowing transport starts its configured deadline after admission.
+		// A competing generic deadline would misclassify a configured 45s timeout
+		// as a retryable network error. The enclosing candidate/job limits remain.
+		shotCtx, cancel = context.WithCancel(ctx)
+	} else {
+		shotCtx, cancel = context.WithTimeout(ctx, openAICodexStateProbeShotTimeout)
+	}
 	defer cancel()
 	body := openAICodexStateProbeBody(model)
 	req, err := http.NewRequestWithContext(shotCtx, http.MethodPost, chatgptCodexURL, bytes.NewReader(body))
@@ -512,6 +535,13 @@ func fireOpenAICodexStateShotRequest(ctx context.Context, headers http.Header, m
 		return out, err
 	}
 	resp, err := send(req)
+	if resp != nil {
+		out.status = resp.StatusCode
+		out.headers = resp.Header.Clone()
+		if out.status == http.StatusTooManyRequests {
+			out.retryAfter = borrowRetryAfter(resp.Header.Get("Retry-After"), time.Now())
+		}
+	}
 	if err != nil {
 		if resp != nil && resp.Body != nil {
 			_ = resp.Body.Close()
@@ -520,11 +550,6 @@ func fireOpenAICodexStateShotRequest(ctx context.Context, headers http.Header, m
 	}
 	if resp == nil {
 		return out, errors.New("nil upstream response")
-	}
-	out.status = resp.StatusCode
-	out.headers = resp.Header.Clone()
-	if out.status == 429 {
-		out.retryAfter = borrowRetryAfter(resp.Header.Get("Retry-After"), time.Now())
 	}
 	out.state = strings.TrimSpace(extractOpenAICodexTurnState(resp.Header))
 	out.cookies = openAICodexStateRouteCookies(resp)
@@ -546,6 +571,9 @@ func fireOpenAICodexStateShotRequest(ctx context.Context, headers http.Header, m
 		out.retryAfter = codexProbeMaxWait(out.retryAfter, borrowRetryAfter(resp.Header.Get("Retry-After"), time.Now()))
 	}
 	if err != nil {
+		if borrowContinueTimedOut(err) {
+			return out, err
+		}
 		if shotCtx.Err() != nil {
 			return out, shotCtx.Err()
 		}

@@ -855,6 +855,27 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		legacyCompact,
 	))
 
+	// Scope conversion only after owner validation and original-body security audit.
+	// Scheduling uses no native HTTP previous; route lookup retains it internally.
+	originalPreviousResponseID := previousResponseID
+	if !legacyCompact && !nativeV2 && openAICompatibleRequestPlatform(c.Request.Context(), apiKey) == service.PlatformOpenAI {
+		ctx, effective, converted, err := h.gatewayService.PrepareBorrowHTTPContinuation(c.Request.Context(), apiKey.GroupID, previousResponseID, forwardModel, c.Request.Header, forwardBody)
+		if err != nil {
+			if service.IsBorrowRouteUnavailable(err) {
+				h.errorResponse(c, http.StatusServiceUnavailable, "service_unavailable", "borrowed continuation is temporarily unavailable")
+			} else {
+				h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+			}
+			return
+		}
+		if converted {
+			c.Request = c.Request.WithContext(ctx)
+			forwardBody = effective
+			previousResponseID = ""
+			reqLog.Info("openai.borrow_http_continuation_normalized")
+		}
+	}
+
 	// 提前校验 function_call_output 是否具备可关联上下文，避免上游 400。
 	if !h.validateFunctionCallOutputRequest(c, body, reqLog) {
 		return
@@ -902,6 +923,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	))
 	requireCompact := legacyCompact
 
+	c.Request = c.Request.WithContext(service.WithBorrowBusinessBinding(c.Request.Context(), c.Request.Header, originalPreviousResponseID))
 	borrowCtx, borrowRecovery := service.WithBorrowBusinessRecovery(c.Request.Context(), h.cfg)
 	c.Request = c.Request.WithContext(borrowCtx)
 	defer borrowRecovery.Close()
@@ -1025,6 +1047,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		}
 		reqLog.Debug("openai.account_schedule_decision",
 			zap.String("layer", scheduleDecision.Layer),
+			zap.Bool("borrow_preferred", scheduleDecision.BorrowPreferred),
 			zap.Bool("sticky_previous_hit", scheduleDecision.StickyPreviousHit),
 			zap.Bool("sticky_session_hit", scheduleDecision.StickySessionHit),
 			zap.Int("candidate_count", scheduleDecision.CandidateCount),
@@ -1608,6 +1631,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		return
 	}
 
+	c.Request = c.Request.WithContext(service.WithBorrowBusinessBinding(c.Request.Context(), c.Request.Header, ""))
 	borrowCtx, borrowRecovery := service.WithBorrowBusinessRecovery(c.Request.Context(), h.cfg)
 	c.Request = c.Request.WithContext(borrowCtx)
 	defer borrowRecovery.Close()

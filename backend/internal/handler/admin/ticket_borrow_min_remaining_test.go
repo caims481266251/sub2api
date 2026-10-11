@@ -82,3 +82,27 @@ func TestTicketBorrowAdminGlobalProbeValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestTicketBorrowAdminContinueTimeoutValidation(t *testing.T) {
+	for _, tc := range []struct {
+		value  string
+		status int
+	}{{"1", 200}, {"7", 200}, {"45", 200}, {"0", 400}, {"-1", 400}, {"46", 400}, {"7.5", 400}, {`"7"`, 400}} {
+		t.Run(tc.value, func(t *testing.T) {
+			r := &borrowSettingsAdminRepo{}
+			h := &AccountHandler{accountTestService: &service.AccountTestService{TicketBorrow: service.NewTicketBorrowService(r, nil, nil)}}
+			router := gin.New()
+			router.PUT("/settings", h.BorrowSettings)
+			req := httptest.NewRequest("PUT", "/settings", strings.NewReader(fmt.Sprintf(`{"revision":1,"ttl_seconds":230,"continue_timeout_seconds":%s}`, tc.value)))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			require.Equal(t, tc.status, w.Code)
+			if tc.status == 200 {
+				require.NotNil(t, r.saved.ContinueTimeoutSeconds)
+			} else {
+				require.Nil(t, r.saved)
+			}
+		})
+	}
+}

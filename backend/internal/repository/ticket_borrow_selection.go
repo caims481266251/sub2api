@@ -12,22 +12,22 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
 
-const borrowSelectedAccount = `(a.id IN (SELECT jsonb_array_elements_text(c.account_ids)::bigint)
+const borrowSelectedAccount = `(NOT c.excluded_account_ids @> jsonb_build_array(a.id) AND (a.id IN (SELECT jsonb_array_elements_text(c.account_ids)::bigint)
  OR EXISTS(SELECT 1 FROM account_groups ag JOIN groups g ON g.id=ag.group_id AND g.deleted_at IS NULL
- WHERE ag.account_id=a.id AND ag.group_id IN (SELECT jsonb_array_elements_text(c.group_ids)::bigint)))`
+ WHERE ag.account_id=a.id AND ag.group_id IN (SELECT jsonb_array_elements_text(c.group_ids)::bigint))))`
 const borrowNormalScope = `a.deleted_at IS NULL AND a.platform='openai' AND a.type IN ('oauth','setup-token') AND a.parent_account_id IS NULL AND ` + borrowSelectedAccount
 
 func (r *ticketBorrowRepository) Selection(ctx context.Context) (service.BorrowSelection, error) {
 	var s service.BorrowSelection
-	var groups, accounts, models []byte
-	err := r.db.QueryRowContext(ctx, `SELECT revision,group_ids,account_ids,default_model,rotate_identity,model_overrides,use_proxy_pool FROM ticket_borrow_selection WHERE id=1`).Scan(&s.Revision, &groups, &accounts, &s.DefaultModel, &s.RotateIdentity, &models, &s.UseProxyPool)
+	var groups, accounts, models, excluded []byte
+	err := r.db.QueryRowContext(ctx, `SELECT revision,group_ids,account_ids,default_model,rotate_identity,model_overrides,use_proxy_pool,excluded_account_ids FROM ticket_borrow_selection WHERE id=1`).Scan(&s.Revision, &groups, &accounts, &s.DefaultModel, &s.RotateIdentity, &models, &s.UseProxyPool, &excluded)
 	if err != nil {
 		return s, err
 	}
 	for _, v := range []struct {
 		raw  []byte
 		dest any
-	}{{groups, &s.GroupIDs}, {accounts, &s.AccountIDs}, {models, &s.ModelOverrides}} {
+	}{{groups, &s.GroupIDs}, {accounts, &s.AccountIDs}, {models, &s.ModelOverrides}, {excluded, &s.ExcludedAccountIDs}} {
 		if err = json.Unmarshal(v.raw, v.dest); err != nil {
 			return s, err
 		}
@@ -36,9 +36,20 @@ func (r *ticketBorrowRepository) Selection(ctx context.Context) (service.BorrowS
 }
 func (r *ticketBorrowRepository) SaveSelection(ctx context.Context, s service.BorrowSelection) error {
 	s.UseProxyPool, s.RotateIdentity = true, false
+	if s.GroupIDs == nil {
+		s.GroupIDs = []int64{}
+	}
+	if s.AccountIDs == nil {
+		s.AccountIDs = []int64{}
+	}
 	groups, _ := json.Marshal(s.GroupIDs)
 	accounts, _ := json.Marshal(s.AccountIDs)
 	models, _ := json.Marshal(s.ModelOverrides)
+	var excluded any
+	if s.ExcludedAccountIDs != nil {
+		raw, _ := json.Marshal(s.ExcludedAccountIDs)
+		excluded = string(raw)
+	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -50,7 +61,9 @@ func (r *ticketBorrowRepository) SaveSelection(ctx context.Context, s service.Bo
 	}
 	// References may remain selected while disabled; removed accounts/groups may be
 	// retained in a saved selection so an unrelated edit does not erase intent.
-	res, err := tx.ExecContext(ctx, `UPDATE ticket_borrow_selection SET group_ids=$1,account_ids=$2,default_model=$3,rotate_identity=$4,model_overrides=$5,use_proxy_pool=$7,revision=revision+1 WHERE id=1 AND revision=$6`, string(groups), string(accounts), s.DefaultModel, s.RotateIdentity, string(models), s.Revision, s.UseProxyPool)
+	res, err := tx.ExecContext(ctx, `UPDATE ticket_borrow_selection SET group_ids=$1,
+ account_ids=(SELECT COALESCE(jsonb_agg(value),'[]'::jsonb) FROM jsonb_array_elements($2::jsonb) WHERE NOT COALESCE($8::jsonb,excluded_account_ids) @> jsonb_build_array(value)),
+ excluded_account_ids=COALESCE($8::jsonb,excluded_account_ids),default_model=$3,rotate_identity=$4,model_overrides=$5,use_proxy_pool=$7,revision=revision+1 WHERE id=1 AND revision=$6`, string(groups), string(accounts), s.DefaultModel, s.RotateIdentity, string(models), s.Revision, s.UseProxyPool, excluded)
 	if err != nil {
 		return err
 	}
@@ -142,7 +155,7 @@ func (r *ticketBorrowRepository) normalSources(ctx context.Context, sourceID int
  CASE WHEN (`+sourceRotationHealthReason+`)<>'' THEN (`+sourceRotationHealthReason+`)
  WHEN b.account_id IS NULL OR b.role<>'source' THEN 'rotation_binding_missing'
  WHEN EXISTS(SELECT 1 FROM ticket_borrow_rotation_accounts x WHERE x.account_id=a.id AND x.active_job IS NOT NULL) THEN 'borrow_rotation_pending'
- ELSE '' END
+ ELSE '' END,COALESCE(b.environment_version,0),COALESCE((SELECT revision FROM ticket_borrow_rotation_accounts WHERE account_id=a.id),0)
  FROM ticket_borrow_sources s JOIN accounts a ON a.id=s.account_id LEFT JOIN ticket_borrow_proxy_bindings b ON b.account_id=a.id LEFT JOIN proxy_pool_entries p ON p.id=b.entry_id
  LEFT JOIN ticket_borrow_fingerprint_history h ON h.fingerprint_hash=encode(sha256(convert_to(b.device_id,'UTF8')),'hex') CROSS JOIN ticket_borrow_selection c
  WHERE c.id=1 AND s.deleted_at IS NULL AND `+borrowNormalScope+` AND ($1=0 OR s.id=$1) ORDER BY s.id`, sourceID)
@@ -157,7 +170,7 @@ func (r *ticketBorrowRepository) normalSources(ctx context.Context, sourceID int
 		var device, ciphertext string
 		var fingerprint []byte
 		var fingerprintVersion int
-		if err = rows.Scan(&s.ID, &s.AccountID, &s.Name, &s.Model, &s.Revision, &s.RotateIdentity, &s.Cursor, &s.LastReason, &s.NextAttemptAt, &s.ProxyCount, &s.Explicit, &groups, &s.UnavailableReason, &s.UseProxyPool, &s.PoolEntryID, &device, &s.PoolEndpoint, &ciphertext, &fingerprint, &fingerprintVersion, &s.RateLimitResetAt, &s.LeaseUntil, &s.RotationUnavailableReason); err != nil {
+		if err = rows.Scan(&s.ID, &s.AccountID, &s.Name, &s.Model, &s.Revision, &s.RotateIdentity, &s.Cursor, &s.LastReason, &s.NextAttemptAt, &s.ProxyCount, &s.Explicit, &groups, &s.UnavailableReason, &s.UseProxyPool, &s.PoolEntryID, &device, &s.PoolEndpoint, &ciphertext, &fingerprint, &fingerprintVersion, &s.RateLimitResetAt, &s.LeaseUntil, &s.RotationUnavailableReason, &s.EnvironmentVersion, &s.RotationRevision); err != nil {
 			return nil, err
 		}
 		if err = json.Unmarshal(groups, &s.GroupIDs); err != nil {

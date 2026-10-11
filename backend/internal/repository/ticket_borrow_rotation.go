@@ -184,6 +184,16 @@ func queueBorrowRotation(ctx context.Context, tx *sql.Tx, in service.BorrowRotat
 	requested, _ = json.Marshal(ids)
 	accepted := make([]int64, 0, len(ids))
 	for _, id := range ids {
+		if trigger == "automatic" {
+			var held bool
+			if e := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM ticket_borrow_active_replenishment WHERE source_account_id=$1)`, id).Scan(&held); e != nil {
+				return nil, e
+			}
+			if held {
+				job.Skipped = append(job.Skipped, service.BorrowRotationSkipped{AccountID: id, Reason: "rotation_replenishment_hold"})
+				continue
+			}
+		}
 		reason, e := sourceRotationReason(ctx, tx, id)
 		if e != nil {
 			return nil, e
@@ -209,6 +219,14 @@ func queueBorrowRotation(ctx context.Context, tx *sql.Tx, in service.BorrowRotat
 		}
 		if e != nil {
 			return nil, e
+		}
+		if trigger == "manual" {
+			if _, e = tx.ExecContext(ctx, `WITH ended AS (UPDATE ticket_borrow_replenishment SET until_at=clock_timestamp(),reason='manual_rotation'
+ WHERE source_id IN (SELECT id FROM ticket_borrow_sources WHERE account_id=$1) AND reason='success' RETURNING *)
+ INSERT INTO ticket_borrow_events(target_id,source_id,stage,reason,details)
+ SELECT target_id,source_id,'replenishment','replenishment_ended',jsonb_build_object('replenishment',jsonb_build_object('environment_version',environment_version,'until',until_at,'exit_reason',reason)) FROM ended`, id); e != nil {
+				return nil, e
+			}
 		}
 		accepted = append(accepted, id)
 	}
@@ -325,6 +343,9 @@ func finishBorrowRotation(ctx context.Context, tx *sql.Tx, id, phase, reason str
 }
 
 func (r *ticketBorrowRepository) ProcessRotations(ctx context.Context) error {
+	if err := r.expireBorrowReplenishment(ctx); err != nil {
+		return err
+	}
 	rows, err := r.db.QueryContext(ctx, `SELECT id FROM ticket_borrow_rotation_jobs WHERE finished_at IS NULL ORDER BY created_at LIMIT 100`)
 	if err != nil {
 		return err
@@ -358,7 +379,7 @@ func (r *ticketBorrowRepository) ProcessRotations(ctx context.Context) error {
 	if err = lockBorrowRotation(ctx, tx); err != nil {
 		return err
 	}
-	rows, err = tx.QueryContext(ctx, `SELECT x.account_id FROM ticket_borrow_rotation_accounts x JOIN accounts a ON a.id=x.account_id JOIN ticket_borrow_proxy_bindings b ON b.account_id=x.account_id AND b.role='source' CROSS JOIN ticket_borrow_selection c CROSS JOIN ticket_borrow_settings cfg WHERE cfg.id=1 AND cfg.running AND c.id=1 AND c.use_proxy_pool AND x.role='source' AND x.automatic AND x.active_job IS NULL AND x.next_at<=clock_timestamp() AND a.status='active' AND a.schedulable AND (NOT a.auto_pause_on_expired OR a.expires_at IS NULL OR a.expires_at>clock_timestamp()) AND `+borrowNormalScope+` AND NOT EXISTS(SELECT 1 FROM ticket_borrow_targets t WHERE t.account_id=a.id AND t.enabled) ORDER BY x.next_at,x.account_id LIMIT 1000`)
+	rows, err = tx.QueryContext(ctx, `SELECT x.account_id FROM ticket_borrow_rotation_accounts x JOIN accounts a ON a.id=x.account_id JOIN ticket_borrow_proxy_bindings b ON b.account_id=x.account_id AND b.role='source' CROSS JOIN ticket_borrow_selection c CROSS JOIN ticket_borrow_settings cfg WHERE cfg.id=1 AND cfg.running AND c.id=1 AND c.use_proxy_pool AND x.role='source' AND x.automatic AND x.active_job IS NULL AND x.next_at<=clock_timestamp() AND NOT EXISTS(SELECT 1 FROM ticket_borrow_active_replenishment w WHERE w.source_account_id=a.id) AND a.status='active' AND a.schedulable AND (NOT a.auto_pause_on_expired OR a.expires_at IS NULL OR a.expires_at>clock_timestamp()) AND `+borrowNormalScope+` AND NOT EXISTS(SELECT 1 FROM ticket_borrow_targets t WHERE t.account_id=a.id AND t.enabled) ORDER BY x.next_at,x.account_id LIMIT 1000`)
 	if err != nil {
 		return err
 	}
@@ -385,6 +406,7 @@ func (r *ticketBorrowRepository) ProcessRotations(ctx context.Context) error {
  JOIN ticket_borrow_proxy_bindings b ON b.account_id=a.id AND b.role='source'
  LEFT JOIN ticket_borrow_rotation_accounts x ON x.account_id=a.id
  CROSS JOIN ticket_borrow_selection c WHERE c.id=1 AND c.use_proxy_pool
+ AND NOT EXISTS(SELECT 1 FROM ticket_borrow_active_replenishment w WHERE w.source_account_id=a.id)
  AND a.status='active' AND a.schedulable AND (NOT a.auto_pause_on_expired OR a.expires_at IS NULL OR a.expires_at>clock_timestamp())
  AND `+borrowNormalScope+` AND NOT EXISTS(SELECT 1 FROM ticket_borrow_targets t WHERE t.account_id=a.id AND t.enabled) ORDER BY a.id`)
 	if err != nil {

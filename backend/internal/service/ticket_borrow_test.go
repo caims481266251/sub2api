@@ -60,6 +60,18 @@ type borrowTestRepo struct {
 	sessions     map[string]string
 	oldRoutes    map[string]*BorrowRoute
 	events       []BorrowEvent
+	leases       map[string]string
+	releases     int
+	renewals     int
+	renewError   error
+}
+
+func (r *borrowTestRepo) Targets(ctx context.Context) ([]BorrowTarget, error) {
+	t, err := r.Target(ctx, 11)
+	if err != nil || !t.Enabled {
+		return nil, err
+	}
+	return []BorrowTarget{t}, nil
 }
 
 func (r *borrowTestRepo) Target(_ context.Context, id int64) (BorrowTarget, error) {
@@ -76,6 +88,9 @@ func (r *borrowTestRepo) Target(_ context.Context, id int64) (BorrowTarget, erro
 func (r *borrowTestRepo) Route(_ context.Context, id int64, identity, preferred string) (*BorrowRoute, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.routeLocked(id, identity, preferred)
+}
+func (r *borrowTestRepo) routeLocked(id int64, identity, preferred string) (*BorrowRoute, error) {
 	route := r.route
 	if preferred != "" && r.oldRoutes[preferred] != nil {
 		route = r.oldRoutes[preferred]
@@ -86,6 +101,53 @@ func (r *borrowTestRepo) Route(_ context.Context, id int64, identity, preferred 
 	copy := *route
 	copy.UsableUntil = copy.ExpiresAt.Add(-r.minRemaining)
 	return &copy, nil
+}
+func (r *borrowTestRepo) ReserveRoute(_ context.Context, id int64, identity, preferred, session, lease string) (*BorrowRoute, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if bound := r.sessions[session]; session != "" && bound != "" {
+		if preferred != "" && preferred != bound {
+			return nil, ErrBorrowUnavailable
+		}
+		preferred = bound
+	}
+	route, err := r.routeLocked(id, identity, preferred)
+	if err != nil {
+		return nil, err
+	}
+	if session != "" {
+		if r.sessions == nil {
+			r.sessions = map[string]string{}
+		}
+		r.sessions[session] = route.ID
+	}
+	if r.leases == nil {
+		r.leases = map[string]string{}
+	}
+	r.leases[lease] = route.ID
+	return route, nil
+}
+func (r *borrowTestRepo) RenewRoute(_ context.Context, lease string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.renewals++
+	if r.renewError != nil {
+		return r.renewError
+	}
+	if r.leases[lease] == "" {
+		return ErrBorrowUnavailable
+	}
+	return nil
+}
+func (r *borrowTestRepo) ReleaseRoute(_ context.Context, lease string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.releases++
+	delete(r.leases, lease)
+	return nil
+}
+func (r *borrowTestRepo) RouteStatuses(context.Context, int64, string) ([]BorrowRouteStatus, error) {
+	return nil, nil
 }
 func (r *borrowTestRepo) Revoke(_ context.Context, _ int64, id, _ string) error {
 	r.mu.Lock()

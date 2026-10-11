@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
@@ -56,10 +57,36 @@ func (s *TicketBorrowService) trackTargetRequest(req *http.Request, q BorrowRequ
 			q.Phase = "continue"
 		}
 	}
+	if q.Phase == "continue" {
+		// Read for every new attempt, not once for an entire acquisition batch.
+		settings, err := s.repo.Settings(req.Context())
+		if err != nil {
+			return nil, err
+		}
+		q.ContinueTimeoutSeconds = 7
+		if settings.ContinueTimeoutSeconds != nil {
+			q.ContinueTimeoutSeconds = *settings.ContinueTimeoutSeconds
+		}
+	}
 	if err := s.repo.BeginTargetRequest(req.Context(), q); err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithCancel(req.Context())
+	var ctx context.Context
+	var cancel context.CancelFunc
+	if q.Phase == "continue" {
+		ctx, cancel = borrowContinueDeadline(req.Context(), q.ContinueTimeoutSeconds)
+	} else {
+		ctx, cancel = context.WithCancel(req.Context())
+	}
+	requestError := func(err error) error {
+		if cause := context.Cause(ctx); borrowContinueTimedOut(cause) {
+			return cause
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return err
+	}
 	prior, _ := ctx.Value(borrowBeforeSendKey{}).(func(context.Context) error)
 	ctx = context.WithValue(ctx, borrowBeforeSendKey{}, func(ctx context.Context) error {
 		if prior != nil {
@@ -81,11 +108,16 @@ func (s *TicketBorrowService) trackTargetRequest(req *http.Request, q BorrowRequ
 	var once sync.Once
 	finish := func(status int, outcome string) {
 		once.Do(func() {
+			if borrowContinueTimedOut(context.Cause(ctx)) {
+				outcome = borrowContinueTimeoutReason
+			}
 			close(done)
 			cancel()
 			cleanup, stop := context.WithTimeout(context.WithoutCancel(req.Context()), 3*time.Second)
 			defer stop()
-			_ = s.repo.EndTargetRequest(cleanup, q, status, outcome)
+			if err := s.repo.EndTargetRequest(cleanup, q, status, outcome); err != nil {
+				slog.Warn("borrow_probe_request_cleanup_failed", "request_id", q.ID, "target_id", q.TargetID, "phase", q.Phase)
+			}
 		})
 	}
 	go func() {
@@ -113,6 +145,7 @@ func (s *TicketBorrowService) trackTargetRequest(req *http.Request, q BorrowRequ
 	}()
 	resp, err := send(req.WithContext(ctx), proxy, id, n, profile)
 	if err != nil {
+		err = requestError(err)
 		if resp != nil && resp.Body != nil {
 			_ = resp.Body.Close()
 		}
@@ -124,33 +157,59 @@ func (s *TicketBorrowService) trackTargetRequest(req *http.Request, q BorrowRequ
 		return nil, ErrBorrowUnavailable
 	}
 	if resp.Body == nil {
+		err = requestError(nil)
 		finish(resp.StatusCode, "headers_only")
 	} else {
-		resp.Body = &borrowActivityBody{ReadCloser: resp.Body, finish: func(outcome string) { finish(resp.StatusCode, outcome) }}
+		body := &borrowActivityBody{ReadCloser: resp.Body, requestError: requestError, stop: cancel, finish: func(outcome string) { finish(resp.StatusCode, outcome) }}
+		if q.Phase == "continue" {
+			// Closing also interrupts readers whose transport does not wake Read on
+			// cancellation. Accounting still ends only after Read/Close returns.
+			context.AfterFunc(ctx, func() { _ = body.closeBody() })
+		}
+		resp.Body = body
 	}
-	return resp, nil
+	return resp, err
 }
 
 type borrowActivityBody struct {
 	io.ReadCloser
-	finish func(string)
+	finish       func(string)
+	requestError func(error) error
+	stop         context.CancelFunc
+	closeOnce    sync.Once
+	closeErr     error
 }
 
 func (b *borrowActivityBody) Read(p []byte) (int, error) {
 	n, err := b.ReadCloser.Read(p)
+	if b.requestError != nil {
+		err = b.requestError(err)
+	}
 	if err != nil {
 		outcome := "read_error"
 		if err == io.EOF {
 			outcome = "eof"
 		}
+		// Freeze the completed request's cause before potentially slower cleanup.
+		// Cancelling cannot replace a policy deadline that has already fired.
+		if b.stop != nil {
+			b.stop()
+		}
+		// Do not admit a replacement while the old response still owns resources.
+		_ = b.closeBody()
 		b.finish(outcome)
 	}
 	return n, err
 }
 func (b *borrowActivityBody) Close() error {
-	err := b.ReadCloser.Close()
+	err := b.closeBody()
 	b.finish("closed")
 	return err
+}
+
+func (b *borrowActivityBody) closeBody() error {
+	b.closeOnce.Do(func() { b.closeErr = b.ReadCloser.Close() })
+	return b.closeErr
 }
 
 func borrowAcquisitionReason(err error) string {
@@ -158,6 +217,10 @@ func borrowAcquisitionReason(err error) string {
 	case errors.Is(err, ErrBorrowRouteReady):
 		return "target_route_ready"
 	case errors.Is(err, ErrBorrowRequestBudget):
+		var wait *BorrowBudgetWaitError
+		if errors.As(err, &wait) && wait.Scope == "source" {
+			return "source_request_budget"
+		}
 		return "target_request_budget"
 	case errors.Is(err, ErrBorrowRecoveryWaiting):
 		return "target_upstream_waiting"

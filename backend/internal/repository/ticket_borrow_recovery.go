@@ -126,7 +126,7 @@ func (r *ticketBorrowRepository) CheckTargetRequest(ctx context.Context, q servi
 		return service.ErrBorrowRecoveryWaiting
 	}
 	if q.Kind == "probe" {
-		return r.CheckAcquisition(ctx, service.BorrowAcquisition{TargetID: q.TargetID, Revision: q.Revision, Lease: q.BatchID, Identity: q.Identity})
+		return checkBorrowAcquisition(ctx, r.db, service.BorrowAcquisition{TargetID: q.TargetID, Revision: q.Revision, Lease: q.BatchID, Identity: q.Identity}, false)
 	}
 	return nil
 }
@@ -150,10 +150,11 @@ func (r *ticketBorrowRepository) MarkTargetRequestSent(ctx context.Context, q se
 
 func borrowRequestDetails(q service.BorrowRequest) ([]byte, error) {
 	return json.Marshal(struct {
-		CandidateID string                     `json:"candidate_id,omitempty"`
-		RouteID     string                     `json:"route_id,omitempty"`
-		Environment *service.BorrowEnvironment `json:"environment,omitempty"`
-	}{q.CandidateID, q.RouteID, q.Environment})
+		ContinueTimeoutSeconds int                        `json:"continue_timeout_seconds,omitempty"`
+		CandidateID            string                     `json:"candidate_id,omitempty"`
+		RouteID                string                     `json:"route_id,omitempty"`
+		Environment            *service.BorrowEnvironment `json:"environment,omitempty"`
+	}{q.ContinueTimeoutSeconds, q.CandidateID, q.RouteID, q.Environment})
 }
 func (r *ticketBorrowRepository) RenewTargetRequest(ctx context.Context, q service.BorrowRequest) error {
 	if q.Kind != "probe" {
@@ -205,13 +206,17 @@ func (r *ticketBorrowRepository) RecordProbeOutcome(ctx context.Context, id int6
 	}
 	if reason == "target_probe_passed" {
 		_, err = tx.ExecContext(ctx, `UPDATE ticket_borrow_targets SET consecutive_failures=0 WHERE account_id=$1`, id)
-	} else if reason == "target_ticket_changed" || reason == "target_probe_inconclusive" || reason == "target_route_changed" {
+	} else if reason == "target_ticket_changed" || reason == "target_probe_inconclusive" || reason == "target_route_changed" || reason == "target_continue_timeout" {
 		_, err = tx.ExecContext(ctx, `UPDATE ticket_borrow_targets SET consecutive_failures=consecutive_failures+1 WHERE account_id=$1`, id)
 	}
 	if err != nil {
 		return err
 	}
 	if retryAfter > 0 {
+		if _, err = tx.ExecContext(ctx, `WITH ended AS (UPDATE ticket_borrow_replenishment SET until_at=clock_timestamp(),reason=$2 WHERE target_id=$1 AND reason='success' RETURNING *)
+ INSERT INTO ticket_borrow_events(target_id,source_id,stage,reason,details) SELECT target_id,source_id,'replenishment','replenishment_ended',jsonb_build_object('replenishment',jsonb_build_object('environment_version',environment_version,'until',until_at,'exit_reason',reason)) FROM ended`, id, reason); err != nil {
+			return err
+		}
 		_, err = tx.ExecContext(ctx, `UPDATE ticket_borrow_targets SET upstream_wait_until=GREATEST(upstream_wait_until,clock_timestamp()+$2*INTERVAL '1 millisecond'),upstream_wait_reason=$3 WHERE account_id=$1`, id, retryAfter.Milliseconds(), reason)
 		if err != nil {
 			return err

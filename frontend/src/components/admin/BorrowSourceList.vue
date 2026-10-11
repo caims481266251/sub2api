@@ -13,18 +13,20 @@
       <Select v-model="group" class="borrow-select" :aria-label="t('ticketBorrowing.selectGroups')" :options="[{ value: 0, label: t('ticketBorrowing.management.allGroups') }, ...groups.map(g => ({ value: g.id, label: g.name }))]" :searchable="true" />
       <Select v-model="sort" class="borrow-select" :aria-label="t('ticketBorrowing.management.sort')" :options="['id', 'name'].map(value => ({ value, label: t(value === 'id' ? 'ticketBorrowing.management.sortId' : 'ticketBorrowing.management.sortName') }))" :searchable="false" />
     </div>
-    <div v-if="sources.some(s => s.use_proxy_pool)" class="borrow-batch">
-      <label class="flex items-center gap-2"><input type="checkbox" :checked="allPageSelected" :indeterminate="somePageSelected && !allPageSelected" :disabled="!selectablePage.length || busy || selectionDirty" data-testid="select-source-page" @change="selectPage(($event.target as HTMLInputElement).checked)" />{{ t('ticketBorrowing.management.selectPage') }}</label>
-      <span>{{ t('ticketBorrowing.management.selectedCount', { count: selected.length }) }}</span>
+    <div v-if="sources.some(s => s.account_id > 0)" class="borrow-batch">
+      <label class="flex items-center gap-2"><input type="checkbox" :checked="allPageSelected" :indeterminate="somePageSelected && !allPageSelected" :disabled="!selectablePage.length || busy" data-testid="select-source-page" @change="selectPage(($event.target as HTMLInputElement).checked)" />{{ t('ticketBorrowing.management.selectPage') }}</label>
+      <button class="borrow-link" :disabled="busy || !filtered.length" data-testid="select-source-matching" @click="selectIds(filtered.filter(s => s.account_id > 0).map(s => s.account_id))">{{ t('ticketBorrowing.scope.selectMatching', { count: filtered.filter(s => s.account_id > 0).length }) }}</button>
+      <span>{{ t('ticketBorrowing.scope.checked', { count: selected.length }) }}</span>
+      <button class="borrow-link" :disabled="busy || !scopeLoaded || !selected.length" data-testid="remove-selected-sources" @click="$emit('remove', [...selected])">{{ t('ticketBorrowing.scope.remove', { count: selected.length }) }}</button>
       <button class="borrow-link" :disabled="busy || selectionDirty || !rotationLoaded || !selected.some(id => allBound.includes(id))" data-testid="rotate-selected" @click="$emit('rotate', [...selected])">{{ t('ticketBorrowing.rotation.batch', { count: selected.length }) }}</button>
-      <button v-if="selected.length" class="borrow-link" @click="$emit('update:selected', [])">{{ t('ticketBorrowing.management.clearSelected') }}</button>
+      <button v-if="selected.length" class="borrow-link" @click="$emit('update:selected', [])">{{ t('ticketBorrowing.scope.clearChecks') }}</button>
     </div>
     <p v-if="selectionCleared" role="status" class="px-4 py-2 text-xs text-amber-700 dark:text-amber-300">{{ t('ticketBorrowing.management.selectionCleared') }}</p>
     <div v-if="rows.length" class="borrow-table-wrap">
       <table class="borrow-table">
         <thead><tr><th class="w-[20%]">{{ t('ticketBorrowing.name') }}</th><th class="w-[17%]">{{ t('ticketBorrowing.eligibility') }}</th><th class="w-[15%]">{{ t('ticketBorrowing.model') }}</th><th class="w-[22%]">{{ t('ticketBorrowing.poolBinding') }}</th><th class="w-[14%]">{{ t('ticketBorrowing.rotation.automatic') }}</th><th class="w-[12%]">{{ t('ticketBorrowing.management.actions') }}</th></tr></thead>
         <tbody><tr v-for="source in rows" :key="source.account_id" :data-saved-source-id="source.account_id">
-          <td class="borrow-account-cell"><div class="flex min-w-0 items-center gap-2"><input v-if="source.account_id > 0 && source.use_proxy_pool && source.unavailable_reason !== 'source_is_target'" :checked="selected.includes(source.account_id)" type="checkbox" :disabled="busy || selectionDirty" :aria-label="t('ticketBorrowing.rotation.select', { id: source.account_id })" :data-rotation-select="source.account_id" @change="selectOne(source.account_id, ($event.target as HTMLInputElement).checked)" /><button class="borrow-account" :title="source.name" @click="$emit('open', source.account_id)">{{ source.name || `#${source.account_id}` }}</button></div><span class="borrow-subline">#{{ source.account_id }} · {{ origin(source) }}</span></td>
+          <td class="borrow-account-cell"><div class="flex min-w-0 items-center gap-2"><input v-if="source.account_id > 0" :checked="selected.includes(source.account_id)" type="checkbox" :disabled="busy" :aria-label="t('ticketBorrowing.scope.checkAccount', { id: source.account_id })" :data-rotation-select="source.account_id" @change="selectOne(source.account_id, ($event.target as HTMLInputElement).checked)" /><button class="borrow-account" :title="source.name" @click="$emit('open', source.account_id)">{{ source.name || `#${source.account_id}` }}</button></div><span class="borrow-subline">#{{ source.account_id }} · {{ origin(source) }}</span></td>
           <td :data-label="t('ticketBorrowing.eligibility')"><span class="borrow-badge" :class="source.unavailable_reason ? 'borrow-badge-warn' : 'borrow-badge-good'">{{ t(source.unavailable_reason === 'source_rate_limited' ? 'ticketBorrowing.management.rateLimited' : source.unavailable_reason ? 'ticketBorrowing.management.needsAttention' : 'ticketBorrowing.management.eligible') }}</span><span class="borrow-subline" :title="result(source)">{{ result(source) }}</span><span v-if="source.unavailable_reason === 'source_rate_limited' && source.rate_limit_reset_at" class="borrow-subline" data-testid="source-rate-limit-reset">{{ t('ticketBorrowing.management.resetsAt', { time: formatReset(source.rate_limit_reset_at) }) }}</span></td>
           <td :data-label="t('ticketBorrowing.model')"><span class="borrow-truncate" :title="source.model">{{ source.model || '—' }}</span></td>
           <td :data-label="t('ticketBorrowing.poolBinding')" :data-pool-binding="source.account_id"><template v-if="source.use_proxy_pool"><span v-if="source.pool_entry_id" class="borrow-truncate" :title="source.pool_endpoint">#{{ source.pool_entry_id }} · {{ source.pool_endpoint }}</span><span v-else class="text-amber-600">{{ t('ticketBorrowing.poolBindingWaiting') }}</span><span class="borrow-subline font-mono" :title="source.fingerprint_id">{{ source.fingerprint_id || '—' }}</span></template><span v-else class="text-gray-500">{{ t('ticketBorrowing.accountProxy') }}</span></td>
@@ -43,8 +45,8 @@ import { useI18n } from 'vue-i18n'
 import type { BorrowSource, BorrowRotationState } from '@/api/admin/ticketBorrowing'
 import Select from '@/components/common/Select.vue'
 import BorrowListPagination from './BorrowListPagination.vue'
-const props = defineProps<{ sources: BorrowSource[]; rotations: BorrowRotationState[]; groups: {id: number; name: string}[]; running: boolean; busy: boolean; rotationLoaded: boolean; selectionDirty: boolean; selected: number[] }>()
-const emit = defineEmits<{ open: [id: number]; rotate: [ids: number[]]; manage: []; defaults: []; batchSettings: []; 'update:selected': [ids: number[]] }>()
+const props = defineProps<{ sources: BorrowSource[]; rotations: BorrowRotationState[]; groups: {id: number; name: string}[]; running: boolean; busy: boolean; rotationLoaded: boolean; selectionDirty: boolean; scopeLoaded?: boolean; selected: number[] }>()
+const emit = defineEmits<{ open: [id: number]; rotate: [ids: number[]]; manage: []; remove: [ids: number[]]; defaults: []; batchSettings: []; 'update:selected': [ids: number[]] }>()
 const { t, te } = useI18n()
 const search = ref(''), filter = ref('all'), group = ref(0), sort = ref('id'), page = ref(1), pageSize = ref(20), selectionCleared = ref(false)
 const filters = ['all', 'unavailable', 'unbound', 'automatic', 'manual']
@@ -66,9 +68,10 @@ watch([search, filter, group], () => { page.value = 1; selectionCleared.value = 
 watch([sort, pageSize], () => { page.value = 1 })
 const allBound = computed(() => props.sources.filter(s => s.can_rotate === true && s.use_proxy_pool && s.pool_entry_id && s.unavailable_reason !== 'source_is_target' && !rotationIndex.value.get(s.account_id)?.active_job).map(s => s.account_id))
 const configurableSources = computed(() => props.sources.filter(s => s.account_id > 0 && s.use_proxy_pool && s.unavailable_reason !== 'source_is_target'))
-const selectablePage = computed(() => rows.value.filter(s => s.account_id > 0 && s.use_proxy_pool && s.unavailable_reason !== 'source_is_target').map(s => s.account_id))
+const selectablePage = computed(() => rows.value.filter(s => s.account_id > 0).map(s => s.account_id))
 const allPageSelected = computed(() => selectablePage.value.length > 0 && selectablePage.value.every(id => props.selected.includes(id)))
 const somePageSelected = computed(() => selectablePage.value.some(id => props.selected.includes(id)))
+function selectIds(ids: number[]) { emit('update:selected', [...new Set([...props.selected, ...ids])]); selectionCleared.value = false }
 function selectPage(checked: boolean) { emit('update:selected', checked ? [...new Set([...props.selected, ...selectablePage.value])] : props.selected.filter(id => !selectablePage.value.includes(id))); selectionCleared.value = false }
 function selectOne(id: number, checked: boolean) { emit('update:selected', checked ? [...new Set([...props.selected, id])] : props.selected.filter(v => v !== id)); selectionCleared.value = false }
 </script>

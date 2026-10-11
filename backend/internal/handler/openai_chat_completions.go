@@ -149,6 +149,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 	sessionHash := h.gatewayService.GenerateSessionHash(c, body)
 	promptCacheKey := h.gatewayService.ExtractSessionID(c, body)
 
+	c.Request = c.Request.WithContext(service.WithBorrowBusinessBinding(c.Request.Context(), c.Request.Header, ""))
 	borrowCtx, borrowRecovery := service.WithBorrowBusinessRecovery(c.Request.Context(), h.cfg)
 	c.Request = c.Request.WithContext(borrowCtx)
 	defer borrowRecovery.Close()
