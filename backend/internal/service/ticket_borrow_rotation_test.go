@@ -43,74 +43,59 @@ func rotationUpstream() *boundSourceUpstream {
 	mint.cookies = nil
 	return &boundSourceUpstream{stateProbeUpstream: &stateProbeUpstream{replies: []stateProbeReply{{status: 200, cookies: []string{"__oailb=" + cookie + "; Max-Age=230"}, body: stateProbeCompletedStream}, mint, {status: 200, body: stateProbeCompletedStream}}}}
 }
-func TestTicketBorrowLegacyTargetEnvironmentStaysStableForProbesAndBusiness(t *testing.T) {
+func TestTicketBorrowCandidateEnvironmentIsIsolatedFromBusiness(t *testing.T) {
 	s, r := rotationServiceFixture()
-	up := rotationUpstream()
-	s.owner.httpUpstream = up
-	s.runTarget(t.Context(), BorrowTarget{AccountID: 11, Revision: 2}, BorrowSettings{Running: true, TTLSeconds: 230}, "worker")
-	require.Len(t, up.calls, 3)
-	require.NotNil(t, r.route)
-	for _, call := range up.calls[1:] {
-		require.Equal(t, r.env.Proxy, call.proxy)
-		require.Equal(t, r.env.DeviceID, call.header.Get("X-Codex-Installation-ID"))
-		require.Equal(t, r.env.DeviceID, call.header.Get("X-Codex-Window-ID"))
-		require.Equal(t, "Bearer target-secret", call.header.Get("Authorization"))
-	}
-	require.GreaterOrEqual(t, len(up.profiles), 2)
-	for _, profile := range up.profiles[len(up.profiles)-2:] {
-		require.Equal(t, borrowSourceProfile(r.env.DeviceID), profile)
-	}
-	// Ordinary account edits do not silently change a borrowing environment.
 	a := s.owner.accountRepo.(borrowTestAccounts).account
 	a.Proxy = &Proxy{Protocol: "http", Host: "ordinary.example", Port: 99}
 	a.ProxyID = new(int64(99))
-	require.NoError(t, s.Check(t.Context(), 11, "gpt-6-astra", "http"))
-	resp, e := s.ForwardHTTP(borrowRequest(t), "", 11, 10, nil, func(req *http.Request, proxy string, _ int64, _ int, profile *tlsfingerprint.Profile) (*http.Response, error) {
-		require.NoError(t, BorrowBeforeSend(req))
-		require.Equal(t, a.Proxy.URL(), proxy, "business uses the normal target proxy even with a legacy borrowing binding")
-		require.Equal(t, r.env.DeviceID, req.Header.Get("X-Codex-Installation-ID"))
-		require.Equal(t, borrowSourceProfile(r.env.DeviceID), profile)
+	up := rotationUpstream()
+	s.owner.httpUpstream = up
+	s.runTarget(t.Context(), BorrowTarget{AcquisitionIdentity: BorrowAcquisitionSource, AccountID: 11, Revision: 2}, BorrowSettings{Running: true, TTLSeconds: 230}, "worker")
+	require.Len(t, up.calls, 3)
+	require.NotNil(t, r.route)
+	for i, call := range up.calls {
+		require.Equal(t, "http://pool.example:80", call.proxy)
+		require.Equal(t, up.calls[0].header.Get("X-Codex-Installation-ID"), call.header.Get("X-Codex-Installation-ID"))
+		require.Equal(t, up.calls[0].header.Get("User-Agent"), call.header.Get("User-Agent"))
+		require.Equal(t, up.profiles[0], up.profiles[i])
+	}
+	require.Equal(t, "Bearer source-token", up.calls[0].header.Get("Authorization"))
+	require.Equal(t, "Bearer target-secret", up.calls[1].header.Get("Authorization"))
+	req := borrowRequest(t)
+	req.Header.Set("X-Codex-Installation-ID", "ordinary-device")
+	normalProfile := &tlsfingerprint.Profile{Name: "ordinary-profile"}
+	resp, err := s.ForwardHTTP(req, "", 11, 10, normalProfile, func(sent *http.Request, proxy string, _ int64, _ int, profile *tlsfingerprint.Profile) (*http.Response, error) {
+		require.NoError(t, BorrowBeforeSend(sent))
+		require.Equal(t, a.Proxy.URL(), proxy)
+		require.Equal(t, "ordinary-device", sent.Header.Get("X-Codex-Installation-ID"))
+		require.Same(t, normalProfile, profile)
 		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: http.NoBody}, nil
 	})
-	require.NoError(t, e)
+	require.NoError(t, err)
 	require.NoError(t, resp.Body.Close())
 	r.env.Version++
+	require.NoError(t, s.Check(t.Context(), 11, "gpt-6-astra", "http"), "legacy managed bindings do not define business identity")
+	a.Proxy = &Proxy{Protocol: "http", Host: "new-ordinary.example", Port: 99}
 	require.ErrorIs(t, s.Check(t.Context(), 11, "gpt-6-astra", "http"), ErrBorrowUnavailable)
 }
-func TestTicketBorrowLegacyTargetEnvironmentFencesProbeAfterDial(t *testing.T) {
+func TestTicketBorrowOrdinaryTargetConfigurationFencesProbeAfterDial(t *testing.T) {
 	s, r := rotationServiceFixture()
 	up := rotationUpstream()
 	s.owner.httpUpstream = up
 	up.beforeSend = func() {
 		if len(up.calls) == 1 {
-			r.env.Version++
+			a := s.owner.accountRepo.(borrowTestAccounts).account
+			a.Credentials = map[string]any{"access_token": "replacement", "chatgpt_account_id": "different"}
 		}
 	}
-	s.runTarget(t.Context(), BorrowTarget{AccountID: 11, Revision: 2}, BorrowSettings{Running: true, TTLSeconds: 230}, "worker")
-	require.Len(t, up.calls, 1, "a changed environment must prevent the target probe send")
+	s.runTarget(t.Context(), BorrowTarget{AcquisitionIdentity: BorrowAcquisitionSource, AccountID: 11, Revision: 2}, BorrowSettings{Running: true, TTLSeconds: 230}, "worker")
+	require.Len(t, up.calls, 1)
 	require.Nil(t, r.route)
-	r.envErr = ErrBorrowUnavailable
-	status, e := s.Status(t.Context(), 11)
-	require.NoError(t, e)
-	require.False(t, status.Ready)
-	require.Equal(t, "target_proxy_pool_unavailable", status.Reason)
-	r.envErr = ErrBorrowRotationPending
-	status, e = s.Status(t.Context(), 11)
-	require.NoError(t, e)
-	require.Equal(t, "borrow_rotation_pending", status.Reason)
 }
-func TestTicketBorrowRotationValidatesAndNormalizesRequests(t *testing.T) {
+func TestTicketBorrowRotationMutationsAreRetired(t *testing.T) {
 	s, r := rotationServiceFixture()
-	id := uuid.NewString()
-	for _, in := range []BorrowRotationInput{{ID: "invalid", Role: "source", AccountIDs: []int64{1}}, {ID: id, Role: "all", AccountIDs: []int64{1}}, {ID: id, Role: "target", AccountIDs: []int64{11}}, {ID: id, Role: "source", AccountIDs: []int64{-1}}} {
-		_, e := s.Rotate(t.Context(), in)
-		require.ErrorIs(t, e, ErrBorrowRotationInvalid)
-	}
-	_, e := s.Rotate(t.Context(), BorrowRotationInput{ID: id, Role: "source", AccountIDs: []int64{3, 1, 3}})
-	require.NoError(t, e)
-	require.Equal(t, []int64{1, 3}, r.queued.AccountIDs)
-	for _, n := range []int{-1, 0, 86401} {
-		require.ErrorIs(t, s.SaveRotationPolicy(t.Context(), 11, BorrowRotationPolicy{IntervalSeconds: n}), ErrBorrowRotationInvalid)
-	}
-	require.NoError(t, s.SaveRotationPolicy(t.Context(), 11, BorrowRotationPolicy{IntervalSeconds: 60, Automatic: true}))
+	_, err := s.Rotate(t.Context(), BorrowRotationInput{ID: uuid.NewString(), Role: "source", AccountIDs: []int64{3, 1}})
+	require.ErrorIs(t, err, ErrBorrowRotationRetired)
+	require.Empty(t, r.queued.AccountIDs)
+	require.ErrorIs(t, s.SaveRotationPolicy(t.Context(), 11, BorrowRotationPolicy{IntervalSeconds: 60, Automatic: true}), ErrBorrowRotationRetired)
 }

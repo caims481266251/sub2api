@@ -1423,6 +1423,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		return fmt.Errorf("build ws headers: %w", buildHdrErr)
 	}
 	baseAcquireReq := openAIWSAcquireRequest{
+		Model: firstRoutingFields[0].String(), PreviousResponseID: firstPayload.previousResponseID,
 		Account: account,
 		WSURL:   wsURL,
 		Headers: wsHeaders,
@@ -1548,6 +1549,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	var acquireTurnLease func(int, string, bool, bool) (*openAIWSConnLease, error)
 	acquireTurnLease = func(turn int, preferred string, forcePreferredConn bool, forceNewConn bool) (*openAIWSConnLease, error) {
 		req := cloneOpenAIWSAcquireRequest(baseAcquireReq)
+		req.LifetimeContext = ctx
 		req.PreferredConnID = strings.TrimSpace(preferred)
 		req.ForcePreferredConn = forcePreferredConn
 		// dedicated 模式下每次获取均新建连接，避免跨会话复用残留上下文；
@@ -2718,6 +2720,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 		}
 		setOpenAICodexRoutingHint(baseAcquireReq.Headers, account, nextRoutingFields[0].String(), nextRoutingFields[1].String())
+		baseAcquireReq.Model = nextRoutingFields[0].String()
+		baseAcquireReq.PreviousResponseID = nextPayload.previousResponseID
 		if nextPayload.previousResponseID != "" {
 			expectedPrev := strings.TrimSpace(lastTurnResponseID)
 			chainedFromLast := expectedPrev != "" && nextPayload.previousResponseID == expectedPrev

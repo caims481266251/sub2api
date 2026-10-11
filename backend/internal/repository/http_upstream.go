@@ -409,7 +409,12 @@ func doUpstreamRequest(client *http.Client, req *http.Request) (result *http.Res
 	cancel := func() { cancelCause(context.Canceled) }
 	// GotConn executes after connection-pool/DNS/TLS waiting and before writing
 	// request headers, including when net/http retries on a fresh connection.
-	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{WroteHeaders: func() { recovery.WroteHeaders(req.Context()) }, GotConn: func(info httptrace.GotConnInfo) {
+	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{WroteHeaders: func() {
+		recovery.WroteHeaders(req.Context())
+		if err := service.BorrowSourceRequestSent(req.WithContext(ctx)); err != nil {
+			cancelCause(err)
+		}
+	}, GotConn: func(info httptrace.GotConnInfo) {
 		recovery.WritePossible()
 		err := service.BorrowBeforeSend(req.WithContext(ctx))
 		if err == nil {
@@ -417,10 +422,11 @@ func doUpstreamRequest(client *http.Client, req *http.Request) (result *http.Res
 		}
 		if err != nil {
 			cancelCause(err)
-			// Borrowed routes use the verified HTTP/1 transport. This connection is
-			// exclusively owned by this request; close it before any header can race
-			// cancellation in net/http's independent writer goroutine.
-			if info.Conn != nil {
+			// Business may share an HTTP/2 connection with other requests.
+			// Cancel only this request; closing the socket would fail unrelated
+			// in-flight streams. Acquisition/probe sockets are exclusive.
+			profile := service.HTTPUpstreamProfileFromContext(req.Context())
+			if info.Conn != nil && (profile == service.HTTPUpstreamProfileOpenAIHarvest || profile == service.HTTPUpstreamProfileBorrowProbe) {
 				_ = info.Conn.Close()
 			}
 		}

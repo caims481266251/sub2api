@@ -30,7 +30,7 @@ func TestBorrowTierTriesFreeAccountBeforeReturningStickyWait(t *testing.T) {
 
 func TestOpenAIBorrowPreferredScheduling(t *testing.T) {
 	for _, mode := range []string{"legacy", "load-batch", "advanced"} {
-		for _, scenario := range []string{"ready", "busy", "no-route", "expired", "admission-cutoff", "cooldown", "disabled", "excluded", "model", "both-busy", "group", "native-previous"} {
+		for _, scenario := range []string{"ready", "alias", "future-model", "gpt-6.1-sol", "gpt-5.6-sol", "gpt-6-sol", "busy", "no-route", "expired", "admission-cutoff", "cooldown", "disabled", "excluded", "model", "both-busy", "group", "native-previous"} {
 			t.Run(mode+"/"+scenario, func(t *testing.T) {
 				resetOpenAIAdvancedSchedulerSettingCacheForTest()
 				t.Cleanup(resetOpenAIAdvancedSchedulerSettingCacheForTest)
@@ -52,6 +52,14 @@ func TestOpenAIBorrowPreferredScheduling(t *testing.T) {
 				switch scenario {
 				case "ready":
 					want = 11
+				case "gpt-6.1-sol", "gpt-5.6-sol", "gpt-6-sol":
+					model, want = scenario, 11
+				case "alias":
+					model, want = "customer-alias", 11
+					borrowed.Credentials["model_mapping"] = map[string]any{"customer-alias": "gpt-6.1-sol"}
+				case "future-model":
+					model, want = "custom-future-model", 11
+					// Borrowing must not add a model restriction to normal passthrough.
 				case "busy":
 					slots.acquireResults[11] = false
 				case "both-busy":
@@ -77,6 +85,7 @@ func TestOpenAIBorrowPreferredScheduling(t *testing.T) {
 					borrowed.GroupIDs = []int64{10}
 				case "model":
 					model = "gpt-other"
+					borrowed.Credentials["model_mapping"] = map[string]any{"gpt-6-astra": "gpt-6-astra"}
 				}
 				gateway := &OpenAIGatewayService{accountRepo: schedulerGroupAwareOpenAIAccountRepo{schedulerTestOpenAIAccountRepo{accounts: []Account{ordinary, borrowed}}}, cache: cache, cfg: cfg, concurrencyService: NewConcurrencyService(slots), borrowRoutes: borrow}
 				if mode == "advanced" {
@@ -91,7 +100,7 @@ func TestOpenAIBorrowPreferredScheduling(t *testing.T) {
 				require.NoError(t, err)
 				require.NotNil(t, selection)
 				require.Equal(t, want, selection.Account.ID)
-				require.Equal(t, scenario == "ready", decision.BorrowPreferred)
+				require.Equal(t, want == 11 && scenario != "both-busy", decision.BorrowPreferred)
 				if selection.ReleaseFunc != nil {
 					selection.ReleaseFunc()
 				}

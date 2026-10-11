@@ -49,6 +49,7 @@ type BorrowProbeBatchAccount struct {
 	Revision  *int64 `json:"revision"`
 }
 type BorrowProbeBatchInput struct {
+	UseGlobal          bool                      `json:"use_global"`
 	Accounts           []BorrowProbeBatchAccount `json:"accounts"`
 	Concurrency        *int                      `json:"concurrency"`
 	RenewBeforeSeconds *int                      `json:"renew_before_seconds"`
@@ -60,7 +61,8 @@ type BorrowProbeBatchResult struct {
 }
 
 func (s *TicketBorrowService) SaveProbePolicies(ctx context.Context, in BorrowProbeBatchInput) ([]BorrowProbeBatchResult, error) {
-	if len(in.Accounts) == 0 || len(in.Accounts) > 1000 || (in.Concurrency == nil && in.RenewBeforeSeconds == nil) ||
+	if len(in.Accounts) == 0 || len(in.Accounts) > 1000 || (!in.UseGlobal && in.Concurrency == nil && in.RenewBeforeSeconds == nil) ||
+		(in.UseGlobal && (in.Concurrency != nil || in.RenewBeforeSeconds != nil)) ||
 		(in.Concurrency != nil && (*in.Concurrency < 1 || *in.Concurrency > 32)) ||
 		(in.RenewBeforeSeconds != nil && (*in.RenewBeforeSeconds < 0 || *in.RenewBeforeSeconds > 240)) {
 		return nil, ErrBorrowProbePolicyInvalid
@@ -75,6 +77,9 @@ func (s *TicketBorrowService) SaveProbePolicies(ctx context.Context, in BorrowPr
 	// Read saved policies directly; computing live routing status is unnecessary
 	// for editing configuration and can fail independently of a policy save.
 	targets, err := s.repo.Targets(ctx)
+	if r, ok := s.repo.(BorrowAdminTargetRepository); ok {
+		targets, err = r.AdminTargets(ctx)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +101,7 @@ func (s *TicketBorrowService) SaveProbePolicies(ctx context.Context, in BorrowPr
 		}
 		// Batch edits are explicit account overrides, including accounts that
 		// previously inherited their effective values from global settings.
-		p.UseGlobal = false
+		p.UseGlobal = in.UseGlobal
 		if in.RenewBeforeSeconds != nil {
 			p.RenewBeforeSeconds = *in.RenewBeforeSeconds
 		}

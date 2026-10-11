@@ -3,7 +3,6 @@
 package repository
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -13,90 +12,75 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func borrowSetAdmissionFloor(t *testing.T, r service.TicketBorrowRepository, seconds int) {
-	t.Helper()
-	original, err := r.Settings(t.Context())
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		current, e := r.Settings(context.Background())
-		if e == nil {
-			current.MinRouteRemainingSeconds = original.MinRouteRemainingSeconds
-			_ = r.SaveSettings(context.Background(), current)
-		}
-	})
-	updated := original
-	updated.MinRouteRemainingSeconds = &seconds
-	require.NoError(t, r.SaveSettings(t.Context(), updated))
-}
-
-func TestTicketBorrowMinimumRemainingAdmissionAndLiveSettings(t *testing.T) {
+func TestTicketBorrowAdmissionWindowCompatibilityAndLiveSettings(t *testing.T) {
 	r, id, q := borrowRecoveryFixture(t)
 	ctx := t.Context()
 	settings, err := r.Settings(ctx)
 	require.NoError(t, err)
-	require.NotNil(t, settings.MinRouteRemainingSeconds)
-	require.Equal(t, 120, *settings.MinRouteRemainingSeconds)
+	require.NoError(t, r.SaveSettings(ctx, service.BorrowSettings{Revision: settings.Revision, Running: true, TTLSeconds: 230, MinRouteRemainingSeconds: new(120)}))
+	settings, err = r.Settings(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 110, settings.AdmissionSeconds(), "legacy TTL minus floor translates at the settings boundary")
+	settings.AdmissionWindowSeconds, settings.TTLSeconds, settings.MinRouteRemainingSeconds = new(80), 0, nil
+	require.NoError(t, r.SaveSettings(ctx, settings))
+	renewBorrowTestJob(t, r, q)
 	now, err := r.Now(ctx)
 	require.NoError(t, err)
-	route := &service.BorrowRoute{ID: uuid.NewString(), TargetID: id, TargetRevision: q.Revision, SourceID: 1,
-		IdentityHash: "identity", CookieHash: uuid.NewString(), ExpiresAt: now.Add(230 * time.Second)}
+	start := now.Add(-12 * time.Second)
+	route := &service.BorrowRoute{ID: uuid.NewString(), TargetID: id, TargetRevision: q.Revision,
+		AcquisitionIdentity: service.BorrowAcquisitionSelf, AcquisitionAccountID: id, AcquisitionStartedAt: &start, AdmissionUntil: start.Add(80 * time.Second),
+		IdentityHash: "identity", CookieHash: uuid.NewString(), ExpiresAt: now.Add(time.Hour)}
 	require.NoError(t, r.Publish(ctx, route, q.BatchID))
-	for _, remaining := range []int{121, 120, 119, 1} {
-		_, err = integrationDB.ExecContext(ctx, `UPDATE ticket_borrow_routes SET expires_at=clock_timestamp()+$2*INTERVAL '1 second' WHERE id=$1`, route.ID, remaining)
-		require.NoError(t, err)
-		for _, preferred := range []string{"", route.ID} {
-			got, e := r.Route(ctx, id, "identity", preferred)
-			if remaining > 120 {
-				require.NoError(t, e)
-				require.Equal(t, 120*time.Second, got.ExpiresAt.Sub(got.UsableUntil))
-			} else {
-				require.ErrorIs(t, e, service.ErrBorrowUnavailable)
-			}
-		}
+	for _, preferred := range []string{"", route.ID} {
+		got, e := r.Route(ctx, id, "identity", preferred)
+		require.NoError(t, e)
+		require.WithinDuration(t, now.Add(68*time.Second), got.UsableUntil, time.Millisecond, "acquisition and verification consume the same window")
 	}
-	_, err = integrationDB.ExecContext(ctx, `UPDATE ticket_borrow_routes SET expires_at=clock_timestamp()+INTERVAL '90 seconds' WHERE id=$1`, route.ID)
+	settings, err = r.Settings(ctx)
 	require.NoError(t, err)
-	borrowSetAdmissionFloor(t, r, 60)
+	settings.AdmissionWindowSeconds, settings.TTLSeconds, settings.MinRouteRemainingSeconds = new(10), 0, nil
+	require.NoError(t, r.SaveSettings(ctx, settings))
 	fresh := NewTicketBorrowRepository(integrationDB, r.(*ticketBorrowRepository).encryptor)
-	got, err := fresh.Route(ctx, id, "identity", route.ID)
-	require.NoError(t, err, "settings take effect without restart or route republication")
-	require.Equal(t, 60*time.Second, got.ExpiresAt.Sub(got.UsableUntil))
-	settings, err = fresh.Settings(ctx)
-	require.NoError(t, err)
-	settings.MinRouteRemainingSeconds = nil
-	require.NoError(t, fresh.SaveSettings(ctx, settings), "older clients may omit the new field")
-	settings, err = fresh.Settings(ctx)
-	require.NoError(t, err)
-	require.Equal(t, 60, *settings.MinRouteRemainingSeconds)
-	borrowSetAdmissionFloor(t, r, 120)
 	_, err = fresh.Route(ctx, id, "identity", route.ID)
-	require.ErrorIs(t, err, service.ErrBorrowUnavailable)
-	borrowSetAdmissionFloor(t, r, 0)
+	require.ErrorIs(t, err, service.ErrBorrowUnavailable, "shrinking affects old routes without restart")
+	settings, err = r.Settings(ctx)
+	require.NoError(t, err)
+	settings.AdmissionWindowSeconds, settings.TTLSeconds, settings.MinRouteRemainingSeconds = new(240), 0, nil
+	require.NoError(t, r.SaveSettings(ctx, settings))
 	_, err = fresh.Route(ctx, id, "identity", route.ID)
-	require.NoError(t, err, "zero explicitly restores expiry-only admission")
+	require.ErrorIs(t, err, service.ErrBorrowUnavailable, "a larger window cannot revive an old route")
 	var unrevoked bool
-	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT revoked_at IS NULL FROM ticket_borrow_routes WHERE id=$1`, route.ID).Scan(&unrevoked))
-	require.True(t, unrevoked, "admission does not destroy routes or in-flight bindings")
+	require.NoError(t, integrationDB.QueryRow(`SELECT revoked_at IS NULL FROM ticket_borrow_routes WHERE id=$1`, route.ID).Scan(&unrevoked))
+	require.True(t, unrevoked, "cutoff does not destroy active response/session state")
+	settings, err = r.Settings(ctx)
+	require.NoError(t, err)
+	settings.AdmissionWindowSeconds = new(80)
+	require.EqualError(t, r.SaveSettings(ctx, settings), "borrow_admission_window_invalid", "conflicting modern and legacy inputs are rejected")
 }
 
-func TestTicketBorrowMinimumRemainingBoundRouteAndCookieDeadline(t *testing.T) {
+func TestTicketBorrowAdmissionWindowBoundRouteAndCookieDeadline(t *testing.T) {
 	r, id, q := borrowRecoveryFixture(t)
 	ctx := t.Context()
 	now, err := r.Now(ctx)
 	require.NoError(t, err)
-	old := &service.BorrowRoute{ID: uuid.NewString(), TargetID: id, TargetRevision: q.Revision, SourceID: 1,
-		IdentityHash: "identity", CookieHash: uuid.NewString(), ExpiresAt: now.Add(230 * time.Second)}
+	old := borrowAdmissionFixture(&service.BorrowRoute{ID: uuid.NewString(), TargetID: id, TargetRevision: q.Revision,
+		IdentityHash: "identity", CookieHash: uuid.NewString(), ExpiresAt: now.Add(time.Hour)})
 	require.NoError(t, r.Publish(ctx, old, q.BatchID))
 	_, err = r.BindSession(ctx, id, "existing-session", old.ID)
 	require.NoError(t, err)
-	_, err = r.ObserveCookie(ctx, old.CookieHash, 119*time.Second)
+	deadline, err := r.ObserveCookie(ctx, old.CookieHash, 30*time.Second)
+	require.NoError(t, err)
+	got, err := r.Route(ctx, id, "identity", old.ID)
+	require.NoError(t, err)
+	require.WithinDuration(t, deadline, got.UsableUntil, time.Millisecond)
+	_, err = r.ObserveCookie(ctx, old.CookieHash, -time.Second)
 	require.NoError(t, err)
 	_, err = r.Route(ctx, id, "identity", old.ID)
-	require.ErrorIs(t, err, service.ErrBorrowUnavailable, "shorter cookie deadline governs admission")
+	require.ErrorIs(t, err, service.ErrBorrowUnavailable)
 	replacement := *old
 	replacement.ID, replacement.CookieHash = uuid.NewString(), uuid.NewString()
-	require.NoError(t, r.Publish(ctx, &replacement, q.BatchID), "ineligible route must not block replenishment at the smaller 15s probe window")
-	got, err := r.Route(ctx, id, "identity", "")
+	require.NoError(t, r.Publish(ctx, &replacement, q.BatchID))
+	got, err = r.Route(ctx, id, "identity", "")
 	require.NoError(t, err)
 	require.Equal(t, replacement.ID, got.ID)
 	bound, found, err := r.LookupSession(ctx, id, "existing-session")
@@ -105,7 +89,6 @@ func TestTicketBorrowMinimumRemainingBoundRouteAndCookieDeadline(t *testing.T) {
 	require.Equal(t, old.ID, bound)
 	_, err = r.Route(ctx, id, "identity", bound)
 	require.ErrorIs(t, err, service.ErrBorrowUnavailable, "continuations cannot silently switch routes")
-	require.NoError(t, r.CheckAcquisition(ctx, service.BorrowAcquisition{TargetID: id, Revision: q.Revision, Lease: q.BatchID, Identity: "identity"}), "live batch is separate from new-batch admission")
 }
 
 func TestTicketBorrowMinimumRemainingMigration(t *testing.T) {

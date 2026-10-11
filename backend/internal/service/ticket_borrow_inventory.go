@@ -41,49 +41,26 @@ type BorrowInventoryRepository interface {
 
 func EvaluateBorrowInventory(f BorrowInventoryFacts, p *BorrowReplenishmentSettings) BorrowInventory {
 	out := BorrowInventory{Count: f.Count, Desired: 1, State: "search", NextAt: f.Now, ServerNow: f.Now, RefreshGeneration: f.RefreshGeneration}
-	enabled := p != nil && p.Enabled
-	if enabled {
-		out.Desired = p.Inventory
+	if p != nil && p.Enabled {
+		out.Desired = BorrowRollingInventory
 	}
 	if f.EarliestExpiry != nil {
 		out.EarliestExpiry = f.EarliestExpiry
-		v := f.EarliestExpiry.Add(-time.Duration(f.MinRemainingSeconds) * time.Second)
-		out.EarliestAdmitUntil = &v
+		out.EarliestAdmitUntil = f.EarliestExpiry
 	}
 	switch {
 	case f.Count == 0:
 	case f.Count < out.Desired:
 		out.State = "refill"
-	case f.EarliestExpiry != nil && !f.EarliestExpiry.Add(-time.Duration(max(f.RenewBeforeSeconds, f.MinRemainingSeconds))*time.Second).After(f.Now):
+	case f.EarliestExpiry != nil && !f.EarliestExpiry.Add(-time.Duration(f.RenewBeforeSeconds)*time.Second).After(f.Now):
 		out.State = "renew"
 	default:
 		out.State = "healthy"
 	}
-	if !enabled {
-		if out.State == "healthy" && f.EarliestExpiry != nil {
-			out.NextAt = f.EarliestExpiry.Add(-time.Duration(max(f.RenewBeforeSeconds, f.MinRemainingSeconds)) * time.Second)
-		}
-		return out
-	}
-	interval := 1
-	switch out.State {
-	case "refill", "renew":
-		interval = p.IntervalSeconds
-	case "healthy":
-		interval = p.MaintenanceSeconds()
-	}
-	if f.LastStarted != nil {
-		out.NextAt = f.LastStarted.Add(time.Duration(interval) * time.Second)
-		// A loss of inventory is a new need; repeated failure in the same state is not.
-		if f.LastState == "healthy" && out.State != "healthy" {
-			out.NextAt = f.Now
-		}
-	}
 	if out.State == "healthy" && f.EarliestExpiry != nil {
-		renew := f.EarliestExpiry.Add(-time.Duration(max(f.RenewBeforeSeconds, f.MinRemainingSeconds)) * time.Second)
-		if renew.Before(out.NextAt) {
-			out.NextAt = renew
-		}
+		out.NextAt = f.EarliestExpiry.Add(-time.Duration(f.RenewBeforeSeconds) * time.Second)
+	} else if f.LastStarted != nil && f.LastState == out.State {
+		out.NextAt = f.LastStarted.Add(time.Second)
 	}
 	if f.RefreshGeneration > f.ProcessedGeneration {
 		out.NextAt = f.Now

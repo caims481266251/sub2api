@@ -3,6 +3,7 @@ package admin
 import (
 	"errors"
 	"strconv"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -17,6 +18,10 @@ func (h *AccountHandler) borrowService(c *gin.Context) *service.TicketBorrowServ
 	return h.accountTestService.TicketBorrow
 }
 func borrowError(c *gin.Context, err error) {
+	if errors.Is(err, service.ErrBorrowRotationRetired) {
+		response.ErrorWithDetails(c, 410, "Every acquisition now allocates a fresh environment", err.Error(), nil)
+		return
+	}
 	if errors.Is(err, service.ErrBorrowRotationInvalid) {
 		response.ErrorWithDetails(c, 400, "Invalid rotation selection or interval", err.Error(), nil)
 		return
@@ -30,7 +35,7 @@ func borrowError(c *gin.Context, err error) {
 		return
 	}
 	switch err.Error() {
-	case "borrow_shadow_unsupported", "borrow_probe_policy_invalid", "borrow_selection_invalid", "borrow_restore_multiple_proxies", "borrow_source_name_invalid", "borrow_source_model_invalid", "borrow_source_credentials_required", "borrow_proxy_limit", "borrow_proxy_invalid", "borrow_settings_invalid", "borrow_target_unsupported", "borrow_legacy_config_conflict", "borrow_source_is_normal_account":
+	case "borrow_acquisition_identity_invalid", "borrow_admission_window_invalid", "borrow_event_query_invalid", "borrow_shadow_unsupported", "borrow_probe_policy_invalid", "borrow_selection_invalid", "borrow_restore_multiple_proxies", "borrow_source_name_invalid", "borrow_source_model_invalid", "borrow_source_credentials_required", "borrow_proxy_limit", "borrow_proxy_invalid", "borrow_settings_invalid", "borrow_target_unsupported", "borrow_legacy_config_conflict", "borrow_source_is_normal_account":
 		response.BadRequest(c, err.Error())
 	default:
 		response.ErrorWithDetails(c, 503, "Borrowing operation failed; check configuration and credential encryption", "borrow_operation_failed", nil)
@@ -137,6 +142,17 @@ func (h *AccountHandler) BorrowSettings(c *gin.Context) {
 			return
 		}
 	}
+	if c.Request.Method == "PATCH" {
+		var input service.BorrowControls
+		if c.ShouldBindJSON(&input) != nil {
+			response.BadRequest(c, "invalid_request")
+			return
+		}
+		if err := s.SaveControls(c.Request.Context(), input); err != nil {
+			borrowError(c, err)
+			return
+		}
+	}
 	v, err := s.Settings(c.Request.Context())
 	if err != nil {
 		borrowError(c, err)
@@ -149,7 +165,7 @@ func (h *AccountHandler) BorrowTargets(c *gin.Context) {
 	if s == nil {
 		return
 	}
-	items, err := s.Targets(c.Request.Context())
+	items, err := s.Targets(c.Request.Context(), c.Query("include_disabled") == "true")
 	if err != nil {
 		borrowError(c, err)
 		return
@@ -167,14 +183,26 @@ func (h *AccountHandler) BorrowTarget(c *gin.Context) {
 	}
 	if c.Request.Method == "PUT" {
 		var input struct {
-			Enabled  *bool  `json:"enabled"`
-			Revision *int64 `json:"revision"`
+			Enabled             *bool   `json:"enabled"`
+			Revision            *int64  `json:"revision"`
+			AcquisitionIdentity *string `json:"acquisition_identity"`
+			AcquisitionRevision *int64  `json:"acquisition_revision"`
 		}
 		if c.ShouldBindJSON(&input) != nil || input.Enabled == nil || input.Revision == nil {
 			response.BadRequest(c, "enabled_and_revision_required")
 			return
 		}
-		if err := s.SetTarget(c.Request.Context(), id, *input.Enabled, *input.Revision); err != nil {
+		var err error
+		if input.AcquisitionIdentity != nil {
+			if input.AcquisitionRevision == nil {
+				response.BadRequest(c, "acquisition_revision_required")
+				return
+			}
+			err = s.SetTargetIdentity(c.Request.Context(), id, *input.Enabled, *input.Revision, *input.AcquisitionRevision, *input.AcquisitionIdentity)
+		} else {
+			err = s.SetTarget(c.Request.Context(), id, *input.Enabled, *input.Revision)
+		}
+		if err != nil {
 			borrowError(c, err)
 			return
 		}
@@ -206,9 +234,28 @@ func (h *AccountHandler) BorrowEvents(c *gin.Context) {
 	if s == nil {
 		return
 	}
-	before, _ := strconv.ParseInt(c.Query("before"), 10, 64)
-	target, _ := strconv.ParseInt(c.Query("target_id"), 10, 64)
-	items, err := s.Events(c.Request.Context(), before, target)
+	q := service.BorrowEventQuery{Stage: c.Query("stage"), Reason: c.Query("reason"), CandidateID: c.Query("candidate_id"), RouteID: c.Query("route_id"), Search: c.Query("search"), HideRotations: c.Query("hide_rotations") == "true"}
+	for key, dest := range map[string]*int64{"before": &q.Before, "after": &q.After, "target_id": &q.TargetID, "source_account_id": &q.SourceAccount, "source_id": &q.SourceID} {
+		if raw := c.Query(key); raw != "" {
+			n, err := strconv.ParseInt(raw, 10, 64)
+			if err != nil {
+				response.BadRequest(c, "borrow_event_query_invalid")
+				return
+			}
+			*dest = n
+		}
+	}
+	for key, dest := range map[string]*time.Time{"since": &q.Since, "until": &q.Until} {
+		if raw := c.Query(key); raw != "" {
+			value, err := time.Parse(time.RFC3339Nano, raw)
+			if err != nil {
+				response.BadRequest(c, "borrow_event_query_invalid")
+				return
+			}
+			*dest = value
+		}
+	}
+	items, err := s.QueryEvents(c.Request.Context(), q)
 	if err != nil {
 		borrowError(c, err)
 		return
@@ -326,7 +373,7 @@ func (h *AccountHandler) BorrowSaveProbePolicy(c *gin.Context) {
 		RenewBeforeSeconds *int   `json:"renew_before_seconds"`
 		UseGlobal          bool   `json:"use_global"`
 	}
-	if c.ShouldBindJSON(&input) != nil || input.Revision == nil || (!input.UseGlobal && (input.Concurrency == nil || input.RenewBeforeSeconds == nil)) {
+	if c.ShouldBindJSON(&input) != nil || input.Revision == nil || (!input.UseGlobal && input.Concurrency == nil) {
 		response.BadRequest(c, "borrow_probe_policy_invalid")
 		return
 	}
@@ -347,4 +394,19 @@ func (h *AccountHandler) BorrowSaveProbePolicy(c *gin.Context) {
 		return
 	}
 	response.Success(c, item)
+}
+
+func (h *AccountHandler) BorrowStatistics(c *gin.Context) {
+	s := h.borrowService(c)
+	if s == nil {
+		return
+	}
+	target, _ := strconv.ParseInt(c.Query("target_id"), 10, 64)
+	minutes, _ := strconv.Atoi(c.DefaultQuery("minutes", "15"))
+	stats, err := s.Statistics(c.Request.Context(), target, minutes)
+	if err != nil {
+		borrowError(c, err)
+		return
+	}
+	response.Success(c, stats)
 }

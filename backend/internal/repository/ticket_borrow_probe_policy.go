@@ -11,12 +11,11 @@ func (r *ticketBorrowRepository) SaveProbePolicy(ctx context.Context, id int64, 
 		return service.ErrBorrowProbePolicyInvalid
 	}
 	res, err := r.db.ExecContext(ctx, `UPDATE ticket_borrow_targets SET
- probe_concurrency=CASE WHEN $5 THEN probe_concurrency ELSE $2 END,
- renew_before_seconds=CASE WHEN $5 THEN renew_before_seconds ELSE $3 END,
- probe_policy_override=NOT $5,probe_policy_revision=probe_policy_revision+1,
+ probe_concurrency=CASE WHEN $4 THEN probe_concurrency ELSE $2 END,
+ probe_policy_override=NOT $4,probe_policy_revision=probe_policy_revision+1,
  refresh_generation=refresh_generation+1,next_probe_at=clock_timestamp(),next_attempt_at=clock_timestamp(),updated_at=clock_timestamp()
- WHERE account_id=$1 AND probe_policy_revision=$4
- AND EXISTS(SELECT 1 FROM accounts a WHERE a.id=$1 AND a.deleted_at IS NULL)`, id, p.Concurrency, p.RenewBeforeSeconds, p.Revision, p.UseGlobal)
+ WHERE account_id=$1 AND probe_policy_revision=$3
+ AND EXISTS(SELECT 1 FROM accounts a WHERE a.id=$1 AND a.deleted_at IS NULL)`, id, p.Concurrency, p.Revision, p.UseGlobal)
 	if err != nil {
 		return err
 	}

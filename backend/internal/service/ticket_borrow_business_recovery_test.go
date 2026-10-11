@@ -147,15 +147,13 @@ func TestBorrowBusinessRecoveryScopeAndObserver(t *testing.T) {
 	require.Nil(t, disabled)
 
 	ctx, r = recoveryFixture(t)
-	b := &borrowObservedBody{recoveryContext: ctx}
-	b.line([]byte(`data: {"type":"response.output_item.added","item":{"type":"reasoning","summary":[]}}`))
+	r.ObserveSSE(ctx, []byte(`{"type":"response.output_item.added","item":{"type":"reasoning","summary":[]}}`), "")
 	require.False(t, r.committed, "empty metadata is not model output")
-	b.line([]byte(`data: {"type":"response.output_text.delta","delta":"hello"}`))
+	r.ObserveSSE(ctx, []byte(`{"type":"response.output_text.delta","delta":"hello"}`), "")
 	require.True(t, r.committed)
 
 	ctx, r = recoveryFixture(t)
-	b = &borrowObservedBody{recoveryContext: ctx}
-	b.line([]byte(`data: {"type":"response.failed","response":{"status":"failed","error":{"code":"server_error"}}}`))
+	r.ObserveSSE(ctx, []byte(`{"type":"response.failed","response":{"status":"failed","error":{"code":"server_error"}}}`), "")
 	require.True(t, r.explicitFailure)
 	require.False(t, r.committed)
 }

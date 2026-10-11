@@ -69,7 +69,7 @@ func TestBorrowHTTPContinuationScopeAndInput(t *testing.T) {
 		disable               bool
 	}{
 		{"unknown", "resp_unknown", "gpt-6-astra", false},
-		{"different model", "resp_original", "gpt-6-luna", false},
+		{"missing model", "resp_original", "", false},
 		{"disabled", "resp_original", "gpt-6-astra", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -120,6 +120,7 @@ func TestBorrowHTTPContinuationFinalTransportAndBinding(t *testing.T) {
 			ctx := context.WithValue(t.Context(), borrowHTTPContinuationKey{}, &borrowHTTPContinuation{TargetID: 11, Response: borrowResponseKey("resp_old"), Session: "original-hash", FreshSession: "new-effective-session"})
 			req, err := http.NewRequestWithContext(ctx, "POST", chatgptCodexURL, strings.NewReader(`{"model":"gpt-6-astra","previous_response_id":"resp_old","input":"full current input","prompt_cache_key":"old-cache","client_metadata":{"thread_id":"old-thread","other":"preserve"}}`))
 			require.NoError(t, err)
+			req.Header.Set("Authorization", "Bearer target-secret")
 			req.Header.Set("session_id", "original")
 			req.Header.Set("X-Codex-Turn-State", "current-turn")
 			req.Header.Set("X-Codex-Thread-ID", "old-thread")

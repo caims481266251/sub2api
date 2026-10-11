@@ -12,7 +12,7 @@ import (
 )
 
 func TestBorrowNormalFlowAdmissionNeverSendsIneligibleAccounts(t *testing.T) {
-	for _, name := range []string{"disabled", "unschedulable", "expired", "rate limited", "temporary", "overload", "quota", "model runtime", "shadow", "legacy", "no pool", "missing proxy", "missing fingerprint"} {
+	for _, name := range []string{"disabled", "unschedulable", "expired", "rate limited", "temporary", "overload", "quota", "model runtime", "shadow", "legacy", "empty global pool"} {
 		t.Run(name, func(t *testing.T) {
 			s, r, accounts, _ := borrowSourceStatusFixture()
 			a := accounts.account
@@ -43,16 +43,12 @@ func TestBorrowNormalFlowAdmissionNeverSendsIneligibleAccounts(t *testing.T) {
 				a.ParentAccountID = &id
 			case "legacy":
 				r.source.AccountID = 0
-			case "no pool":
-				r.source.UseProxyPool = false
-			case "missing proxy":
-				r.source.Secret.Proxies = nil
-			case "missing fingerprint":
-				r.source.Secret.Fingerprint = nil
+			case "empty global pool":
+				r.environmentError = ErrBorrowRotationNoProxy
 			}
 			up := &borrowStatusUpstream{}
 			s.owner.httpUpstream = up
-			_, _, err := s.acquireSource(t.Context(), r.source, BorrowSettings{TTLSeconds: 230})
+			_, _, err := s.acquireSource(borrowTestCandidateContext(t.Context()), r.source, BorrowSettings{TTLSeconds: 230})
 			require.Error(t, err)
 			require.Zero(t, up.calls, "invalid source must never reach transport")
 		})
@@ -60,7 +56,7 @@ func TestBorrowNormalFlowAdmissionNeverSendsIneligibleAccounts(t *testing.T) {
 }
 
 func TestBorrowNormalFlowRechecksHealthAfterConnectionWait(t *testing.T) {
-	for _, change := range []string{"disabled", "cooldown", "token", "proxy", "fingerprint"} {
+	for _, change := range []string{"disabled", "cooldown", "token", "global proxy disabled"} {
 		t.Run(change, func(t *testing.T) {
 			s, r, accounts, _ := borrowSourceStatusFixture()
 			up := &boundSourceUpstream{stateProbeUpstream: &stateProbeUpstream{}}
@@ -74,18 +70,13 @@ func TestBorrowNormalFlowRechecksHealthAfterConnectionWait(t *testing.T) {
 					a.RateLimitResetAt = &until
 				case "token":
 					a.Credentials = map[string]any{"access_token": "replacement"}
-				case "proxy":
-					r.source.Secret.Proxies = []string{"http://changed.example:80"}
-				case "fingerprint":
-					f, err := NewBorrowFingerprint()
-					require.NoError(t, err)
-					r.source.Secret.Fingerprint = f
-					r.source.Secret.DeviceID = f.DeviceID
+				case "global proxy disabled":
+					r.environmentCheck = func() error { return ErrBorrowUnavailable }
 				}
 				accounts.account = &a
 			}
 			s.owner.httpUpstream = up
-			_, _, err := s.acquireSource(t.Context(), r.source, BorrowSettings{TTLSeconds: 230})
+			_, _, err := s.acquireSource(borrowTestCandidateContext(t.Context()), r.source, BorrowSettings{TTLSeconds: 230})
 			require.Error(t, err)
 			require.Empty(t, up.calls, "connection acquisition must not authorize stale state")
 		})
@@ -157,8 +148,11 @@ func TestBorrowNormalFlowFinal429DoesNotChangeBusinessRetryWindow(t *testing.T) 
 
 type borrowLeaseRaceRepo struct{ *observationWorkerRepo }
 
-func (r *borrowLeaseRaceRepo) AcquireJob(_ context.Context, kind string, id int64, _ string) (bool, error) {
-	return kind != "source" || id != 1, nil
+func (r *borrowLeaseRaceRepo) GrantSourceAttempt(_ context.Context, id int64, _ string) (bool, error) {
+	if id == 1 {
+		return false, ErrBorrowUnavailable
+	}
+	return true, nil
 }
 func TestTicketBorrowBatchRefillsAfterSourceLeaseRace(t *testing.T) {
 	s, base := borrowFixture()
@@ -167,7 +161,7 @@ func TestTicketBorrowBatchRefillsAfterSourceLeaseRace(t *testing.T) {
 	s.repo = r
 	up := &observationWorkerUpstream{}
 	s.owner.httpUpstream = up
-	s.runTarget(t.Context(), BorrowTarget{AccountID: 11, Revision: 2, ProbePolicy: BorrowProbePolicy{Concurrency: 1}}, BorrowSettings{Running: true, TTLSeconds: 230}, "refill")
+	s.runTarget(t.Context(), BorrowTarget{AcquisitionIdentity: BorrowAcquisitionSource, AccountID: 11, Revision: 2, ProbePolicy: BorrowProbePolicy{Concurrency: 1}}, BorrowSettings{Running: true, TTLSeconds: 230}, "refill")
 	require.Equal(t, 1, up.sourceCalls)
 	require.NotNil(t, base.route)
 	require.Equal(t, int64(2), base.route.SourceID)

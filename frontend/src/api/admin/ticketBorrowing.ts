@@ -23,13 +23,16 @@ export interface BorrowProbePolicy { revision: number; concurrency: number; rene
 export interface BorrowProbeBatchAccount { account_id: number; revision: number; name: string }
 export interface BorrowProbeBatchInput {
  accounts: { account_id: number; revision: number }[]
+ use_global?: boolean
  concurrency?: number
  renew_before_seconds?: number
 }
 export interface BorrowProbeBatchResult { account_id: number; status: 'saved' | 'failed'; reason?: string }
 export interface BorrowTarget {
+ acquisition_identity?: 'self' | 'source'; acquisition_revision?: number
  inventory_count?: number; desired_inventory?: number; maintenance_state?: 'search' | 'refill' | 'renew' | 'healthy'; next_probe_at?: string; earliest_admit_until?: string; refresh_generation?: number; blocked_reason?: string
 
+ preferred_route_id?: string
  business_routes?: BorrowRouteStatus[]
  business_inflight?: number
  business_concurrency?: number
@@ -45,18 +48,20 @@ export interface BorrowTarget {
   expires_at?: string; usable_until?: string; server_now: string; next_attempt_at: string
 }
 export interface BorrowRouteStatus {
- id: string; gateway: string; source_account_id: number
+ id: string; gateway: string; source_account_id: number; published_at?: string; checked_at?: string
  expires_at: string; usable_until: string
  inventory_eligible: boolean; usable: boolean; inflight: number
 }
 export interface BorrowRecoverySettings { enabled: boolean; failure_threshold: number; cooldown_seconds: number[]; probe_requests_per_minute: number; source_requests_per_minute?: number }
 export interface BorrowReplenishmentSettings { enabled: boolean; inventory: number; interval_seconds: number; hold_seconds: number; maintenance_interval_seconds?: number }
-export const defaultBorrowReplenishment = (): BorrowReplenishmentSettings => ({ enabled: false, inventory: 2, interval_seconds: 10, hold_seconds: 150, maintenance_interval_seconds: 30 })
-export interface BorrowSettings { replenishment?: BorrowReplenishmentSettings; continue_timeout_seconds?: number; revision?:number; running: boolean; ttl_seconds: number; min_route_remaining_seconds?: number; probe_concurrency?: number; renew_before_seconds?: number; prewarm_seconds: number; recovery?: BorrowRecoverySettings; server_now?: string; source_budget?: { used: number; limit: number; available_at?: string } }
+export const defaultBorrowReplenishment = (): BorrowReplenishmentSettings => ({ enabled: false, inventory: 2, interval_seconds: 1, hold_seconds: 0 })
+export interface BorrowSettings { admission_window_seconds?: number; replenishment?: BorrowReplenishmentSettings; continue_timeout_seconds?: number; revision?:number; running: boolean; ttl_seconds: number; min_route_remaining_seconds?: number; probe_concurrency?: number; renew_before_seconds?: number; prewarm_seconds: number; recovery?: BorrowRecoverySettings; server_now?: string; source_budget?: { used: number; limit: number; available_at?: string } }
 export interface BorrowEnvironment {
   identity_hash?: string; profile_hash?: string; configured_proxy_hash?: string; client_version?: string; body_hash?: string
 }
 export interface BorrowCandidateDetails {
+ acquisition_identity?: 'self' | 'source'; acquisition_started_at?: string; admission_until?: string; upstream_expires_at?: string
+ pool_entry_id?: number; allocation_round?: number; proxy_session_randomized?: boolean; business?: BorrowEnvironment
  replenishment?: { environment_version?: number; until?: string; shadow?: boolean; inventory?: number; exit_reason?: string }
  source_environment_version?: number; source_rotation_revision?: number
  rotation?: {skipped?: boolean; job_id: string; role: string; trigger: string; account_id: number; previous_entry_id: number; entry_id: number; environment_version: number; selection_kind?: string}
@@ -72,12 +77,14 @@ export interface BorrowEvent {
   stage: string; reason: string; created_at: string
   details?: BorrowCandidateDetails
 }
+export interface BorrowEventQuery { before?: number; after?: number; target_id?: number; source_account_id?: number; source_id?: number; stage?: string; reason?: string; candidate_id?: string; route_id?: string; search?: string; since?: string; until?: string; hide_rotations?: boolean }
 const base = '/admin/accounts/ticket-borrowing'
 export const ticketBorrowing = {
  rotations: async () => (await apiClient.get<BorrowRotationState[]>(`${base}/rotations`)).data,
  rotate: async (role: 'source', account_ids: number[], request_id: string) => (await apiClient.post<BorrowRotationJob>(`${base}/rotations`, { role, account_ids, request_id })).data,
  saveRotationPolicy: async (id: number, policy: BorrowRotationPolicy) => (await apiClient.put<BorrowRotationState[]>(`/admin/accounts/${id}/ticket-borrowing/rotation`, policy)).data,
  saveRotationPolicies: async (input: BorrowRotationBatchInput) => (await apiClient.put<BorrowRotationBatchResult[]>(`${base}/rotations`, input)).data,
+  statistics: async (target_id: number, minutes = 15) => (await apiClient.get<BorrowStatistics>(`${base}/statistics`, { params: { target_id, minutes } })).data,
   selection: async () => (await apiClient.get<BorrowSelection>(`${base}/selection`)).data,
   saveSelection: async (value: BorrowSelection) => (await apiClient.put<BorrowSelection>(`${base}/selection`, value)).data,
   sourceOptions: async () => (await apiClient.get<BorrowSourceOptions>(`${base}/source-options`)).data,
@@ -90,15 +97,21 @@ export const ticketBorrowing = {
     ? (await apiClient.put<BorrowSource>(`${base}/sources/${id}`, input)).data
     : (await apiClient.post<BorrowSource>(`${base}/sources`, input)).data,
   deleteSource: async (source: BorrowSource) => apiClient.delete(`${base}/sources/${source.id}`, { params: { revision: source.revision } }),
-  targets: async () => (await apiClient.get<BorrowTarget[]>(`${base}/targets`)).data,
-  saveProbePolicy: async (id: number, policy: BorrowProbePolicy) => (await apiClient.put<BorrowTarget>(`/admin/accounts/${id}/ticket-borrowing/probe-policy`, policy)).data,
+  targets: async () => (await apiClient.get<BorrowTarget[]>(`${base}/targets`, { params: { include_disabled: true } })).data,
+  saveProbePolicy: async (id: number, policy: BorrowProbePolicy) => (await apiClient.put<BorrowTarget>(`/admin/accounts/${id}/ticket-borrowing/probe-policy`, { revision: policy.revision, concurrency: policy.concurrency, use_global: policy.use_global })).data,
   saveProbePolicies: async (input: BorrowProbeBatchInput) => (await apiClient.put<BorrowProbeBatchResult[]>(`${base}/probe-policies`, input)).data,
   target: async (id: number) => (await apiClient.get<BorrowTarget>(`/admin/accounts/${id}/ticket-borrowing`)).data,
-  setTarget: async (id: number, enabled: boolean, revision: number) => (await apiClient.put<BorrowTarget>(`/admin/accounts/${id}/ticket-borrowing`, { enabled, revision })).data,
+  setTarget: async (id: number, enabled: boolean, revision: number, acquisition_identity?: 'self' | 'source', acquisition_revision?: number) => (await apiClient.put<BorrowTarget>(`/admin/accounts/${id}/ticket-borrowing`, { enabled, revision, acquisition_identity, acquisition_revision })).data,
   refreshTarget: async (id: number) => apiClient.post(`/admin/accounts/${id}/ticket-borrowing/refresh`),
   settings: async () => (await apiClient.get<BorrowSettings>(`${base}/settings`)).data,
-  saveSettings: async (value: BorrowSettings) => (await apiClient.put<BorrowSettings>(`${base}/settings`, value)).data,
-  events: async (before = 0) => (await apiClient.get<BorrowEvent[]>(`${base}/events`, { params: { before } })).data
+  saveControls: async (value: { revision: number; running?: boolean; replenishment_enabled?: boolean }) => (await apiClient.patch<BorrowSettings>(`${base}/settings`, value)).data,
+  saveSettings: async (value: BorrowSettings) => (await apiClient.put<BorrowSettings>(`${base}/settings`, {
+    revision: value.revision, running: value.running,
+    admission_window_seconds: value.admission_window_seconds ?? Math.max(1, value.ttl_seconds - (value.min_route_remaining_seconds ?? 0)),
+    probe_concurrency: value.probe_concurrency, continue_timeout_seconds: value.continue_timeout_seconds,
+    recovery: value.recovery, replenishment: { enabled: value.replenishment?.enabled ?? false }
+  })).data,
+  events: async (query: BorrowEventQuery | number = {}) => (await apiClient.get<BorrowEvent[]>(`${base}/events`, { params: typeof query === 'number' ? { before: query } : query })).data
 }
 
 export interface BorrowRotationPolicy { revision: number; automatic: boolean; interval_seconds: number }
@@ -114,3 +127,9 @@ export interface BorrowRotationState extends BorrowRotationPolicy {
  next_at?: string; last_at?: string; pool_entry_id?: number; pool_endpoint?: string; fingerprint_id?: string; environment_version: number; server_now: string
 }
 export interface BorrowRotationJob { skipped?: { account_id: number; reason: string }[]; id: string; role: 'source'; account_ids: number[]; phase: string; reason: string }
+
+export interface BorrowStatistics {
+ target_id: number; since: string; until: string
+ passed: number; published: number; ticket_changed: number; timeout: number; cancelled: number; other: number; skipped: number; inflight: number
+ routes: { route_id: string; gateway: string; requests: number; completed: number; interrupted: number; unconfirmed: number; visible_samples: number; visible_average_ms: number | null; semantic_samples: number; semantic_average_ms: number | null; average_age_ms: number | null; latest_usage_id: number }[]
+}

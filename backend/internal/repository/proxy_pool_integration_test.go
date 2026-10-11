@@ -17,10 +17,10 @@ import (
 
 func poolFixture(t *testing.T) (service.ProxyPoolRepository, *service.ProxyPoolService, service.OpenAICredentialEncryptor) {
 	t.Helper()
-	_, err := integrationDB.Exec(`TRUNCATE ticket_borrow_proxy_usage,ticket_borrow_fingerprint_history,ticket_borrow_rotation_assignments,ticket_borrow_rotation_accounts,ticket_borrow_rotation_jobs,ticket_borrow_proxy_bindings,proxy_pool_entries; UPDATE proxy_pool_state SET revision=1 WHERE id=1`)
+	_, err := integrationDB.Exec(`TRUNCATE ticket_borrow_candidate_environments,ticket_borrow_candidate_proxy_usage,ticket_borrow_proxy_usage,ticket_borrow_fingerprint_history,ticket_borrow_rotation_assignments,ticket_borrow_rotation_accounts,ticket_borrow_rotation_jobs,ticket_borrow_proxy_bindings,proxy_pool_entries; UPDATE proxy_pool_state SET revision=1 WHERE id=1`)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_, _ = integrationDB.Exec(`TRUNCATE ticket_borrow_proxy_usage,ticket_borrow_fingerprint_history,ticket_borrow_rotation_assignments,ticket_borrow_rotation_accounts,ticket_borrow_rotation_jobs,ticket_borrow_proxy_bindings,proxy_pool_entries; UPDATE proxy_pool_state SET revision=1 WHERE id=1`)
+		_, _ = integrationDB.Exec(`TRUNCATE ticket_borrow_candidate_environments,ticket_borrow_candidate_proxy_usage,ticket_borrow_proxy_usage,ticket_borrow_fingerprint_history,ticket_borrow_rotation_assignments,ticket_borrow_rotation_accounts,ticket_borrow_rotation_jobs,ticket_borrow_proxy_bindings,proxy_pool_entries; UPDATE proxy_pool_state SET revision=1 WHERE id=1`)
 	})
 	cfg := &config.Config{Totp: config.TotpConfig{EncryptionKey: strings.Repeat("ab", 32), EncryptionKeyConfigured: true}}
 	aes, err := NewAESEncryptor(cfg)

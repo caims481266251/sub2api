@@ -16,7 +16,7 @@ func (r *ticketBorrowRepository) QueueSourceAttempt(ctx context.Context, source 
 		return service.ErrBorrowUnavailable
 	}
 	_, err := r.db.ExecContext(ctx, `INSERT INTO ticket_borrow_source_intents(id,target_id,batch_id,source_id,category,expires_at)
- SELECT $1,account_id,lease_token,$2,CASE WHEN last_inventory_state='search' THEN 'search' WHEN last_inventory_state='healthy' THEN 'healthy' ELSE 'refill' END,
+ SELECT $1,account_id,lease_token,NULLIF($2,0),CASE WHEN last_inventory_state='search' THEN 'search' WHEN last_inventory_state='healthy' THEN 'healthy' ELSE 'refill' END,
  LEAST(lease_until,last_batch_started_at+INTERVAL '150 seconds') FROM ticket_borrow_targets
  WHERE account_id=$3 AND lease_token=$4 AND lease_until>clock_timestamp()
  ON CONFLICT(id) DO NOTHING`, id, source, a.TargetID, a.Lease)
@@ -71,30 +71,34 @@ func (r *ticketBorrowRepository) GrantSourceAttempt(ctx context.Context, source 
 	// Remove stale intents independently of who reaches the arbiter first.
 	if _, err = tx.ExecContext(ctx, `DELETE FROM ticket_borrow_source_intents i WHERE expires_at<=clock_timestamp() OR NOT EXISTS(
  SELECT 1 FROM ticket_borrow_targets t CROSS JOIN ticket_borrow_settings cfg WHERE cfg.id=1 AND t.account_id=i.target_id AND t.enabled AND cfg.running
- AND t.lease_token=i.batch_id AND t.lease_until>clock_timestamp() AND t.lease_settings_revision=cfg.revision AND t.lease_policy_revision=t.probe_policy_revision)`); err != nil {
+ AND t.lease_token=i.batch_id AND t.lease_until>clock_timestamp() AND t.lease_settings_revision=cfg.revision AND t.lease_policy_revision=t.probe_policy_revision AND t.lease_acquisition_revision=t.acquisition_revision)`); err != nil {
 		return false, err
 	}
 	// Qualification mirrors ordinary source selection, including exclusions.
-	eligible := ` FROM ticket_borrow_source_intents i JOIN ticket_borrow_sources s ON s.id=i.source_id
- JOIN accounts a ON a.id=s.account_id CROSS JOIN ticket_borrow_selection c
+	eligible := ` FROM ticket_borrow_source_intents i
  JOIN ticket_borrow_targets t ON t.account_id=i.target_id
+ LEFT JOIN ticket_borrow_sources s ON s.id=i.source_id
+ JOIN accounts a ON a.id=COALESCE(s.account_id,t.account_id)
  JOIN accounts ta ON ta.id=t.account_id
+ CROSS JOIN ticket_borrow_selection c
  LEFT JOIN ticket_borrow_source_grants g ON g.target_id=i.target_id
- WHERE c.id=1 AND c.use_proxy_pool AND s.enabled AND s.deleted_at IS NULL AND s.next_attempt_at<=clock_timestamp()
- AND (s.lease_until IS NULL OR s.lease_until<=clock_timestamp()) AND ` + borrowNormalScope + `
+ WHERE c.id=1 AND (
+ (i.source_id IS NULL AND t.acquisition_identity='self') OR
+ (i.source_id IS NOT NULL AND t.acquisition_identity='source' AND s.enabled AND s.deleted_at IS NULL
+ AND s.next_attempt_at<=clock_timestamp() AND (s.lease_until IS NULL OR s.lease_until<=clock_timestamp())
+ AND ` + borrowNormalScope + ` AND NOT EXISTS(SELECT 1 FROM ticket_borrow_targets st WHERE st.account_id=a.id AND st.enabled)))
  AND a.deleted_at IS NULL AND a.status='active' AND a.schedulable
  AND (NOT a.auto_pause_on_expired OR a.expires_at IS NULL OR a.expires_at>clock_timestamp())
  AND COALESCE(a.rate_limit_reset_at<=clock_timestamp(),true) AND COALESCE(a.overload_until<=clock_timestamp(),true) AND COALESCE(a.temp_unschedulable_until<=clock_timestamp(),true)
+ AND t.lease_acquisition_revision=t.acquisition_revision
  AND t.lease_account_signature=` + strings.ReplaceAll(borrowAccountSignature, "a.", "ta.") + `
  AND ta.deleted_at IS NULL AND ta.status='active' AND ta.schedulable
  AND (NOT ta.auto_pause_on_expired OR ta.expires_at IS NULL OR ta.expires_at>clock_timestamp())
  AND COALESCE(t.upstream_wait_until<=clock_timestamp(),true) AND COALESCE(t.budget_wait_until<=clock_timestamp(),true)
- AND NOT EXISTS(SELECT 1 FROM ticket_borrow_targets st WHERE st.account_id=a.id AND st.enabled)
- AND EXISTS(SELECT 1 FROM ticket_borrow_proxy_bindings b JOIN proxy_pool_entries p ON p.id=b.entry_id WHERE b.account_id=a.id AND b.role='source' AND p.enabled AND p.retired_at IS NULL)
- AND NOT EXISTS(SELECT 1 FROM ticket_borrow_rotation_accounts rot WHERE rot.account_id=a.id AND
- ((rot.phase='draining' AND rot.active_job IS NOT NULL) OR (rot.automatic AND rot.next_at<=clock_timestamp() AND NOT EXISTS(SELECT 1 FROM ticket_borrow_active_replenishment w WHERE w.source_account_id=a.id))))`
+ AND EXISTS(SELECT 1 FROM proxy_pool_entries WHERE enabled AND retired_at IS NULL)`
+
 	var own bool
-	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1`+eligible+` AND i.id=$1)`, id).Scan(&own); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1`+eligible+` AND i.id=$1 AND i.target_id=$2 AND i.batch_id=$3 AND COALESCE(i.source_id,0)=$4)`, id, a.TargetID, a.Lease, source).Scan(&own); err != nil {
 		return false, err
 	}
 	if !own {
@@ -118,21 +122,25 @@ func (r *ticketBorrowRepository) GrantSourceAttempt(ctx context.Context, source 
 	if winner != id {
 		return false, tx.Commit()
 	}
-	res, err := tx.ExecContext(ctx, `UPDATE ticket_borrow_sources SET lease_token=$2,lease_until=clock_timestamp()+INTERVAL '180 seconds',cursor=cursor+1
+	if source > 0 {
+		res, e := tx.ExecContext(ctx, `UPDATE ticket_borrow_sources SET lease_token=$2,lease_until=clock_timestamp()+INTERVAL '180 seconds',cursor=cursor+1
  WHERE id=$1 AND (lease_until IS NULL OR lease_until<=clock_timestamp())`, source, id)
-	if err != nil {
+		if e != nil {
+			return false, e
+		}
+		n, e := res.RowsAffected()
+		if e != nil {
+			return false, e
+		}
+		if n != 1 {
+			return false, nil
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO ticket_borrow_source_attempts(source_id,intent_id,target_id,acquisition_account_id)
+ VALUES(NULLIF($1,0),$2,$3,CASE WHEN $1=0 THEN $3 ELSE (SELECT account_id FROM ticket_borrow_sources WHERE id=$1) END)`, source, id, a.TargetID); err != nil {
 		return false, err
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return false, err
-	}
-	if n != 1 {
-		return false, nil
-	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO ticket_borrow_source_attempts(source_id,intent_id,target_id) VALUES($1,$2,$3)`, source, id, a.TargetID); err != nil {
-		return false, err
-	}
+
 	if _, err = tx.ExecContext(ctx, `UPDATE ticket_borrow_source_arbiter SET cursor=$1 WHERE id=1`, next); err != nil {
 		return false, err
 	}
@@ -153,12 +161,12 @@ func (r *ticketBorrowRepository) SourceAttemptSent(ctx context.Context, id strin
 	return err
 }
 func (r *ticketBorrowRepository) SourceAttemptCompleted(ctx context.Context, id string) error {
-	_, err := r.db.ExecContext(ctx, `UPDATE ticket_borrow_source_attempts SET completed_at=COALESCE(completed_at,clock_timestamp()) WHERE intent_id=$1`, id)
+	_, err := r.db.ExecContext(ctx, `WITH cancelled AS (
+ DELETE FROM ticket_borrow_source_attempts WHERE intent_id=$1 AND sent_at IS NULL)
+ UPDATE ticket_borrow_source_attempts SET completed_at=COALESCE(completed_at,clock_timestamp()) WHERE intent_id=$1 AND sent_at IS NOT NULL`, id)
 	return err
 }
 
-func (r *ticketBorrowRepository) SourceHoldUntil(ctx context.Context, source int64) (*time.Time, error) {
-	var until *time.Time
-	err := r.db.QueryRowContext(ctx, `SELECT min(until_at) FROM ticket_borrow_active_replenishment WHERE source_id=$1`, source).Scan(&until)
-	return until, err
+func (r *ticketBorrowRepository) SourceHoldUntil(context.Context, int64) (*time.Time, error) {
+	return nil, nil
 }

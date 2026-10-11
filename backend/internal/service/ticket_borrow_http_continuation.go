@@ -55,7 +55,7 @@ type BorrowLatestRouteRepository interface {
 // PrepareBorrowHTTPContinuation must be called after ValidateOpenAIHTTPResponseOwner.
 // It does not reserve capacity or change the original client request/audit identity.
 func (s *OpenAIGatewayService) PrepareBorrowHTTPContinuation(ctx context.Context, groupID *int64, previous, model string, headers http.Header, body []byte) (context.Context, []byte, bool, error) {
-	if previous == "" || s.borrowRoutes == nil || model != "gpt-6-astra" || borrowInternal(ctx) {
+	if previous == "" || s.borrowRoutes == nil || strings.TrimSpace(model) == "" || borrowInternal(ctx) {
 		return ctx, body, false, nil
 	}
 	id, err := s.getOpenAIWSStateStore().GetResponseAccount(ctx, derefGroupID(groupID), previous)
@@ -125,6 +125,11 @@ func validateBorrowHTTPContinuationInput(body []byte) error {
 // Applied to the final upstream clone after route injection. All client/audit
 // state stays intact. Body and GetBody must describe the same effective request.
 func applyBorrowHTTPContinuation(req *http.Request, choice *BorrowContinuationRoute) error {
+	// A fresh request has no continuation state to translate. Preserve its body
+	// and GetBody exactly as the ordinary gateway built them.
+	if choice.SessionID == "" && !choice.Restarted && borrowHTTPContinuationFromContext(req.Context()) == nil {
+		return nil
+	}
 	rc, err := req.GetBody()
 	if err != nil {
 		return err

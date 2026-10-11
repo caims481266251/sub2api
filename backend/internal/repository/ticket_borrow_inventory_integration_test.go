@@ -54,62 +54,59 @@ func TestTicketBorrowInventoryWakeupFencingAndPublicationBudget(t *testing.T) {
 	require.Error(t, r.CheckAcquisition(ctx, a), "old settings permit is fenced")
 }
 
-func TestTicketBorrowInventoryCompatibilityResizeAndCandidateGates(t *testing.T) {
+func TestTicketBorrowInventoryAutomaticCapacityAndCandidateGates(t *testing.T) {
 	r, _, sources, a := replenishmentFixture(t, false)
 	ctx := service.WithBorrowAcquisition(t.Context(), a)
-	for i := range 4 {
-		require.NoError(t, r.Publish(ctx, replenishmentRoute(t, a, sources[0], time.Duration(225+i)*time.Second), a.Lease))
+	for range 4 {
+		require.NoError(t, r.Publish(ctx, replenishmentRoute(t, a, sources[0], 230*time.Second), a.Lease))
 	}
 	need, err := r.NeedsCandidate(ctx, a, nil)
 	require.NoError(t, err)
-	require.False(t, need, "search batch stops unnecessary acquisition after full inventory")
-	short := time.Now().Add(210 * time.Second)
+	require.False(t, need, "a full inventory stops speculative acquisition")
+	short := time.Now().Add(10 * time.Second)
 	need, err = r.NeedsCandidate(ctx, a, &short)
 	require.NoError(t, err)
 	require.False(t, need)
-	longer := time.Now().Add(240 * time.Second)
+	longer := time.Now().Add(90 * time.Second)
 	need, err = r.NeedsCandidate(ctx, a, &longer)
 	require.NoError(t, err)
 	require.True(t, need)
 	cfg, err := r.Settings(ctx)
 	require.NoError(t, err)
-	custom := 45
-	cfg.Replenishment.MaintenanceIntervalSeconds = &custom
+	cfg.Replenishment.MaintenanceIntervalSeconds = new(45)
 	cfg.Replenishment.Inventory = 4
 	require.NoError(t, r.SaveSettings(ctx, cfg))
 	cfg, err = r.Settings(ctx)
 	require.NoError(t, err)
-	cfg.Replenishment.MaintenanceIntervalSeconds = nil
-	require.NoError(t, r.SaveSettings(ctx, cfg))
-	cfg, err = r.Settings(ctx)
-	require.NoError(t, err)
-	require.Equal(t, 45, cfg.Replenishment.MaintenanceSeconds())
+	require.Zero(t, cfg.Replenishment.MaintenanceSeconds(), "legacy periodic maintenance is retired")
 	inv, err := r.Inventory(ctx, a.TargetID, a.Identity)
 	require.NoError(t, err)
-	require.Equal(t, 2, inv.Count, "capacity increase never revives retired inventory")
-	require.Equal(t, 4, inv.Desired)
-	a = inventoryRestart(t, r, a)
-	ctx = service.WithBorrowAcquisition(ctx, a)
-	for i := range 2 {
-		require.NoError(t, r.Publish(ctx, replenishmentRoute(t, a, sources[0], time.Duration(232+i)*time.Second), a.Lease))
-	}
-	cfg, err = r.Settings(ctx)
-	require.NoError(t, err)
-	cfg.Replenishment.Inventory = 2
+	require.Equal(t, 2, inv.Count)
+	require.Equal(t, 2, inv.Desired, "rolling capacity is an internal policy")
+	cfg.Replenishment.Enabled = false
 	require.NoError(t, r.SaveSettings(ctx, cfg))
 	inv, err = r.Inventory(ctx, a.TargetID, a.Identity)
 	require.NoError(t, err)
-	require.Equal(t, 2, inv.Count)
+	require.Equal(t, 1, inv.Count)
+	require.Equal(t, 1, inv.Desired)
+	cfg, err = r.Settings(ctx)
+	require.NoError(t, err)
+	cfg.Replenishment.Enabled = true
+	require.NoError(t, r.SaveSettings(ctx, cfg))
+	inv, err = r.Inventory(ctx, a.TargetID, a.Identity)
+	require.NoError(t, err)
+	require.Equal(t, 1, inv.Count, "enabling rolling cannot revive retired inventory")
+	require.Equal(t, 2, inv.Desired)
 	var revoked int
 	require.NoError(t, integrationDB.QueryRow(`SELECT count(*) FROM ticket_borrow_routes WHERE target_id=$1 AND revoked_at IS NOT NULL`, a.TargetID).Scan(&revoked))
 	require.Zero(t, revoked)
 	a = inventoryRestart(t, r, a)
-	candidate := uuid.NewString()
-	cookie := uuid.NewString()
+	ctx = service.WithBorrowAcquisition(ctx, a)
+	candidate, cookie := uuid.NewString(), uuid.NewString()
 	require.NoError(t, r.RecordCandidate(ctx, a, candidate, cookie, "healthy", "configuration_changed", time.Now().Add(time.Minute)))
 	known, err := r.CandidateKnown(ctx, a.TargetID, a.Identity, cookie)
 	require.NoError(t, err)
-	require.True(t, known, "unpublished completed verdict remains deduplicated")
+	require.True(t, known, "unpublished verdicts remain deduplicated")
 }
 
 func TestTicketBorrowInventoryRevocationAndCookieDeadlineWakeup(t *testing.T) {
@@ -122,7 +119,7 @@ func TestTicketBorrowInventoryRevocationAndCookieDeadlineWakeup(t *testing.T) {
 	inv, err := r.Inventory(ctx, a.TargetID, a.Identity)
 	require.NoError(t, err)
 	require.True(t, inv.NextAt.After(inv.ServerNow))
-	_, err = r.ObserveCookie(ctx, route.CookieHash, 100*time.Second)
+	_, err = r.ObserveCookie(ctx, route.CookieHash, -time.Second)
 	require.NoError(t, err)
 	inv, err = r.Inventory(ctx, a.TargetID, a.Identity)
 	require.NoError(t, err)
@@ -163,6 +160,8 @@ func TestTicketBorrowSourcePermitGlobalBudgetAndNoQueuedLease(t *testing.T) {
 	type result struct {
 		granted bool
 		err     error
+		id      string
+		source  int64
 	}
 	out := make(chan result, 2)
 	var wg sync.WaitGroup
@@ -171,14 +170,16 @@ func TestTicketBorrowSourcePermitGlobalBudgetAndNoQueuedLease(t *testing.T) {
 		go func(i int, id string) {
 			defer wg.Done()
 			ok, e := other.GrantSourceAttempt(ctx, sources[i].ID, id)
-			out <- result{ok, e}
+			out <- result{ok, e, id, sources[i].ID}
 		}(i, id)
 	}
 	wg.Wait()
 	close(out)
 	grants := 0
+	var winner result
 	for result := range out {
 		if result.granted {
+			winner = result
 			grants++
 		}
 		if result.err != nil {
@@ -186,14 +187,27 @@ func TestTicketBorrowSourcePermitGlobalBudgetAndNoQueuedLease(t *testing.T) {
 		}
 	}
 	require.Equal(t, 1, grants)
-	// A canceled reservation is deliberately not refunded.
-	require.NoError(t, r.FinishJob(ctx, "source", sources[0].ID, first, "cancelled", 0))
-	require.NoError(t, r.CancelSourceAttempt(ctx, first))
-	_, err = other.GrantSourceAttempt(ctx, sources[1].ID, second)
+	// Unsent reservations are refunded; a real send remains charged after completion.
+	require.NoError(t, r.FinishJob(ctx, "source", winner.source, winner.id, "cancelled", 0))
+	require.NoError(t, r.SourceAttemptCompleted(ctx, winner.id))
+	loser, source := first, sources[0].ID
+	if winner.id == first {
+		loser, source = second, sources[1].ID
+	}
+	ok, err := other.GrantSourceAttempt(ctx, source, loser)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NoError(t, r.SourceAttemptSent(ctx, loser))
+	require.NoError(t, r.SourceAttemptCompleted(ctx, loser))
+	require.NoError(t, r.FinishJob(ctx, "source", source, loser, "failed_after_send", 0))
+	next := uuid.NewString()
+	require.NoError(t, r.QueueSourceAttempt(ctx, source, next))
+	_, err = other.GrantSourceAttempt(ctx, source, next)
 	require.ErrorIs(t, err, service.ErrBorrowRequestBudget)
 	var count int
 	require.NoError(t, integrationDB.QueryRow(`SELECT count(*) FROM ticket_borrow_source_attempts WHERE target_id=$1`, a.TargetID).Scan(&count))
 	require.Equal(t, 1, count)
+
 }
 
 func TestTicketBorrowSourcePermitWeightedFairnessAndStaleHead(t *testing.T) {
@@ -211,6 +225,7 @@ func TestTicketBorrowSourcePermitWeightedFairnessAndStaleHead(t *testing.T) {
 		_, id := borrowIntegrationFixture(t)
 		target, e := r.Target(ctx, id)
 		require.NoError(t, e)
+		require.NoError(t, r.SetTargetIdentity(ctx, id, true, target.Revision, target.AcquisitionRevision, service.BorrowAcquisitionSource))
 		b := service.BorrowAcquisition{TargetID: id, Revision: target.Revision, Identity: "identity", Lease: uuid.NewString()}
 		ok, e := r.AcquireJob(service.WithBorrowAcquisition(ctx, b), "target", id, b.Lease)
 		require.NoError(t, e)
@@ -245,6 +260,8 @@ func TestTicketBorrowSourcePermitWeightedFairnessAndStaleHead(t *testing.T) {
 		}
 		require.NotEqual(t, -1, granted)
 		counts[granted]++
+		require.NoError(t, r.SourceAttemptSent(ctx, ids[granted]))
+		require.NoError(t, r.SourceAttemptCompleted(ctx, ids[granted]))
 		require.NoError(t, r.FinishJob(ctx, "source", sources[0].ID, ids[granted], "done", 0))
 		queue(granted)
 	}
@@ -256,7 +273,7 @@ func TestTicketBorrowSourcePermitWeightedFairnessAndStaleHead(t *testing.T) {
 	})
 }
 
-func TestTicketBorrowInventoryConcurrentSettingsPublicationRotationAndPermits(t *testing.T) {
+func TestTicketBorrowInventoryConcurrentSettingsPublicationAllocationAndPermits(t *testing.T) {
 	r, pool, sources, a := replenishmentFixture(t, false)
 	rotationAppend(t, pool, "inventory-spare.example:84")
 	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
@@ -272,7 +289,7 @@ func TestTicketBorrowInventoryConcurrentSettingsPublicationRotationAndPermits(t 
 	go func() { out <- r.Publish(ctx, route, a.Lease) }()
 	go func() { _, e := r.GrantSourceAttempt(ctx, sources[1].ID, attempt); out <- e }()
 	go func() {
-		_, e := r.QueueRotation(ctx, rotationInput("source", sources[0].AccountID), "manual")
+		_, e := r.AllocateCandidateEnvironment(ctx, uuid.NewString(), "concurrent-identity")
 		out <- e
 	}()
 	for range 4 {

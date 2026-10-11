@@ -96,7 +96,7 @@ func TestTicketBorrowBusinessDoesNotExtendUpstreamWaitOrRouteExpiry(t *testing.T
 	ctx := t.Context()
 	now, e := r.Now(ctx)
 	require.NoError(t, e)
-	route := &service.BorrowRoute{ID: uuid.NewString(), TargetID: id, TargetRevision: q.Revision, SourceID: 1, IdentityHash: "identity", CookieHash: uuid.NewString(), ExpiresAt: now.Add(220 * time.Second)}
+	route := borrowAdmissionFixture(&service.BorrowRoute{ID: uuid.NewString(), TargetID: id, TargetRevision: q.Revision, IdentityHash: "identity", CookieHash: uuid.NewString(), ExpiresAt: now.Add(220 * time.Second)})
 	require.NoError(t, r.Publish(ctx, route, "worker"))
 	require.NoError(t, r.RecordProbeOutcome(ctx, id, "worker", "target_rate_limited", 60500*time.Millisecond))
 	before, e := r.Target(ctx, id)
@@ -115,7 +115,7 @@ func TestTicketBorrowBusinessDoesNotExtendUpstreamWaitOrRouteExpiry(t *testing.T
 	ok, e := r.AcquireJob(ctx, "target", id, "still-ready")
 	require.NoError(t, e)
 	require.False(t, ok, "a valid route prevents acquisition even when the upstream wait ended")
-	_, e = integrationDB.ExecContext(ctx, `UPDATE ticket_borrow_routes SET expires_at=clock_timestamp()-INTERVAL '1 second' WHERE id=$1`, route.ID)
+	_, e = r.ObserveCookie(ctx, route.CookieHash, -time.Second)
 	require.NoError(t, e)
 	ok, e = r.AcquireJob(ctx, "target", id, "expired")
 	require.NoError(t, e)
@@ -162,7 +162,7 @@ func TestTicketBorrowRecoveryFiveBusinessRequestsDoNotSerializeOrLoseActivity(t 
 	ctx := t.Context()
 	now, err := r.Now(ctx)
 	require.NoError(t, err)
-	route := &service.BorrowRoute{ID: uuid.NewString(), TargetID: id, TargetRevision: q.Revision, SourceID: 1, IdentityHash: "identity", CookieHash: uuid.NewString(), ExpiresAt: now.Add(3 * time.Minute)}
+	route := borrowAdmissionFixture(&service.BorrowRoute{ID: uuid.NewString(), TargetID: id, TargetRevision: q.Revision, IdentityHash: "identity", CookieHash: uuid.NewString(), ExpiresAt: now.Add(3 * time.Minute)})
 	require.NoError(t, r.Publish(ctx, route, "worker"))
 	require.NoError(t, r.RecordProbeOutcome(ctx, id, "worker", "target_ticket_changed", 0))
 	require.NoError(t, r.RecordProbeOutcome(ctx, id, "worker", "target_ticket_changed", 0))

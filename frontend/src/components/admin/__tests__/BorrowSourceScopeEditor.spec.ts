@@ -5,7 +5,7 @@ import Select from '@/components/common/Select.vue'
 import { changeSourceScope, includedInScope } from '@/composables/borrowSourceScope'
 import type { BorrowSelection, BorrowSourceOption } from '@/api/admin/ticketBorrowing'
 
-vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string, args?: Record<string, unknown>) => key + (args ? JSON.stringify(args) : '') }) }))
+vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string, args?: Record<string, unknown>) => key + (args ? JSON.stringify(args) : ''), te: () => true }) }))
 const config = (): BorrowSelection => ({ revision: 3, group_ids: [], account_ids: [], excluded_account_ids: [], default_model: 'test-model', rotate_identity: false, model_overrides: { 1: 'custom-model' } })
 const account = (id: number, groups: number[] = [2, 3]): BorrowSourceOption => ({ id, name: `Account ${id}`, group_ids: groups, status: 'active', schedulable: true, request_eligible: true, is_target: false })
 

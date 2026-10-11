@@ -83,7 +83,7 @@ func (r *borrowTestRepo) Target(_ context.Context, id int64) (BorrowTarget, erro
 	if r.unavailable {
 		return BorrowTarget{}, errors.New("storage down")
 	}
-	return BorrowTarget{AccountID: 11, Enabled: r.enabled, Revision: 2, ServerNow: r.now}, nil
+	return BorrowTarget{AcquisitionIdentity: BorrowAcquisitionSource, AccountID: 11, Enabled: r.enabled, Revision: 2, ServerNow: r.now}, nil
 }
 func (r *borrowTestRepo) Route(_ context.Context, id int64, identity, preferred string) (*BorrowRoute, error) {
 	r.mu.Lock()
@@ -194,6 +194,7 @@ func borrowRequest(t *testing.T) *http.Request {
 	t.Helper()
 	req, e := http.NewRequestWithContext(t.Context(), "POST", chatgptCodexURL, strings.NewReader(`{"model":"gpt-6-astra","input":"hello"}`))
 	require.NoError(t, e)
+	req.Header.Set("Authorization", "Bearer target-secret")
 	req.Header.Set("X-Codex-Turn-State", "conversation-ticket")
 	return req
 }
@@ -357,8 +358,8 @@ func TestTicketBorrowCredentialRefreshAndOrdinaryConstraints(t *testing.T) {
 	a.Schedulable = false
 	require.ErrorIs(t, s.Check(t.Context(), 11, "gpt-6-astra", "http"), ErrBorrowUnavailable)
 	a.Schedulable = true
-	require.ErrorIs(t, s.Check(t.Context(), 11, "gpt-6-astra", "ws"), ErrBorrowUnavailable)
-	require.ErrorIs(t, s.Check(t.Context(), 11, "gpt-6-luna", "http"), ErrBorrowUnavailable)
+	require.NoError(t, s.Check(t.Context(), 11, "gpt-6-astra", "ws"))
+	require.NoError(t, s.Check(t.Context(), 11, "gpt-6-luna", "http"), "model availability is governed by ordinary account selection")
 	a.Credentials["chatgpt_account_id"] = "other"
 	require.ErrorIs(t, s.Check(t.Context(), 11, "gpt-6-astra", "http"), ErrBorrowUnavailable)
 }
@@ -382,8 +383,11 @@ func TestTicketBorrowInterruptedBodyNeverCountsCompleted(t *testing.T) {
 }
 
 type borrowWorkerRepo struct {
+	environmentError error
+	environmentCheck func() error
 	*borrowTestRepo
-	source BorrowSource
+	source       BorrowSource
+	environments map[string]*BorrowCandidateEnvironment
 }
 
 func (r *borrowWorkerRepo) Sources(context.Context) ([]BorrowSource, error) {
@@ -429,7 +433,7 @@ func TestTicketBorrowWorkerPublishesOnlyTargetVerifiedCandidates(t *testing.T) {
 	s.owner.httpUpstream = up
 	s.owner.openaiGatewayService = &OpenAIGatewayService{accountRepo: s.owner.accountRepo}
 	require.ErrorIs(t, s.Check(t.Context(), 11, "gpt-6-astra", "http"), ErrBorrowUnavailable)
-	s.runTarget(t.Context(), BorrowTarget{AccountID: 11, Revision: 2}, BorrowSettings{Running: true, TTLSeconds: 230}, "worker")
+	s.runTarget(t.Context(), BorrowTarget{AcquisitionIdentity: BorrowAcquisitionSource, AccountID: 11, Revision: 2}, BorrowSettings{Running: true, TTLSeconds: 230}, "worker")
 	require.Len(t, up.calls, 3)
 	require.Contains(t, up.calls[0].body, "gpt-6-luna")
 	require.Equal(t, "Bearer source-token", up.calls[0].header.Get("Authorization"))
@@ -440,7 +444,7 @@ func TestTicketBorrowWorkerPublishesOnlyTargetVerifiedCandidates(t *testing.T) {
 	// A later degraded candidate must not remove the already admitted route.
 	up.replies = []stateProbeReply{{status: 200, cookies: []string{"__oailb=" + cookie + "; Max-Age=230; Secure"}, body: stateProbeCompletedStream}, mint, {status: 200, state: "changed", body: stateProbeCompletedStream}}
 	up.calls = nil
-	s.runTarget(t.Context(), BorrowTarget{AccountID: 11, Revision: 2}, BorrowSettings{Running: true, TTLSeconds: 230}, "worker")
+	s.runTarget(t.Context(), BorrowTarget{AcquisitionIdentity: BorrowAcquisitionSource, AccountID: 11, Revision: 2}, BorrowSettings{Running: true, TTLSeconds: 230}, "worker")
 	require.Equal(t, oldID, base.route.ID)
 	require.NoError(t, s.Check(t.Context(), 11, "gpt-6-astra", "http"))
 }
@@ -458,8 +462,8 @@ func TestTicketBorrowRejectsUnverifiedEndpointAndPreservesConversation(t *testin
 	req.Header.Set("X-Codex-Installation-ID", "unverified-client-device")
 	req.Header.Set("Cookie", "foreign=value")
 	_, err = s.ForwardHTTP(req, "", 11, 1, nil, func(sent *http.Request, _ string, _ int64, _ int, _ *tlsfingerprint.Profile) (*http.Response, error) {
-		require.Empty(t, sent.Header.Get("X-Codex-Installation-ID"))
-		require.NotContains(t, sent.Header.Get("Cookie"), "foreign")
+		require.Equal(t, "unverified-client-device", sent.Header.Get("X-Codex-Installation-ID"))
+		require.Contains(t, sent.Header.Get("Cookie"), "foreign=value")
 		require.Equal(t, "conversation-ticket", sent.Header.Get("X-Codex-Turn-State"))
 		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: http.NoBody}, nil
 	})
@@ -491,7 +495,7 @@ func (r *borrowTestRepo) CheckAcquisition(ctx context.Context, a BorrowAcquisiti
 	if !r.enabled {
 		return ErrBorrowUnavailable
 	}
-	if r.route != nil && r.now.Add(15*time.Second).Before(r.route.ExpiresAt) && r.route.IdentityHash == a.Identity {
+	if a.Lease == "" && r.route != nil && r.now.Add(15*time.Second).Before(r.route.ExpiresAt) && r.route.IdentityHash == a.Identity {
 		return ErrBorrowRouteReady
 	}
 	return nil

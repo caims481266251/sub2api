@@ -16,8 +16,8 @@ const BorrowFingerprintGenerator = "borrow-h1-v2"
 
 var ErrBorrowFingerprintInvalid = errors.New("borrow_fingerprint_invalid")
 
-// BorrowFingerprint is an immutable snapshot for one source environment. It is
-// persisted before publishing the binding and contains no account credentials.
+// BorrowFingerprint is an immutable snapshot for one acquisition candidate.
+// Acquisition and target verification share it; business never inherits it.
 type BorrowFingerprint struct {
 	Generator  string                  `json:"generator"`
 	DeviceID   string                  `json:"device_id"`
@@ -41,7 +41,7 @@ func NewBorrowFingerprint() (*BorrowFingerprint, error) {
 	p.Name = BorrowFingerprintGenerator + "-" + borrowHash(id.String())[:12]
 	h := make(http.Header)
 	// This minimum-compatible identity also works for lower-version models.
-	applyOpenAICodexTicketHarvestIdentity(h, "gpt-6-luna")
+	applyOpenAICodexTicketHarvestIdentity(h, OpenAICodexStateProbeDefaultModel)
 	f := &BorrowFingerprint{Generator: BorrowFingerprintGenerator, DeviceID: id.String(),
 		UserAgent: h.Get("User-Agent"), Originator: h.Get("Originator"), Version: h.Get("Version"),
 		Profile: p, CreatedAt: time.Now().UTC()}

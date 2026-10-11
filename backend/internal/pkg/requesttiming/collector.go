@@ -18,6 +18,7 @@ type Span struct {
 	Attempt int     `json:"attempt,omitempty"`
 }
 type Attempt struct {
+	BorrowRouteID   string             `json:"borrow_route_id,omitempty"`
 	Terminal        string             `json:"terminal,omitempty"`
 	CleanupCanceled bool               `json:"cleanup_canceled,omitempty"`
 	Kind            string             `json:"kind"`

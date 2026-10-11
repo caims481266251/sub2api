@@ -162,3 +162,30 @@ func TestCompletedStreamCleanupDoesNotBecomeCancellation(t *testing.T) {
 		})
 	}
 }
+
+func TestBorrowRouteAttributionFollowsTransportAndChanges(t *testing.T) {
+	c := New(time.Now(), 0)
+	base := httptest.NewRequest("POST", "http://example.test/responses", nil).WithContext(With(t.Context(), c))
+	a, _ := StartAttempt(base, 11, 1)
+	a = a.WithContext(WithBorrowRoute(a.Context(), "route-one"))
+	child, _ := StartTransport(a)
+	Output(child.Context(), true, true, "completed")
+	b, _ := StartAttempt(base, 11, 1)
+	b = b.WithContext(WithBorrowRoute(b.Context(), "route-two"))
+	_, _ = StartTransport(b)
+	c.Finish(200, false)
+	c.WhenFinished(func(s Snapshot) {
+		want := []string{"route-one", "route-one", "route-two", "route-two"}
+		if len(s.Attempts) != len(want) {
+			t.Fatalf("unexpected attempts %d", len(s.Attempts))
+		}
+		for i, a := range s.Attempts {
+			if a.BorrowRouteID != want[i] {
+				t.Fatalf("attempt %d route %s", i, a.BorrowRouteID)
+			}
+		}
+		if s.Attempts[0].Terminal != "completed" || s.Attempts[2].Terminal != "" {
+			t.Fatal("completion leaked across route attempts")
+		}
+	})
+}

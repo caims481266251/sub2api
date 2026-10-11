@@ -27,7 +27,7 @@ func borrowRouteLoadFixture(t *testing.T) (*ticketBorrowRepository, int64, []*se
 	routes := make([]*service.BorrowRoute, 0, 3)
 	for i := range 3 {
 		route := &service.BorrowRoute{ID: uuid.NewString(), TargetID: id, TargetRevision: target.Revision, SourceID: 1, IdentityHash: "identity", CookieHash: uuid.NewString(), Gateway: fmt.Sprintf("gateway-%d.example", i), ExpiresAt: time.Now().Add(time.Duration(220-i*10) * time.Second)}
-		_, err = integrationDB.Exec(`INSERT INTO ticket_borrow_routes(id,target_id,target_revision,source_id,identity_hash,cookie_hash,gateway,secret,expires_at,checked_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,clock_timestamp()-$10*INTERVAL '1 second')`, route.ID, id, route.TargetRevision, route.SourceID, route.IdentityHash, route.CookieHash, route.Gateway, secret, route.ExpiresAt, i)
+		_, err = integrationDB.Exec(`INSERT INTO ticket_borrow_routes(id,target_id,target_revision,source_id,identity_hash,cookie_hash,gateway,secret,expires_at,admission_until,checked_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$9,clock_timestamp()-$10*INTERVAL '1 second')`, route.ID, id, route.TargetRevision, route.SourceID, route.IdentityHash, route.CookieHash, route.Gateway, secret, route.ExpiresAt, i)
 		require.NoError(t, err)
 		routes = append(routes, route)
 	}
@@ -66,6 +66,8 @@ func TestTicketBorrowRoutesPreferLatestAcrossInstances(t *testing.T) {
 			require.Zero(t, state.Inflight)
 		}
 		require.True(t, state.Usable && state.InventoryEligible)
+		require.False(t, state.PublishedAt.IsZero())
+		require.Equal(t, state.CheckedAt, state.PublishedAt, "checked_at is written at publication")
 	}
 	// Read-only eligibility must not change occupancy; occupancy does not override publication recency.
 	for range 3 {

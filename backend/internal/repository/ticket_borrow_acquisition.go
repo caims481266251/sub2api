@@ -15,21 +15,19 @@ type borrowQueryer interface {
 
 // The target row serializes acquisition reservations and publication. Identity
 // is the same snapshot used by normal route admission, not a proxy-pool version.
-// A route that is no longer business-usable must not suppress acquisition when
-// the configured renewal window is smaller than the global admission floor.
+// Automatic renewal compares against the same persisted cutoff as business admission.
 func checkBorrowAcquisition(ctx context.Context, db borrowQueryer, a service.BorrowAcquisition, waits bool) error {
 	var running, active, ready, upstream bool
 	var budgetUntil sql.NullTime
 	var now time.Time
 	err := db.QueryRowContext(ctx, `SELECT s.running,t.enabled AND a.deleted_at IS NULL AND a.status='active' AND a.schedulable AND (NOT a.auto_pause_on_expired OR a.expires_at IS NULL OR a.expires_at>clock_timestamp())
- AND NOT EXISTS(SELECT 1 FROM ticket_borrow_rotation_accounts x WHERE x.account_id=t.account_id AND x.phase='draining' AND x.active_job IS NOT NULL)
+
  AND ($2=0 OR t.revision=$2) AND ($3='' OR (t.lease_token=$3 AND t.lease_until>clock_timestamp()
- AND t.lease_settings_revision=s.revision AND t.lease_policy_revision=t.probe_policy_revision
+ AND t.lease_settings_revision=s.revision AND t.lease_policy_revision=t.probe_policy_revision AND t.lease_acquisition_revision=t.acquisition_revision
  AND ($4='' OR t.lease_identity='' OR t.lease_identity=$4) AND t.lease_account_signature=`+borrowAccountSignature+`)),
  NOT COALESCE((s.replenishment->>'enabled')::boolean,false) AND EXISTS(SELECT 1 FROM ticket_borrow_routes r LEFT JOIN ticket_borrow_cookie_deadlines d ON d.cookie_hash=r.cookie_hash
  WHERE r.target_id=t.account_id AND r.target_revision=t.revision AND r.revoked_at IS NULL AND r.inventory_eligible AND NOT r.validation_only
- AND ($4='' OR r.identity_hash=$4) AND LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at))>clock_timestamp()+GREATEST(CASE WHEN t.probe_policy_override THEN t.renew_before_seconds ELSE s.renew_before_seconds END,s.min_route_remaining_seconds)*INTERVAL '1 second')
- AND NOT EXISTS(SELECT 1 FROM ticket_borrow_active_replenishment w WHERE w.target_id=t.account_id AND ($4='' OR w.identity_hash=$4)),
+ AND ($4='' OR r.identity_hash=$4) AND LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at),r.admission_until)>clock_timestamp()+`+borrowRenewalLead+`*INTERVAL '1 second'),
  COALESCE(t.upstream_wait_until>clock_timestamp(),false),t.budget_wait_until,clock_timestamp()
  FROM ticket_borrow_targets t JOIN accounts a ON a.id=t.account_id CROSS JOIN ticket_borrow_settings s
  WHERE t.account_id=$1 AND s.id=1`, a.TargetID, a.Revision, a.Lease, a.Identity).Scan(&running, &active, &ready, &upstream, &budgetUntil, &now)
@@ -88,7 +86,7 @@ func (r *ticketBorrowRepository) ReserveSourceAttempt(ctx context.Context, sourc
 	if !running {
 		return service.ErrBorrowPaused
 	}
-	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM ticket_borrow_sources WHERE NOT EXISTS(SELECT 1 FROM ticket_borrow_rotation_accounts x WHERE x.account_id=ticket_borrow_sources.account_id AND x.phase='draining' AND x.active_job IS NOT NULL) AND id=$1 AND enabled AND deleted_at IS NULL AND lease_token=$2 AND lease_until>clock_timestamp())`, sourceID, lease).Scan(&active); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM ticket_borrow_sources WHERE id=$1 AND enabled AND deleted_at IS NULL AND lease_token=$2 AND lease_until>clock_timestamp())`, sourceID, lease).Scan(&active); err != nil {
 		return err
 	}
 	if !active {

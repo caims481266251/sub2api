@@ -31,15 +31,6 @@ func (s *OpenAIGatewayService) resolveOpenAIHTTPWSSSEDecision(
 	c *gin.Context, account *Account, body []byte, decision OpenAIWSProtocolDecision,
 ) OpenAIWSProtocolDecision {
 	clientTransport := GetOpenAIClientTransport(c)
-	if clientTransport == OpenAIClientTransportHTTP && c != nil && c.Request != nil && BorrowBusinessRecoveryFromContext(c.Request.Context()).FreshConnectionRequired() {
-		return openAIWSHTTPDecision("borrow_business_recovery_http")
-	}
-	if clientTransport == OpenAIClientTransportHTTP && s.borrowRoutes != nil && account != nil && c != nil && c.Request != nil {
-		enabled, err := s.borrowRoutes.Enabled(c.Request.Context(), account.ID)
-		if enabled || err != nil {
-			return openAIWSHTTPDecision("borrow_http_scope")
-		}
-	}
 	if clientTransport == OpenAIClientTransportHTTP &&
 		decision.Transport == OpenAIUpstreamTransportResponsesWebsocketV2 &&
 		account.IsOpenAIOAuthWSSSEAccelerationEnabled() && !account.IsOpenAIPassthroughEnabled() &&
@@ -48,6 +39,7 @@ func (s *OpenAIGatewayService) resolveOpenAIHTTPWSSSEDecision(
 		!isOpenAICompatMessagesBridgeBody(body) &&
 		gjson.GetBytes(body, "stream").Type == gjson.True &&
 		strings.TrimSpace(gjson.GetBytes(body, "previous_response_id").String()) == "" &&
+		borrowHTTPContinuationFromContext(c.Request.Context()) == nil &&
 		(s.pluginManager == nil || !s.pluginManager.ShouldRouteOpenAIOAuth(account)) {
 		decision.Reason = openAIOAuthWSSSEAccelerationReason
 		return decision

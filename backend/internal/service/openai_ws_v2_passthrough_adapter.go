@@ -916,6 +916,17 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		return errors.New("openai ws passthrough dialer is nil")
 	}
 
+	var borrowing *borrowWSUse
+	if s.borrowRoutes != nil {
+		borrowing, err = s.borrowRoutes.reserveWS(ctx, ctx, account, wsURL, gjson.GetBytes(firstClientMessage, "model").String(), gjson.GetBytes(firstClientMessage, "previous_response_id").String(), headers)
+		if err != nil {
+			return err
+		}
+		if borrowing != nil {
+			ctx = borrowing.use.ctx
+			defer borrowing.finish()
+		}
+	}
 	agentTaskRecoveryTried := false
 	var upstreamConn openAIWSClientConn
 	statusCode := 0
@@ -932,11 +943,24 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		if err != nil {
 			return fmt.Errorf("refresh ws authentication headers: %w", err)
 		}
+		if s.borrowRoutes != nil {
+			var route *BorrowRoute
+			if borrowing != nil {
+				route = borrowing.route
+			}
+			if err := s.borrowRoutes.checkWSRoute(ctx, account.ID, route); err != nil {
+				return err
+			}
+			injectBorrowWSCookie(headers, route)
+		}
 		dialCtx, cancelDial := context.WithTimeout(upstreamroute.WithAccountID(ctx, account.ID), s.openAIWSDialTimeout())
 		upstreamConn, statusCode, handshakeHeaders, err = dialer.Dial(dialCtx, wsURL, headers, proxyURL)
 		cancelDial()
 		if err == nil {
 			break
+		}
+		if borrowing != nil {
+			_ = s.borrowRoutes.observeWSHandshake(ctx, borrowing.route, handshakeHeaders, statusCode)
 		}
 		var handshakeErr *openAIWSHandshakeError
 		responseBody := []byte(nil)
@@ -968,6 +992,13 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	defer func() {
 		_ = upstreamConn.Close()
 	}()
+	if borrowing != nil {
+		if err := s.borrowRoutes.observeWSHandshake(ctx, borrowing.route, handshakeHeaders, statusCode); err != nil {
+			return err
+		}
+		borrowing.use.attach(upstreamConn)
+	}
+
 	handshakeBinding := s.bindOpenAIWSHandshake(account, gjson.GetBytes(firstClientMessage, "model").String(), headers)
 	logOpenAIWSV2Passthrough(
 		"relay_dial_ok account_id=%d status_code=%d upstream_request_id=%s",
@@ -979,6 +1010,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	upstreamFrameConn, ok := upstreamConn.(openaiwsv2.FrameConn)
 	if !ok {
 		return errors.New("openai ws passthrough upstream connection does not support frame relay")
+	}
+	if s.borrowRoutes != nil {
+		upstreamFrameConn = &borrowWSFrameConn{FrameConn: upstreamFrameConn, borrow: borrowing, service: s.borrowRoutes, accountID: account.ID}
 	}
 	if capture := requestcapture.FromContext(ctx); capture != nil {
 		upstreamFrameConn = &captureUpstreamFrameConn{FrameConn: upstreamFrameConn, capture: capture, account: account.ID}

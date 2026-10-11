@@ -19,7 +19,7 @@ func TestTicketBorrowGlobalProbeInheritanceOverrideAndLiveLimits(t *testing.T) {
 	settings, err := r.Settings(ctx)
 	require.NoError(t, err)
 	require.Equal(t, 2, *settings.ProbeConcurrency)
-	require.Equal(t, 180, *settings.RenewBeforeSeconds)
+	require.Equal(t, 15, *settings.RenewBeforeSeconds)
 	for _, targetID := range []int64{id, other} {
 		target, e := r.Target(ctx, targetID)
 		require.NoError(t, e)
@@ -48,7 +48,7 @@ func TestTicketBorrowGlobalProbeInheritanceOverrideAndLiveLimits(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, target.ProbePolicy.UseGlobal)
 	require.Equal(t, 1, target.ProbePolicy.Concurrency)
-	require.Equal(t, 180, target.ProbePolicy.RenewBeforeSeconds)
+	require.Equal(t, 15, target.ProbePolicy.RenewBeforeSeconds)
 	require.Equal(t, 2, target.Inflight, "lowering limits does not cancel existing requests")
 	q.ID = uuid.NewString()
 	require.ErrorIs(t, r.BeginTargetRequest(ctx, q), service.ErrBorrowUnavailable, "configuration edit fences old batch")
@@ -71,9 +71,9 @@ func TestTicketBorrowGlobalProbeInheritanceOverrideAndLiveLimits(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, otherTarget.ProbePolicy.UseGlobal)
 	require.Equal(t, 3, otherTarget.ProbePolicy.Concurrency)
-	require.Equal(t, 90, otherTarget.ProbePolicy.RenewBeforeSeconds)
+	require.Equal(t, 15, otherTarget.ProbePolicy.RenewBeforeSeconds)
 	require.Equal(t, 4, otherTarget.ProbePolicy.GlobalConcurrency)
-	require.Equal(t, 150, otherTarget.ProbePolicy.GlobalRenewBeforeSeconds)
+	require.Equal(t, 15, otherTarget.ProbePolicy.GlobalRenewBeforeSeconds)
 	rotationExec(t, `UPDATE ticket_borrow_requests SET finished_at=clock_timestamp(),outcome='configuration_changed' WHERE target_id=$1 AND finished_at IS NULL`, other)
 	renewBorrowTestJob(t, r, otherQ)
 	for range 3 {
@@ -90,7 +90,7 @@ func TestTicketBorrowGlobalProbeInheritanceOverrideAndLiveLimits(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, otherTarget.ProbePolicy.UseGlobal)
 	require.Equal(t, 4, otherTarget.ProbePolicy.Concurrency)
-	require.Equal(t, 150, otherTarget.ProbePolicy.RenewBeforeSeconds)
+	require.Equal(t, 15, otherTarget.ProbePolicy.RenewBeforeSeconds)
 	require.ErrorIs(t, r.BeginTargetRequest(ctx, otherQ), service.ErrBorrowUnavailable, "restoring inheritance fences the prior batch")
 	// Older clients omitting the new globals preserve administrator settings.
 	settings, err = r.Settings(ctx)
@@ -100,7 +100,7 @@ func TestTicketBorrowGlobalProbeInheritanceOverrideAndLiveLimits(t *testing.T) {
 	settings, err = r.Settings(ctx)
 	require.NoError(t, err)
 	require.Equal(t, 4, *settings.ProbeConcurrency)
-	require.Equal(t, 150, *settings.RenewBeforeSeconds)
+	require.Equal(t, 15, *settings.RenewBeforeSeconds)
 }
 
 func TestTicketBorrowGlobalProbeMigrationPreservesAccountChoices(t *testing.T) {

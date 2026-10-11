@@ -15,15 +15,15 @@ type borrowBudgetTestRepo struct {
 	deny         error
 }
 
-func (r *borrowBudgetTestRepo) ReserveSourceAttempt(context.Context, int64, string) error {
+func (r *borrowBudgetTestRepo) GrantSourceAttempt(context.Context, int64, string) (bool, error) {
 	r.reservations++
 	if r.deny != nil {
-		return r.deny
+		return false, r.deny
 	}
 	if r.reservations > 1 {
-		return &BorrowBudgetWaitError{Scope: "source", Until: time.Now().Add(40 * time.Second), RetryAfter: 40 * time.Second}
+		return false, &BorrowBudgetWaitError{Scope: "source", Until: time.Now().Add(40 * time.Second), RetryAfter: 40 * time.Second}
 	}
-	return nil
+	return true, nil
 }
 
 func TestTicketBorrowSourceReservationGatesAreNotMisreported(t *testing.T) {
@@ -46,7 +46,7 @@ func TestTicketBorrowSourceReservationGatesAreNotMisreported(t *testing.T) {
 			s.repo = r
 			u := &stateProbeUpstream{}
 			s.owner.httpUpstream = u
-			_, _, err := s.acquireSource(t.Context(), r.source, BorrowSettings{TTLSeconds: 230})
+			_, _, err := s.acquireSource(borrowTestCandidateContext(t.Context()), r.source, BorrowSettings{TTLSeconds: 230})
 			require.ErrorIs(t, err, tc.errorWant)
 			require.Empty(t, u.calls)
 			require.Equal(t, tc.reason, r.reason)
@@ -54,13 +54,16 @@ func TestTicketBorrowSourceReservationGatesAreNotMisreported(t *testing.T) {
 		})
 	}
 }
-func TestTicketBorrowSourceBudgetCountsRetryAndStopsBeforeSend(t *testing.T) {
+func TestTicketBorrowSourceBudgetCountsNewCandidatesAndStopsBeforeSend(t *testing.T) {
 	s, base := borrowFixture()
 	r := &borrowBudgetTestRepo{borrowSignalRepo: &borrowSignalRepo{borrowWorkerRepo: &borrowWorkerRepo{borrowTestRepo: base, source: boundBorrowTestSource(BorrowSource{ID: 1, Enabled: true, Model: "gpt-6-luna", Secret: BorrowSourceSecret{Credentials: map[string]any{"access_token": "local-test"}}})}}}
 	s.repo = r
 	u := &stateProbeUpstream{replies: []stateProbeReply{{status: 500, body: "unavailable"}}}
 	s.owner.httpUpstream = u
-	_, _, err := s.acquireSource(t.Context(), r.source, BorrowSettings{TTLSeconds: 230})
+	_, _, err := s.acquireSource(borrowTestCandidateContext(t.Context()), r.source, BorrowSettings{TTLSeconds: 230})
+	require.ErrorIs(t, err, ErrBorrowUnavailable)
+	r.reason = ""
+	_, _, err = s.acquireSource(borrowTestCandidateContext(t.Context()), r.source, BorrowSettings{TTLSeconds: 230})
 	require.ErrorIs(t, err, errBorrowSourceDeferred)
 	require.Len(t, u.calls, 1)
 	require.Equal(t, 2, r.reservations)

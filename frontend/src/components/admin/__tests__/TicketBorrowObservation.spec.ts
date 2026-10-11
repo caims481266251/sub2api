@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import TicketBorrowObservation from '../TicketBorrowObservation.vue'
 
-vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
+vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key, te: () => true }) }))
 
 describe('borrowing candidate observation', () => {
   it('distinguishes pre-verification age from recorded age and retains zero values', () => {
@@ -15,7 +15,9 @@ describe('borrowing candidate observation', () => {
     expect(w.get('[data-observation-field="cookieAgeAtRecord"]').text()).toContain('3.400 s')
     expect(w.get('[data-observation-field="remainingAtProbe"]').text()).toContain('229.500 s')
     expect(w.get('[data-observation-field="probeRetries"]').text()).toContain('0')
-    expect(w.get('[data-observation-field="httpStatus"]').text()).toContain('200 / 200')
+    expect(w.findAll('[data-observation-field="httpStatus"] [data-tag-value="200"]')).toHaveLength(2)
+    expect(w.get('[data-observation-field="probeVerdict"]').text()).toContain('ticketBorrowing.tags.ticketChanged')
+    expect(w.get('[data-observation-field="probeVerdict"] [data-tag-tone]').attributes('data-tag-tone')).toBe('danger')
   })
 
   it('does not invent verification values for an unused source candidate', () => {

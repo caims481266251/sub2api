@@ -26,6 +26,8 @@ func borrowIntegrationFixture(t *testing.T) (service.TicketBorrowRepository, int
 	a := mustCreateAccount(t, testEntClient(t), &service.Account{Name: "borrow-fixture", Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Credentials: map[string]any{"access_token": "target-token"}, Status: service.StatusActive, Schedulable: true})
 	t.Cleanup(func() {
 		ctx := context.Background()
+		_, _ = integrationDB.ExecContext(ctx, `DELETE FROM ticket_borrow_events WHERE target_id=$1`, a.ID)
+		_, _ = integrationDB.ExecContext(ctx, `DELETE FROM ticket_borrow_source_attempts WHERE target_id=$1`, a.ID)
 		_, _ = integrationDB.ExecContext(ctx, `DELETE FROM ticket_borrow_routes WHERE target_id=$1`, a.ID)
 		_, _ = integrationDB.ExecContext(ctx, `DELETE FROM ticket_borrow_targets WHERE account_id=$1`, a.ID)
 		_, _ = integrationDB.ExecContext(ctx, `DELETE FROM accounts WHERE id=$1`, a.ID)
@@ -33,6 +35,22 @@ func borrowIntegrationFixture(t *testing.T) (service.TicketBorrowRepository, int
 	require.NoError(t, r.SetTarget(t.Context(), a.ID, true, 0))
 	return r, a.ID
 }
+
+// Admission metadata shared by older persistence/session fixtures. Deadline
+// boundary tests set their own start and cutoff explicitly.
+func borrowAdmissionFixture(route *service.BorrowRoute) *service.BorrowRoute {
+	start := time.Now()
+	route.AcquisitionStartedAt = &start
+	route.AdmissionUntil = start.Add(80 * time.Second)
+	if route.SourceID > 0 {
+		route.AcquisitionIdentity = service.BorrowAcquisitionSource
+	} else {
+		route.AcquisitionIdentity = service.BorrowAcquisitionSelf
+		route.AcquisitionAccountID = route.TargetID
+	}
+	return route
+}
+
 func TestTicketBorrowPersistenceExpiryAndFencing(t *testing.T) {
 	r, id := borrowIntegrationFixture(t)
 	ctx := t.Context()
@@ -43,7 +61,7 @@ func TestTicketBorrowPersistenceExpiryAndFencing(t *testing.T) {
 	require.True(t, ok)
 	now, e := r.Now(ctx)
 	require.NoError(t, e)
-	route := &service.BorrowRoute{ID: uuid.NewString(), TargetID: id, TargetRevision: target.Revision, SourceID: 1, IdentityHash: "identity", CookieHash: uuid.NewString(), Gateway: "chat.gateway.unified-1.api.openai.com", ExpiresAt: now.Add(3 * time.Minute)}
+	route := borrowAdmissionFixture(&service.BorrowRoute{ID: uuid.NewString(), TargetID: id, TargetRevision: target.Revision, IdentityHash: "identity", CookieHash: uuid.NewString(), Gateway: "chat.gateway.unified-1.api.openai.com", ExpiresAt: now.Add(3 * time.Minute)})
 	require.NoError(t, r.Publish(ctx, route, "lease-one"))
 	got, e := r.Route(ctx, id, "identity", "")
 	require.NoError(t, e)
@@ -156,7 +174,7 @@ func TestTicketBorrowSessionsReplacementSourceDeleteAndFreshRepository(t *testin
 	require.True(t, ok)
 	now, e := r.Now(ctx)
 	require.NoError(t, e)
-	old := &service.BorrowRoute{ID: uuid.NewString(), TargetID: id, TargetRevision: target.Revision, SourceID: source.ID, IdentityHash: "identity", CookieHash: uuid.NewString(), ExpiresAt: now.Add(220 * time.Second)}
+	old := borrowAdmissionFixture(&service.BorrowRoute{ID: uuid.NewString(), TargetID: id, TargetRevision: target.Revision, SourceID: source.ID, IdentityHash: "identity", CookieHash: uuid.NewString(), ExpiresAt: now.Add(220 * time.Second)})
 	require.NoError(t, r.Publish(ctx, old, "worker"))
 	bound, e := r.BindSession(ctx, id, "conversation", old.ID)
 	require.NoError(t, e)
@@ -166,7 +184,7 @@ func TestTicketBorrowSessionsReplacementSourceDeleteAndFreshRepository(t *testin
 	replacement.CookieHash = uuid.NewString()
 	replacement.ExpiresAt = now.Add(4 * time.Minute)
 	// A completed valid candidate is publishable independently of new-batch readiness.
-	require.NoError(t, r.Publish(ctx, &replacement, "worker"))
+	require.NoError(t, r.Publish(ctx, borrowAdmissionFixture(&replacement), "worker"))
 	bound, e = r.BindSession(ctx, id, "conversation", replacement.ID)
 	require.NoError(t, e)
 	require.Equal(t, old.ID, bound)

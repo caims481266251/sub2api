@@ -33,7 +33,7 @@ func TestTicketBorrowAdminMinimumRemainingValidation(t *testing.T) {
 	for _, tc := range []struct {
 		value  string
 		status int
-	}{{"0", 200}, {"120", 200}, {"240", 200}, {"-1", 400}, {"241", 400}, {"120.5", 400}, {`"120"`, 400}} {
+	}{{"0", 200}, {"120", 200}, {"229", 200}, {"230", 400}, {"240", 400}, {"-1", 400}, {"241", 400}, {"120.5", 400}, {`"120"`, 400}} {
 		t.Run(tc.value, func(t *testing.T) {
 			r := &borrowSettingsAdminRepo{}
 			h := &AccountHandler{accountTestService: &service.AccountTestService{TicketBorrow: service.NewTicketBorrowService(r, nil, nil)}}

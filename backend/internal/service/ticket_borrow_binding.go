@@ -15,6 +15,9 @@ func WithBorrowBusinessBinding(ctx context.Context, h http.Header, previous stri
 }
 
 func (s *TicketBorrowService) borrowPreferredRoute(ctx context.Context, target int64, hint borrowBindingHint) (string, error) {
+	if err := s.waitResponseBinding(ctx, target, hint.Response); err != nil {
+		return "", err
+	}
 	preferred := ""
 	for _, key := range []string{hint.Response, hint.Session} {
 		if key == "" {

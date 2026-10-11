@@ -86,8 +86,8 @@ type borrowDeferredScanRepo struct {
 	advanced int
 }
 
-func (r *borrowDeferredScanRepo) AcquireJob(context.Context, string, int64, string) (bool, error) {
-	return false, nil
+func (r *borrowDeferredScanRepo) GrantSourceAttempt(context.Context, int64, string) (bool, error) {
+	return false, ErrBorrowUnavailable
 }
 func (r *borrowDeferredScanRepo) AdvanceScan(_ context.Context, _ int64, _ string, count int) error {
 	r.advanced += count
@@ -97,8 +97,9 @@ func TestTicketBorrowDiagnosticDoesNotSkipUnacquiredSource(t *testing.T) {
 	s, base := borrowFixture()
 	r := &borrowDeferredScanRepo{borrowWorkerRepo: &borrowWorkerRepo{borrowTestRepo: base, source: boundBorrowTestSource(BorrowSource{ID: 1, Enabled: true})}}
 	s.repo = r
+	s.owner.httpUpstream = &stateProbeUpstream{}
 	s.owner.openaiGatewayService = &OpenAIGatewayService{accountRepo: s.owner.accountRepo}
-	s.runTarget(t.Context(), BorrowTarget{AccountID: 11, Revision: 2, ScanSources: []int64{1}}, BorrowSettings{Running: true, TTLSeconds: 230}, "worker")
+	s.runTarget(t.Context(), BorrowTarget{AcquisitionIdentity: BorrowAcquisitionSource, AccountID: 11, Revision: 2, ScanSources: []int64{1}}, BorrowSettings{Running: true, TTLSeconds: 230}, "worker")
 	require.Zero(t, r.advanced)
 }
 func TestTicketBorrowActivityTransportFailureEndsReservation(t *testing.T) {

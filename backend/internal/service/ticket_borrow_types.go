@@ -102,10 +102,23 @@ func DefaultBorrowRecoverySettings() *BorrowRecoverySettings {
 }
 
 // NormalizeBorrowSettings reports the policy actually enforced by this version.
-// Legacy global prewarming and progressive cooldown stay disabled; renewal is
-// controlled by the global probe policy with optional account overrides.
+// Legacy global prewarming and progressive cooldown stay disabled. Legacy time
+// fields are read aliases; new admission and automatic renewal have one policy.
 func NormalizeBorrowSettings(s *BorrowSettings) {
 	s.PrewarmSeconds = 0
+	if s.AdmissionWindowSeconds != nil {
+		s.TTLSeconds = max(30, *s.AdmissionWindowSeconds)
+		floor := s.TTLSeconds - *s.AdmissionWindowSeconds
+		s.MinRouteRemainingSeconds = &floor
+		lead := BorrowRenewalLead(*s.AdmissionWindowSeconds, 0)
+		s.RenewBeforeSeconds = &lead
+	}
+	if s.Replenishment != nil {
+		p := *s.Replenishment
+		p.Inventory, p.IntervalSeconds, p.HoldSeconds = BorrowRollingInventory, 1, 0
+		p.MaintenanceIntervalSeconds = nil
+		s.Replenishment = &p
+	}
 	if s.Recovery == nil {
 		s.Recovery = DefaultBorrowRecoverySettings()
 	}
@@ -166,12 +179,23 @@ type BorrowEnvironment struct {
 }
 
 type BorrowCandidateDetails struct {
-	SourceQueueMS       int64 `json:"source_queue_ms,omitempty"`
-	SourcePreparationMS int64 `json:"source_preparation_ms,omitempty"`
-	SourceNetworkMS     int64 `json:"source_network_ms,omitempty"`
-	PublicationMS       int64 `json:"publication_ms,omitempty"`
+	AcquisitionIdentity    string                      `json:"acquisition_identity,omitempty"`
+	AcquisitionStartedAt   *time.Time                  `json:"acquisition_started_at,omitempty"`
+	UpstreamExpiresAt      *time.Time                  `json:"upstream_expires_at,omitempty"`
+	AdmissionUntil         *time.Time                  `json:"admission_until,omitempty"`
+	PoolEntryID            int64                       `json:"pool_entry_id,omitempty"`
+	AllocationRound        int64                       `json:"allocation_round,omitempty"`
+	ProxySessionRandomized bool                        `json:"proxy_session_randomized"`
+	Business               BorrowEnvironment           `json:"business"`
+	Environment            *BorrowCandidateEnvironment `json:"-"`
+	checkSource            func(context.Context) error
+	SourceQueueMS          int64 `json:"source_queue_ms,omitempty"`
+	SourcePreparationMS    int64 `json:"source_preparation_ms,omitempty"`
+	SourceNetworkMS        int64 `json:"source_network_ms,omitempty"`
+	PublicationMS          int64 `json:"publication_ms,omitempty"`
 
 	SourceSubjectHash        string                    `json:"-"`
+	SourceCredentialHash     string                    `json:"-"`
 	Replenishment            *BorrowReplenishmentAudit `json:"replenishment,omitempty"`
 	SourceEnvironmentVersion int64                     `json:"source_environment_version,omitempty"`
 	SourceRotationRevision   int64                     `json:"source_rotation_revision,omitempty"`
@@ -203,6 +227,7 @@ type BorrowCandidateDetails struct {
 	ContinueStatus           int                       `json:"continue_status,omitempty"`
 }
 type BorrowSettings struct {
+	AdmissionWindowSeconds *int                         `json:"admission_window_seconds,omitempty"`
 	Replenishment          *BorrowReplenishmentSettings `json:"replenishment,omitempty"`
 	ContinueTimeoutSeconds *int                         `json:"continue_timeout_seconds,omitempty"`
 	// Nil on writes preserves the saved value for older API clients.
@@ -226,10 +251,13 @@ type BorrowBudgetStatus struct {
 }
 type BorrowTarget struct {
 	*BorrowInventory
+	AcquisitionIdentity string `json:"acquisition_identity"`
+	AcquisitionRevision int64  `json:"acquisition_revision"`
 
 	BusinessRoutes          []BorrowRouteStatus       `json:"business_routes,omitempty"`
 	BusinessInflight        int                       `json:"business_inflight"`
 	BusinessConcurrency     int                       `json:"business_concurrency"`
+	PreferredRouteID        string                    `json:"preferred_route_id,omitempty"`
 	Replenishment           *BorrowReplenishmentState `json:"replenishment,omitempty"`
 	ProbePolicy             BorrowProbePolicy         `json:"probe_policy"`
 	UpstreamWaitUntil       *time.Time                `json:"upstream_wait_until,omitempty"`
@@ -270,9 +298,14 @@ type BorrowRouteSecret struct {
 	Profile  *tlsfingerprint.Profile `json:"profile,omitempty"`
 }
 type BorrowRoute struct {
-	CandidateID string `json:"-"`
+	AcquisitionIdentity  string     `json:"acquisition_identity"`
+	AcquisitionAccountID int64      `json:"acquisition_account_id"`
+	AcquisitionStartedAt *time.Time `json:"acquisition_started_at,omitempty"`
+	AdmissionUntil       time.Time  `json:"admission_until"`
+	CandidateID          string     `json:"-"`
 
 	SourceSubjectHash        string `json:"-"`
+	SourceCredentialHash     string `json:"-"`
 	TargetSubjectHash        string `json:"-"`
 	SourceRevision           int64  `json:"-"`
 	SourceEnvironmentVersion int64  `json:"-"`
@@ -294,6 +327,8 @@ type BorrowRoute struct {
 // Only sanitized route metadata is exposed to the management page.
 type BorrowRouteStatus struct {
 	ID                string    `json:"id"`
+	PublishedAt       time.Time `json:"published_at"`
+	CheckedAt         time.Time `json:"checked_at"`
 	Gateway           string    `json:"gateway"`
 	SourceAccountID   int64     `json:"source_account_id"`
 	ExpiresAt         time.Time `json:"expires_at"`

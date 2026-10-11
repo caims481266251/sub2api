@@ -1,0 +1,158 @@
+export type BorrowTagTone = 'success' | 'info' | 'warning' | 'danger' | 'neutral' | 'category'
+export type BorrowTagKind = 'reason' | 'stage' | 'state' | 'phase' | 'route' | 'maintenance' | 'verdict' | 'failure' | 'trigger' | 'statistic' | 'terminal' | 'http'
+type TagSpec = readonly [BorrowTagTone, string]
+const label = (tone: BorrowTagTone, key: string): TagSpec => [tone, `ticketBorrowing.tags.${key}`]
+
+// Explicit reason codes keep normal cancellation and intermediate progress separate
+// from failed verification. Unknown codes always remain neutral and visible.
+const reasons: Record<string, TagSpec> = {
+  source_cookie_acquired: label('info', 'candidateAcquired'),
+  source_attempt_finished: label('neutral', 'sourceFinished'),
+  source_failed: label('danger', 'sourceFailed'),
+  source_refresh_failed: label('danger', 'refreshFailed'),
+  source_acquisition_cancelled: label('neutral', 'cancelled'),
+  source_rate_limited: label('warning', 'rateLimited'),
+  source_model_rate_limited: label('warning', 'modelCooling'),
+  source_account_cooling: label('warning', 'cooling'),
+  source_account_threshold: label('warning', 'accountThreshold'),
+  source_runtime_blocked: label('warning', 'runtimeBlocked'),
+  source_model_not_supported: label('warning', 'unsupportedModel'),
+  source_credentials_unavailable: label('danger', 'credentials'),
+  source_http_401: label('danger', 'credentials'),
+  source_http_403: label('danger', 'accessDenied'),
+  source_http_429: label('warning', 'rateLimited'),
+  source_auth_restored: label('success', 'credentialsRestored'),
+  source_auth_excluded: label('neutral', 'historicalExclusion'),
+  source_auth_response_stale: label('neutral', 'staleIgnored'),
+  source_auth_exclusion_failed: label('danger', 'saveFailed'),
+  source_account_expired: label('neutral', 'accountExpired'),
+  source_account_unavailable: label('warning', 'accountUnavailable'),
+  source_is_target: label('neutral', 'isTarget'),
+  source_skipped: label('neutral', 'skipped'),
+  source_business_busy: label('warning', 'concurrencyWait'),
+  source_configuration_changed: label('neutral', 'configurationChanged'),
+  source_request_budget: label('warning', 'sourceBudget'),
+  source_proxy_pool_unavailable: label('warning', 'proxyWaiting'),
+  source_store_unavailable: label('warning', 'dataUnavailable'),
+  target_probe_passed: label('success', 'probePassed'),
+  target_probe_shadow_passed: label('info', 'passedUnpublished'),
+  target_ticket_changed: label('danger', 'ticketChanged'),
+  target_continue_timeout: label('warning', 'probeTimeout'),
+  target_probe_inconclusive: label('warning', 'inconclusive'),
+  target_route_changed: label('warning', 'routeChanged'),
+  target_unauthorized: label('danger', 'credentials'),
+  target_credentials_unavailable: label('danger', 'credentials'),
+  target_unavailable: label('warning', 'targetUnavailable'),
+  target_business_busy: label('warning', 'concurrencyWait'),
+  target_rate_limited: label('warning', 'rateLimited'),
+  target_proxy_pool_unavailable: label('warning', 'proxyUnavailable'),
+  target_request_budget: label('warning', 'targetBudget'),
+  target_upstream_waiting: label('warning', 'upstreamWait'),
+  target_recovery_cooling: label('warning', 'cooling'),
+  target_route_ready: label('neutral', 'awaitRenewal'),
+  no_candidate: label('neutral', 'noCandidate'),
+  candidate_unused_after_success: label('neutral', 'unusedAfterSuccess'),
+  candidate_unused_after_stop: label('neutral', 'cancelled'),
+  candidate_duplicate: label('neutral', 'duplicate'),
+  candidate_expired: label('neutral', 'candidateExpired'),
+  candidate_inventory_sufficient: label('neutral', 'inventorySufficient'),
+  candidate_publish_expired: label('warning', 'publishExpired'),
+  candidate_publish_conflict: label('warning', 'publishConflict'),
+  candidate_publish_failed: label('danger', 'publishFailed'),
+  candidate_store_unavailable: label('warning', 'dataUnavailable'),
+  replenishment_started: label('info', 'replenishmentStarted'),
+  replenishment_ended: label('neutral', 'replenishmentEnded'),
+  replenishment_inventory_retired: label('neutral', 'retired'),
+  rotation_replenishment_hold: label('info', 'sourceHeld'),
+  rotation_source_not_selected: label('neutral', 'skipped'),
+  rotation_binding_missing: label('warning', 'bindingMissing'),
+  rotation_no_eligible_sources: label('warning', 'noRotationSources'),
+  rotation_draining: label('info', 'draining'),
+  rotation_completed: label('success', 'rotationCompleted'),
+  rotation_verifying: label('info', 'awaitVerification'),
+  rotation_environment_changed: label('info', 'environmentChanged'),
+  rotation_drain_timeout: label('warning', 'drainTimeout'),
+  rotation_verification_timeout: label('warning', 'rotationTimeout'),
+  rotation_configuration_changed: label('neutral', 'configurationCancelled'),
+  rotation_source_only: label('neutral', 'sourceOnly'),
+  borrow_rotation_pending: label('info', 'rotationPending'),
+  borrow_rotation_no_alternative: label('warning', 'noAlternative'),
+  borrow_rotation_fingerprint_unavailable: label('danger', 'fingerprintFailed'),
+  borrow_fingerprint_invalid: label('danger', 'fingerprintInvalid'),
+  borrow_probe_concurrency_full: label('warning', 'concurrencyWait'),
+  borrow_acquisition_paused: label('neutral', 'paused'),
+  borrow_configuration_conflict: label('warning', 'configurationChanged'),
+  acquiring: label('info', 'acquiring'),
+  verifying: label('info', 'verifying'),
+  waiting: label('neutral', 'waiting'),
+  budget_waiting: label('warning', 'budgetWait'),
+  upstream_waiting: label('warning', 'upstreamWait'),
+  cooling: label('warning', 'cooling'),
+  legacy_wait_unknown: label('neutral', 'legacyWait'),
+  business_completed: label('success', 'upstreamCompleted'),
+  business_incomplete: label('warning', 'incomplete'),
+  business_http_error: label('danger', 'httpError')
+}
+
+const groups: Partial<Record<BorrowTagKind, Record<string, TagSpec>>> = {
+  reason: reasons,
+  stage: Object.fromEntries(['source', 'target', 'candidate', 'route', 'replenishment', 'rotation', 'diagnostic', 'business'].map(key => [key, ['category', `ticketBorrowing.stages.${key}`] as TagSpec])),
+  phase: {
+    probing: ['info', 'ticketBorrowing.management.phases.probing'],
+    paused: ['neutral', 'ticketBorrowing.management.phases.paused'],
+    disabled: label('neutral', 'disabled'), draining: label('info', 'draining'),
+    budget: label('warning', 'budgetWait'), upstream: label('warning', 'upstreamWait'),
+    unavailable: ['warning', 'ticketBorrowing.management.phases.unavailable'],
+    waiting: ['neutral', 'ticketBorrowing.management.phases.waiting']
+  },
+  route: {
+    accepting: ['success', 'ticketBorrowing.routes.accepting'],
+    boundOnly: ['neutral', 'ticketBorrowing.routes.boundOnly'],
+    draining: ['info', 'ticketBorrowing.routes.draining'],
+    unavailable: ['neutral', 'ticketBorrowing.routes.unavailable']
+  },
+  state: {
+    ready: ['success', 'ticketBorrowing.ready'], noRoute: ['warning', 'ticketBorrowing.management.noRoute'],
+    enabled: ['category', 'ticketBorrowing.enabled'], disabled: ['neutral', 'ticketBorrowing.disabled'],
+    eligible: ['success', 'ticketBorrowing.management.eligible'], unavailable: label('warning', 'accountUnavailable'),
+    running: label('info', 'running'), paused: label('neutral', 'paused'),
+    preferred: ['category', 'ticketBorrowing.routes.preferred'],
+    inherited: ['category', 'ticketBorrowing.probePolicy.inherited'], overridden: ['category', 'ticketBorrowing.probePolicy.overridden'],
+    modelDefault: ['category', 'ticketBorrowing.inheritedModel'], modelOverride: ['category', 'ticketBorrowing.management.modelOverride'],
+    included: ['category', 'ticketBorrowing.scope.filters.included'], excluded: ['neutral', 'ticketBorrowing.scope.filters.excluded'], unselected: ['neutral', 'ticketBorrowing.scope.filters.unselected'],
+    autoEnabled: label('category', 'autoEnabled'), autoDisabled: label('neutral', 'autoDisabled'),
+    rotationActive: label('info', 'rotationActive'), rotationWaiting: label('neutral', 'rotationWaiting'),
+    replenishmentPaused: label('neutral', 'replenishmentPaused'),
+    published: label('success', 'published'), unpublished: label('neutral', 'unpublished'),
+    publicationEnabled: label('category', 'publicationEnabled'), verificationOnly: label('category', 'verificationOnly'),
+    interrupted: label('danger', 'interruptedCount'), unconfirmed: label('warning', 'unconfirmedCount'),
+    sourceRole: label('category', 'sourceRole'), targetRole: label('category', 'targetRole'),
+    saved: label('success', 'saved'), failed: label('danger', 'saveFailed'),
+    unsaved: ['warning', 'ticketBorrowing.unsaved'], unknown: label('neutral', 'unknown'),
+    stale: label('warning', 'stale')
+  },
+  maintenance: Object.fromEntries(['search', 'refill', 'renew', 'healthy'].map(key => [key, [key === 'healthy' ? 'success' : 'info', `ticketBorrowing.replenishment.states.${key}`] as TagSpec])),
+  verdict: { healthy: label('success', 'probePassed'), degraded: label('danger', 'ticketChanged'), inconclusive: label('warning', 'inconclusive') },
+  failure: {
+    unsupported: label('warning', 'unsupported'), account_error: label('danger', 'credentials'), rate_limited: label('warning', 'rateLimited'),
+    model_unsupported: label('warning', 'unsupportedModel'), upstream_error: label('danger', 'upstreamError'), network_error: label('danger', 'networkError'),
+    stream_error: label('warning', 'incomplete'), no_ticket: label('warning', 'noTicket'), cancelled: label('neutral', 'cancelled'),
+    target_continue_timeout: label('warning', 'probeTimeout'), route_changed: label('warning', 'routeChanged')
+  },
+  trigger: { automatic: label('category', 'automatic'), manual: label('category', 'manual') },
+  statistic: Object.fromEntries(Object.entries({passed:'success',published:'success',ticket_changed:'danger',timeout:'warning',cancelled:'neutral',other:'neutral',skipped:'neutral',inflight:'info'}).map(([key,tone]) => [key,[tone as BorrowTagTone,`ticketBorrowing.statistics.${key}`] as TagSpec])),
+  terminal: { completed: label('success', 'upstreamCompleted'), failed: label('danger', 'upstreamFailed'), incomplete: label('warning', 'incomplete'), cancelled: label('neutral', 'cancelled') }
+}
+
+export function borrowTag(kind: BorrowTagKind, value?: string | number) {
+  const code = value == null ? '' : String(value)
+  if (!code) return { code, tone: 'neutral' as BorrowTagTone, key: '', known: true }
+  if (kind === 'http' && /^(0|[1-5]\d\d)$/.test(code)) {
+    const n = Number(code)
+    const tone: BorrowTagTone = n === 0 ? 'neutral' : n === 429 ? 'warning' : n >= 400 ? 'danger' : n >= 300 || n < 200 ? 'info' : 'success'
+    return { code, tone, key: n === 0 ? 'ticketBorrowing.tags.noHTTPResponse' : '', literal: n === 0 ? '' : `HTTP ${n}`, known: true }
+  }
+  const group = groups[kind]
+  const spec = group && Object.prototype.hasOwnProperty.call(group, code) ? group[code] : undefined
+  return { code, tone: spec?.[0] ?? 'neutral', key: spec?.[1] ?? 'ticketBorrowing.tags.other', known: !!spec }
+}

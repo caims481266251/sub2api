@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import BorrowSourceRotation from '../BorrowSourceRotation.vue'
 import type { BorrowRotationState } from '@/api/admin/ticketBorrowing'
-vi.mock('vue-i18n', () => ({useI18n: () => ({t: (key: string) => key})}))
+vi.mock('vue-i18n', () => ({useI18n: () => ({t: (key: string) => key, te: () => true})}))
 const state = (revision = 2): BorrowRotationState => ({account_id: 11, role: 'source', revision, automatic: false, interval_seconds: 60, phase: 'idle', reason: '', environment_version: 1, server_now: new Date().toISOString()})
 const mountPanel = (s?: BorrowRotationState) => mount(BorrowSourceRotation, {props: {accountId: 11, name: 'source', canRotate: true, hasBinding: true, state: s, busy: false, running: true, loaded: true}})
 describe('source borrowing environment rotation', () => {

@@ -150,9 +150,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 	promptCacheKey := h.gatewayService.ExtractSessionID(c, body)
 
 	c.Request = c.Request.WithContext(service.WithBorrowBusinessBinding(c.Request.Context(), c.Request.Header, ""))
-	borrowCtx, borrowRecovery := service.WithBorrowBusinessRecovery(c.Request.Context(), h.cfg)
-	c.Request = c.Request.WithContext(borrowCtx)
-	defer borrowRecovery.Close()
+	// Borrowing uses the same retry, timeout and cancellation policy as ordinary traffic.
 
 	maxAccountSwitches := h.maxAccountSwitches
 	switchCount := 0
@@ -170,15 +168,12 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 	c.Request = c.Request.WithContext(ccPricingCtx)
 
 	for {
-		if h.stopBorrowBusinessRecovery(c, streamStarted, false) {
-			return
-		}
 		if failoverClientGone(c) {
 			return
 		}
 		reqLog.Debug("openai_chat_completions.account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
 		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
-			service.BorrowBusinessRecoveryContext(c.Request.Context()),
+			c.Request.Context(),
 			apiKey.GroupID,
 			"",
 			sessionHash,
@@ -192,12 +187,6 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 			requestPlatform,
 		)
 		if err != nil {
-			if h.stopBorrowBusinessRecovery(c, streamStarted, false) {
-				return
-			}
-			if borrowBusinessSelectionFallback(c, err, failedAccountIDs) {
-				continue
-			}
 			err = rpmAdmission.selectionError(err)
 			if isOpenAIRPMError(err) {
 				rpmAdmission.retryAfter(c, err)
@@ -283,7 +272,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 					accountReleaseFunc()
 				}
 			}()
-			return h.gatewayService.ForwardAsChatCompletions(rpmAdmission.forwardContext(service.BorrowBusinessRecoveryContext(c.Request.Context()), account), c, account, forwardBody, promptCacheKey, "")
+			return h.gatewayService.ForwardAsChatCompletions(rpmAdmission.forwardContext(c.Request.Context(), account), c, account, forwardBody, promptCacheKey, "")
 		}()
 		if retryOpenAIInitialAdmission(c, err, result, body, account.ID, failedAccountIDs, &switchCount, maxAccountSwitches) {
 			lastAdmissionErr = err
@@ -352,10 +341,6 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 				}
 			})
 		}
-		if h.stopBorrowBusinessRecovery(c, streamStarted, false) {
-			submitChatUsage(result)
-			return
-		}
 		if err != nil {
 			if service.IsOpenAITurnAdmissionError(err) {
 				status, code, message := openAIAdmissionClientError(err)
@@ -388,14 +373,6 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 					}
 					if !forbiddenBudget.canRetry(failoverErr, switchCount) {
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
-						return
-					}
-					if handled, retry := h.handleBorrowBusinessRecovery(c, failoverErr, account, failedAccountIDs, &switchCount, maxAccountSwitches, streamStarted, false); handled {
-						submitChatUsage(result)
-						lastFailoverErr = failoverErr
-						if retry {
-							continue
-						}
 						return
 					}
 					// Pool mode: retry on the same account

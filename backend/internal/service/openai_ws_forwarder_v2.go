@@ -257,10 +257,12 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		anchorScope = anchor.scope
 	}
 	lease, err := s.getOpenAIWSConnPool().Acquire(acquireCtx, openAIWSAcquireRequest{
-		AnchorScope: anchorScope,
-		Account:     account,
-		WSURL:       wsURL,
-		Headers:     wsHeaders,
+		Model: mappedModel, PreviousResponseID: previousResponseID,
+		LifetimeContext: ctx,
+		AnchorScope:     anchorScope,
+		Account:         account,
+		WSURL:           wsURL,
+		Headers:         wsHeaders,
 		HeadersFactory: func(factoryCtx context.Context, headers http.Header) (http.Header, error) {
 			latest, err := s.admitOpenAITurnForGroup(factoryCtx, groupID, enforceGroup, account, mappedModel)
 			if err != nil {

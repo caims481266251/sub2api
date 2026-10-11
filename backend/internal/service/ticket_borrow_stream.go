@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -35,23 +36,44 @@ func borrowResponseKey(id string) string {
 // are owned by the normal request logger, never by borrowing telemetry.
 type borrowObservedBody struct {
 	io.ReadCloser
-	recoveryContext  context.Context
 	owner            *TicketBorrowService
-	target, source   int64
+	target           int64
 	effectiveSession string
 	httpContinuation bool
 	route            string
 	pending          []byte
 	dropping         bool
 	bound            bool
+	bindingDone      <-chan struct{}
+	deferred         []byte
+	deferredErr      error
 	mu               sync.Mutex
 }
 
 func (b *borrowObservedBody) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	b.mu.Lock()
+	if len(b.deferred) > 0 {
+		<-b.bindingDone
+		n := copy(p, b.deferred)
+		b.deferred = b.deferred[n:]
+		var err error
+		if len(b.deferred) == 0 {
+			b.deferred = nil
+			err, b.deferredErr = b.deferredErr, nil
+		}
+		b.mu.Unlock()
+		return n, err
+	}
+	b.mu.Unlock()
 	n, err := b.ReadCloser.Read(p)
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	rest := p[:n]
+	terminalAt := -1
+	lineStart := 0
 	for len(rest) > 0 {
 		pos := bytes.IndexByte(rest, '\n')
 		part := rest
@@ -70,22 +92,57 @@ func (b *borrowObservedBody) Read(p []byte) (int, error) {
 			break
 		}
 		if !b.dropping {
-			b.line(b.pending)
+			if b.line(b.pending) && terminalAt < 0 {
+				terminalAt = lineStart
+			}
 		}
 		b.pending = nil
 		b.dropping = false
 		rest = rest[pos+1:]
+		lineStart = n - len(rest)
 	}
 	if err != nil {
 		if err == io.EOF && len(b.pending) > 0 && !b.dropping {
-			b.line(b.pending)
+			if b.line(b.pending) && terminalAt < 0 {
+				terminalAt = lineStart
+			}
+		}
+	}
+	if terminalAt >= 0 && b.bindingDone != nil {
+		select {
+		case <-b.bindingDone:
+		default:
+			// Flush any earlier deltas in this same network chunk first. Only
+			// completion waits for the bounded metadata write, so a continuation
+			// arriving at another instance after completion can find its route.
+			if terminalAt > 0 {
+				b.deferred = append([]byte(nil), p[terminalAt:n]...)
+				b.deferredErr = err
+				return terminalAt, nil
+			}
+			<-b.bindingDone
 		}
 	}
 	return n, err
 }
-func (b *borrowObservedBody) line(line []byte) {
+func borrowTerminalEvent(typ string) bool {
+	switch typ {
+	case "response.completed", "response.done", "response.failed", "response.incomplete", "response.cancelled", "response.canceled", "error":
+		return true
+	default:
+		return false
+	}
+}
+
+func (b *borrowObservedBody) line(line []byte) bool {
+	if bytes.HasPrefix(line, []byte("event:")) {
+		return borrowTerminalEvent(string(bytes.TrimSpace(line[6:])))
+	}
 	if !bytes.HasPrefix(line, []byte("data:")) {
-		return
+		return false
+	}
+	if bytes.Equal(bytes.TrimSpace(line[5:]), []byte("[DONE]")) {
+		return true
 	}
 	var event struct {
 		Type     string `json:"type"`
@@ -95,19 +152,64 @@ func (b *borrowObservedBody) line(line []byte) {
 		} `json:"response"`
 	}
 	if json.Unmarshal(bytes.TrimSpace(line[5:]), &event) != nil {
-		return
+		return false
 	}
-	payload := bytes.TrimSpace(line[5:])
-	BorrowBusinessRecoveryFromContext(b.recoveryContext).ObserveSSE(b.recoveryContext, payload, event.Type)
 	if !b.bound && event.Response.ID != "" && strings.HasPrefix(event.Type, "response.") {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		var err error
-		if b.httpContinuation {
-			err = b.owner.repo.(BorrowHTTPContinuationRepository).BindHTTPContinuationResponse(ctx, b.target, borrowResponseKey(event.Response.ID), b.route, b.effectiveSession)
-		} else {
-			_, err = b.owner.repo.BindSession(ctx, b.target, borrowResponseKey(event.Response.ID), b.route)
-		}
-		cancel()
-		b.bound = err == nil
+		b.bound = true
+		b.bindingDone = b.owner.bindResponseAsync(b.target, borrowResponseKey(event.Response.ID), b.route, b.effectiveSession, b.httpContinuation)
 	}
+	return borrowTerminalEvent(event.Type)
+}
+
+// Closing also joins the bounded metadata write on partial/aborted responses.
+func (b *borrowObservedBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.mu.Lock()
+	done := b.bindingDone
+	b.mu.Unlock()
+	if done != nil {
+		<-done
+	}
+	return err
+}
+
+type borrowResponseBindingKey struct {
+	target   int64
+	response string
+}
+
+func (s *TicketBorrowService) bindResponseAsync(target int64, response, route, session string, continuation bool) <-chan struct{} {
+	key := borrowResponseBindingKey{target, response}
+	done := make(chan struct{})
+	existing, loaded := s.responseBindings.LoadOrStore(key, done)
+	if loaded {
+		return existing.(chan struct{})
+	}
+	go func() {
+		defer s.responseBindings.Delete(key)
+		defer close(done)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		var err error
+		if continuation {
+			err = s.repo.(BorrowHTTPContinuationRepository).BindHTTPContinuationResponse(ctx, target, response, route, session)
+		} else {
+			_, err = s.repo.BindSession(ctx, target, response, route)
+		}
+		if err != nil {
+			slog.Warn("borrow_response_binding_failed", "target_id", target, "route_id", route)
+		}
+	}()
+	return done
+}
+
+func (s *TicketBorrowService) waitResponseBinding(ctx context.Context, target int64, response string) error {
+	if value, ok := s.responseBindings.Load(borrowResponseBindingKey{target, response}); ok {
+		select {
+		case <-value.(chan struct{}):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
 }

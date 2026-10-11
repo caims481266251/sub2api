@@ -95,7 +95,7 @@ func TestTicketBorrowStoppedRoundCancelsSlowSources(t *testing.T) {
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				s.runTarget(t.Context(), BorrowTarget{AccountID: 11, Revision: 2, ProbePolicy: BorrowProbePolicy{Concurrency: 3, RenewBeforeSeconds: 15}}, BorrowSettings{Running: true, TTLSeconds: 230}, "stop-slow-prefetch")
+				s.runTarget(t.Context(), BorrowTarget{AcquisitionIdentity: BorrowAcquisitionSource, AccountID: 11, Revision: 2, ProbePolicy: BorrowProbePolicy{Concurrency: 3, RenewBeforeSeconds: 15}}, BorrowSettings{Running: true, TTLSeconds: 230}, "stop-slow-prefetch")
 			}()
 			select {
 			case <-done:
@@ -151,7 +151,7 @@ func TestTicketBorrowSuccessfulPublicationCancelsSlowSpeculativeSources(t *testi
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		s.runTarget(t.Context(), BorrowTarget{AccountID: 11, Revision: 2, ProbePolicy: BorrowProbePolicy{Concurrency: 3, RenewBeforeSeconds: 15}}, BorrowSettings{Running: true, TTLSeconds: 230}, "fast-winner")
+		s.runTarget(t.Context(), BorrowTarget{AcquisitionIdentity: BorrowAcquisitionSource, AccountID: 11, Revision: 2, ProbePolicy: BorrowProbePolicy{Concurrency: 3, RenewBeforeSeconds: 15}}, BorrowSettings{Running: true, TTLSeconds: 230}, "fast-winner")
 	}()
 	select {
 	case <-done:

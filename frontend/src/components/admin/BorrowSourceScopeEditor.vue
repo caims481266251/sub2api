@@ -1,9 +1,13 @@
 <template>
   <fieldset :disabled="disabled" class="space-y-4" data-testid="source-scope-editor">
-    <p class="text-sm text-gray-500">{{ t('ticketBorrowing.scope.hint') }}</p>
+    <p class="text-sm text-gray-500 dark:text-gray-400">{{ t('ticketBorrowing.scope.hint') }}</p>
+    <div v-if="missingCount" class="rounded-lg bg-amber-50 p-3 text-sm dark:bg-amber-900/20">
+      <p>{{ t('ticketBorrowing.missingSelection', { count: missingCount }) }}</p>
+      <button type="button" class="mt-2 text-primary-600" data-testid="scope-clean-missing" @click="cleanMissing">{{ t('ticketBorrowing.scope.cleanMissing') }}</button>
+    </div>
     <details class="rounded-lg border p-3 dark:border-dark-600">
       <summary class="cursor-pointer font-medium">{{ t('ticketBorrowing.selectGroups') }} · {{ modelValue.group_ids.length }}</summary>
-      <p class="my-2 text-xs text-gray-500">{{ t('ticketBorrowing.scope.groupHint') }}</p>
+      <p class="my-2 text-xs text-gray-500 dark:text-gray-400">{{ t('ticketBorrowing.scope.groupHint') }}</p>
       <input v-model="groupSearch" class="input" :aria-label="t('ticketBorrowing.searchGroups')" :placeholder="t('ticketBorrowing.searchGroups')" />
       <div class="my-2 flex flex-wrap gap-3 text-sm">
         <button type="button" class="text-primary-600" :disabled="!filteredGroups.length" data-testid="scope-groups-add" @click="changeGroups(filteredGroups.map(g => g.id), true)">{{ t('ticketBorrowing.scope.addGroups', { count: filteredGroups.length }) }}</button>
@@ -12,9 +16,9 @@
       <div class="max-h-48 overflow-y-auto">
         <label v-for="group in filteredGroups" :key="group.id" class="flex items-center gap-2 p-2 text-sm">
           <input type="checkbox" :data-group-id="group.id" :checked="modelValue.group_ids.includes(group.id)" @change="changeGroups([group.id], checked($event))" />
-          {{ group.name }} <span class="text-gray-500">#{{ group.id }}</span>
+          {{ group.name }} <span class="text-gray-500 dark:text-gray-400">#{{ group.id }}</span>
         </label>
-        <p v-if="!filteredGroups.length" class="p-2 text-sm text-gray-500">{{ t('ticketBorrowing.noMatches') }}</p>
+        <p v-if="!filteredGroups.length" class="p-2 text-sm text-gray-500 dark:text-gray-400">{{ t('ticketBorrowing.noMatches') }}</p>
       </div>
     </details>
     <div class="grid gap-2 sm:grid-cols-2">
@@ -34,33 +38,32 @@
     <div class="flex flex-wrap gap-2">
       <button type="button" class="btn btn-primary btn-sm" :disabled="!addable.length" data-testid="scope-add" @click="changeAccounts(addable, true)">{{ t('ticketBorrowing.scope.add', { count: addable.length }) }}</button>
       <button type="button" class="btn btn-secondary btn-sm" :disabled="!removable.length" data-testid="scope-remove" @click="changeAccounts(removable, false)">{{ t('ticketBorrowing.scope.remove', { count: removable.length }) }}</button>
-      <span v-if="skippedTargets" class="self-center text-xs text-gray-500">{{ t('ticketBorrowing.scope.skipTargets', { count: skippedTargets }) }}</span>
+      <span v-if="skippedTargets" class="self-center text-xs text-gray-500 dark:text-gray-400">{{ t('ticketBorrowing.scope.skipTargets', { count: skippedTargets }) }}</span>
     </div>
-    <div class="max-h-96 overflow-y-auto divide-y rounded-lg border dark:divide-dark-600 dark:border-dark-600">
-      <label v-for="account in rows" :key="account.id" class="flex items-start gap-3 p-3 text-sm" :data-scope-row="account.id">
-        <input type="checkbox" class="mt-1" :data-account-id="account.id" :checked="selected.includes(account.id)" @change="toggle([account.id], checked($event))" />
-        <span class="min-w-0 flex-1 break-words">{{ account.name }} <span class="text-gray-500">#{{ account.id }}</span>
-          <span class="mt-1 block text-xs text-gray-500">{{ origin(account) }}</span>
-          <span v-if="account.is_target || !account.request_eligible" class="mt-1 block text-xs text-amber-700 dark:text-amber-300">{{ t(account.is_target ? 'ticketBorrowing.sourceIsTarget' : 'ticketBorrowing.sourceUnavailable') }}</span>
+    <div class="divide-y rounded-lg border dark:divide-dark-600 dark:border-dark-600">
+      <div v-for="account in rows" :key="account.id" class="flex items-start gap-3 p-3 text-sm" :data-scope-row="account.id" :data-source-account-id="includedInScope(account, modelValue) ? account.id : undefined">
+        <input type="checkbox" class="mt-1" :aria-label="t('ticketBorrowing.scope.checkAccount', { id: account.id })" :data-account-id="account.id" :checked="selected.includes(account.id)" @change="toggle([account.id], checked($event))" />
+        <span class="min-w-0 flex-1 break-words">{{ account.name }} <span class="text-gray-500 dark:text-gray-400">#{{ account.id }}</span>
+          <span class="mt-1 block text-xs text-gray-500 dark:text-gray-400">{{ origin(account) }}</span>
+          <BorrowTag v-if="account.is_target || !account.request_eligible" class="mt-1" :value="account.is_target ? 'source_is_target' : account.unavailable_reason || 'source_account_unavailable'" detail />
         </span>
-        <span class="shrink-0 text-xs" :class="includedInScope(account, modelValue) ? 'text-emerald-600' : 'text-gray-500'">{{ t(`ticketBorrowing.scope.filters.${isExcluded(account.id) ? 'excluded' : includedInScope(account, modelValue) ? 'included' : 'unselected'}`) }}</span>
-      </label>
-      <p v-if="!rows.length" class="p-6 text-center text-sm text-gray-500">{{ t('ticketBorrowing.noMatches') }}</p>
+        <BorrowTag class="shrink-0" kind="state" :value="isExcluded(account.id) ? 'excluded' : includedInScope(account, modelValue) ? 'included' : 'unselected'" /><Toggle :model-value="includedInScope(account, modelValue)" :disabled="disabled || account.is_target" :aria-label="t('ticketBorrowing.scope.includeAccount', { id: account.id })" :data-scope-include="account.id" @update:model-value="changeAccounts([account.id], $event)" />
+      </div>
+      <p v-if="!rows.length" class="p-6 text-center text-sm text-gray-500 dark:text-gray-400">{{ t('ticketBorrowing.noMatches') }}</p>
     </div>
     <BorrowListPagination v-if="filtered.length" v-model:page="page" v-model:page-size="pageSize" :total="filtered.length" />
-    <div v-if="missingCount" class="rounded-lg bg-amber-50 p-3 text-sm dark:bg-amber-900/20">
-      <p>{{ t('ticketBorrowing.missingSelection', { count: missingCount }) }}</p>
-      <button type="button" class="mt-2 text-primary-600" data-testid="scope-clean-missing" @click="cleanMissing">{{ t('ticketBorrowing.scope.cleanMissing') }}</button>
-    </div>
+
   </fieldset>
 </template>
 
 <script setup lang="ts">
+import BorrowTag from './BorrowTag.vue'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { BorrowSelection, BorrowSourceOption } from '@/api/admin/ticketBorrowing'
 import { changeSourceScope, includedByGroup, includedInScope } from '@/composables/borrowSourceScope'
 import { useBorrowBatchSelection } from '@/composables/useBorrowBatchSelection'
+import Toggle from '@/components/common/Toggle.vue'
 import Select from '@/components/common/Select.vue'
 import BorrowListPagination from './BorrowListPagination.vue'
 

@@ -238,7 +238,7 @@ func TestBorrowContinueTimeoutRejectsCandidateAcrossBatchesAndAllowsNewRoute(t *
 	up := &stateProbeUpstream{replies: []stateProbeReply{source("chat.gateway.unified-1.api.openai.com"), mint, {err: &borrowContinueTimeoutError{Seconds: 7}}}}
 	s.owner.httpUpstream = up
 	run := func() {
-		s.runTarget(t.Context(), BorrowTarget{AccountID: 11, Revision: 2}, BorrowSettings{Running: true, TTLSeconds: 230}, "worker")
+		s.runTarget(t.Context(), BorrowTarget{AcquisitionIdentity: BorrowAcquisitionSource, AccountID: 11, Revision: 2}, BorrowSettings{Running: true, TTLSeconds: 230}, "worker")
 	}
 	run()
 	require.Len(t, up.calls, 3)

@@ -29,7 +29,6 @@ describe('per-target probe policy', () => {
     const w = mount(BorrowProbePolicy, { props: { target: customized } })
     await input(w, 'probe-use-global').setValue(true)
     expect((input(w, 'probe-concurrency').element as HTMLInputElement).value).toBe('2')
-    expect((input(w, 'probe-renew-before').element as HTMLInputElement).value).toBe('180')
     await w.setProps({ target: { ...customized, probe_policy: { ...customized.probe_policy, global_concurrency: 4 } } })
     expect((input(w, 'probe-use-global').element as HTMLInputElement).checked).toBe(true)
     expect((input(w, 'probe-concurrency').element as HTMLInputElement).value).toBe('4')
@@ -39,22 +38,19 @@ describe('per-target probe policy', () => {
     expect(input(w, 'probe-policy-save').attributes('disabled')).toBeDefined()
     w.unmount()
   })
-  it('uses 2 / 180 only as the fallback when a policy is not loaded', () => {
+  it('uses concurrency 2 as the fallback when a policy is not loaded', () => {
     const w = mount(BorrowProbePolicy, { props: { target: { ...target(), probe_policy: undefined } } })
     expect((input(w, 'probe-concurrency').element as HTMLInputElement).value).toBe('2')
-    expect((input(w, 'probe-renew-before').element as HTMLInputElement).value).toBe('180')
     expect(input(w, 'probe-policy-save').attributes('disabled')).toBeDefined()
     w.unmount()
   })
   it('preserves a saved concurrency of 3 and saves only the selected target policy', async () => {
     const w = mount(BorrowProbePolicy, { props: { target: target() } })
     expect((input(w, 'probe-concurrency').element as HTMLInputElement).value).toBe('3')
-    expect((input(w, 'probe-renew-before').element as HTMLInputElement).value).toBe('15')
     await input(w, 'probe-concurrency').setValue(5)
-    await input(w, 'probe-renew-before').setValue(30)
     api.saveProbePolicy.mockResolvedValue({ ...target(), probe_policy: { revision: 2, concurrency: 5, renew_before_seconds: 30 } })
     await input(w, 'probe-policy-save').trigger('click'); await flushPromises()
-    expect(api.saveProbePolicy).toHaveBeenCalledWith(11, { revision: 1, concurrency: 5, renew_before_seconds: 30, use_global: false })
+    expect(api.saveProbePolicy).toHaveBeenCalledWith(11, { revision: 1, concurrency: 5, renew_before_seconds: 15, use_global: false })
     expect(w.emitted('saved')).toHaveLength(1)
     expect(w.emitted('saved')![0][0]).toMatchObject({ revision: 2, ready: true })
     w.unmount()
@@ -72,7 +68,7 @@ describe('per-target probe policy', () => {
     expect(w.emitted('dirty')?.at(-1)).toEqual([false])
     w.unmount()
   })
-  it.each([['probe-concurrency', 0], ['probe-concurrency', 33], ['probe-concurrency', 1.5], ['probe-renew-before', -1], ['probe-renew-before', 241], ['probe-renew-before', 0.5], ['probe-renew-before', '']])('rejects invalid %s = %s', async (name, value) => {
+  it.each([['probe-concurrency', 0], ['probe-concurrency', 33], ['probe-concurrency', 1.5]])('rejects invalid %s = %s', async (name, value) => {
     const w = mount(BorrowProbePolicy, { props: { target: target() } })
     await input(w, name as string).setValue(value)
     expect(input(w, name as string).attributes('aria-invalid')).toBe('true')
@@ -80,9 +76,9 @@ describe('per-target probe policy', () => {
     expect(input(w, 'probe-policy-save').attributes('disabled')).toBeDefined()
     expect(api.saveProbePolicy).not.toHaveBeenCalled(); w.unmount()
   })
-  it('accepts zero renewal window and the maximum probe concurrency', async () => {
+  it('accepts maximum concurrency without a renewal control', async () => {
     const w = mount(BorrowProbePolicy, { props: { target: target() } })
-    await input(w, 'probe-concurrency').setValue(32); await input(w, 'probe-renew-before').setValue(0)
+    await input(w, 'probe-concurrency').setValue(32)
     expect(input(w, 'probe-policy-save').attributes('disabled')).toBeUndefined(); w.unmount()
   })
   it('keeps failed drafts and ignores a late response after switching targets', async () => {

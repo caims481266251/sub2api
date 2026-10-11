@@ -7,8 +7,6 @@ import (
 	"time"
 )
 
-type borrowClientLifetimeKey struct{}
-
 // A reservation spans connection waiting and the entire response body, not
 // just response headers. Database leases survive across application instances.
 type borrowRouteUse struct {
@@ -25,18 +23,11 @@ type borrowRouteUse struct {
 func newBorrowRouteUse(ctx context.Context, repo BorrowRouteLeaseRepository, id string, renewEvery time.Duration) *borrowRouteUse {
 	ctx, cancel := context.WithCancel(ctx)
 	u := &borrowRouteUse{repo: repo, id: id, ctx: ctx, cancel: cancel, done: make(chan struct{})}
-	client := ctx
-	if original, ok := ctx.Value(borrowClientLifetimeKey{}).(context.Context); ok {
-		client = original
-	}
 	go func() {
 		ticker := time.NewTicker(renewEvery)
 		defer ticker.Stop()
 		for {
 			select {
-			case <-client.Done():
-				u.finish()
-				return
 			case <-ctx.Done():
 				u.finish()
 				return

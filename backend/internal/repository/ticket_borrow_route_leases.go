@@ -8,14 +8,14 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
 
-const borrowRouteSelect = `SELECT r.id,r.target_id,r.target_revision,r.source_id,r.identity_hash,r.cookie_hash,r.gateway,LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at)),r.secret,
- LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at))-s.min_route_remaining_seconds*INTERVAL '1 second'
+const borrowRouteSelect = `SELECT r.id,r.target_id,r.target_revision,COALESCE(r.source_id,0),r.identity_hash,r.cookie_hash,r.gateway,LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at)),r.secret,
+ LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at),r.admission_until)
  FROM ticket_borrow_routes r LEFT JOIN ticket_borrow_cookie_deadlines d ON d.cookie_hash=r.cookie_hash JOIN ticket_borrow_targets t ON t.account_id=r.target_id AND t.revision=r.target_revision
  JOIN accounts a ON a.id=t.account_id JOIN ticket_borrow_settings s ON s.id=1
- WHERE t.account_id=$1 AND t.enabled AND a.deleted_at IS NULL AND a.status='active' AND a.schedulable AND (NOT a.auto_pause_on_expired OR a.expires_at IS NULL OR a.expires_at>clock_timestamp()) AND NOT EXISTS(SELECT 1 FROM ticket_borrow_rotation_accounts x WHERE x.account_id=t.account_id AND x.phase='draining' AND x.active_job IS NOT NULL) AND r.revoked_at IS NULL AND LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at))>clock_timestamp()+s.min_route_remaining_seconds*INTERVAL '1 second' AND r.identity_hash=$2 AND NOT r.validation_only AND (($3='' AND r.inventory_eligible) OR r.id=$3)`
+ WHERE t.account_id=$1 AND t.enabled AND a.deleted_at IS NULL AND a.status='active' AND a.schedulable AND (NOT a.auto_pause_on_expired OR a.expires_at IS NULL OR a.expires_at>clock_timestamp()) AND r.revoked_at IS NULL AND LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at),r.admission_until)>clock_timestamp() AND r.identity_hash=$2 AND NOT r.validation_only AND (($3='' AND r.inventory_eligible) OR r.id=$3)`
 
 // Publication inserts checked_at after verification. Expiry and ID only break ties.
-const borrowRouteLatestOrder = `r.checked_at DESC,LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at)) DESC,r.id`
+const borrowRouteLatestOrder = `r.checked_at DESC,LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at),r.admission_until) DESC,r.id`
 
 func (r *ticketBorrowRepository) readRoute(ctx context.Context, db borrowQueryer, id int64, identity, preferred string) (*service.BorrowRoute, error) {
 	order := borrowRouteLatestOrder
@@ -115,21 +115,21 @@ func (r *ticketBorrowRepository) ReleaseRoute(ctx context.Context, lease string)
 }
 
 func (r *ticketBorrowRepository) RouteStatuses(ctx context.Context, id int64, identity string) ([]service.BorrowRouteStatus, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT r.id,r.gateway,COALESCE(src.account_id,0),
+	rows, err := r.db.QueryContext(ctx, `SELECT r.id,r.gateway,COALESCE(r.acquisition_account_id,src.account_id,0),
  LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at)),
- LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at))-s.min_route_remaining_seconds*INTERVAL '1 second',
+ LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at),r.admission_until),
  r.inventory_eligible,
  t.enabled AND t.revision=r.target_revision AND a.deleted_at IS NULL AND a.status='active' AND a.schedulable
  AND (NOT a.auto_pause_on_expired OR a.expires_at IS NULL OR a.expires_at>clock_timestamp())
- AND NOT EXISTS(SELECT 1 FROM ticket_borrow_rotation_accounts x WHERE x.account_id=t.account_id AND x.phase='draining' AND x.active_job IS NOT NULL)
- AND r.revoked_at IS NULL AND r.identity_hash=$2 AND LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at))>clock_timestamp()+s.min_route_remaining_seconds*INTERVAL '1 second',
- load.inflight
+
+ AND r.revoked_at IS NULL AND r.identity_hash=$2 AND LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at),r.admission_until)>clock_timestamp(),
+ load.inflight,r.checked_at,r.checked_at
  FROM ticket_borrow_routes r JOIN ticket_borrow_targets t ON t.account_id=r.target_id JOIN accounts a ON a.id=t.account_id
  CROSS JOIN ticket_borrow_settings s LEFT JOIN ticket_borrow_sources src ON src.id=r.source_id
  LEFT JOIN ticket_borrow_cookie_deadlines d ON d.cookie_hash=r.cookie_hash
  CROSS JOIN LATERAL (SELECT count(*) AS inflight FROM ticket_borrow_route_leases l WHERE l.route_id=r.id AND l.lease_until>clock_timestamp()) load
  WHERE s.id=1 AND r.target_id=$1 AND NOT r.validation_only
- AND ((r.revoked_at IS NULL AND LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at))>clock_timestamp()) OR load.inflight>0)
+ AND ((r.revoked_at IS NULL AND LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at),r.admission_until)>clock_timestamp()) OR load.inflight>0)
  ORDER BY `+borrowRouteLatestOrder, id, identity)
 	if err != nil {
 		return nil, err
@@ -138,7 +138,7 @@ func (r *ticketBorrowRepository) RouteStatuses(ctx context.Context, id int64, id
 	result := []service.BorrowRouteStatus{}
 	for rows.Next() {
 		var status service.BorrowRouteStatus
-		if err = rows.Scan(&status.ID, &status.Gateway, &status.SourceAccountID, &status.ExpiresAt, &status.UsableUntil, &status.InventoryEligible, &status.Usable, &status.Inflight); err != nil {
+		if err = rows.Scan(&status.ID, &status.Gateway, &status.SourceAccountID, &status.ExpiresAt, &status.UsableUntil, &status.InventoryEligible, &status.Usable, &status.Inflight, &status.PublishedAt, &status.CheckedAt); err != nil {
 			return nil, err
 		}
 		result = append(result, status)

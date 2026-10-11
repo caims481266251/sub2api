@@ -13,16 +13,16 @@ func TestBorrowInventoryTransitionsAndCadence(t *testing.T) {
 	last := now.Add(-5 * time.Second)
 	expiry := now.Add(230 * time.Second)
 	p := &BorrowReplenishmentSettings{Enabled: true, Inventory: 2, IntervalSeconds: 10, HoldSeconds: 150}
-	f := BorrowInventoryFacts{Now: now, LastStarted: &last, EarliestExpiry: &expiry, MinRemainingSeconds: 120, RenewBeforeSeconds: 180}
+	f := BorrowInventoryFacts{Now: now, LastStarted: &last, EarliestExpiry: &expiry, RenewBeforeSeconds: 15}
 	for _, tc := range []struct {
 		count int
 		ttl   time.Duration
 		state string
 		due   time.Duration
 	}{
-		{0, 230 * time.Second, "search", -4 * time.Second}, {1, 230 * time.Second, "refill", 5 * time.Second},
-		{2, 230 * time.Second, "healthy", 25 * time.Second}, {2, 182 * time.Second, "healthy", 2 * time.Second},
-		{2, 170 * time.Second, "renew", 5 * time.Second},
+		{0, 230 * time.Second, "search", 0}, {1, 230 * time.Second, "refill", 0},
+		{2, 230 * time.Second, "healthy", 215 * time.Second}, {2, 17 * time.Second, "healthy", 2 * time.Second},
+		{2, 10 * time.Second, "renew", 0},
 	} {
 		f.Count = tc.count
 		e := now.Add(tc.ttl)

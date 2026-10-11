@@ -94,7 +94,7 @@ func TestTicketBorrowNormalSelectionMembershipAndRouteSurvival(t *testing.T) {
 	ok, e := r.AcquireJob(ctx, "target", targetID, "normal-route")
 	require.NoError(t, e)
 	require.True(t, ok)
-	route := &service.BorrowRoute{ID: uuid.NewString(), TargetID: targetID, TargetRevision: tstate.Revision, SourceID: source.ID, IdentityHash: "identity", CookieHash: uuid.NewString(), ExpiresAt: time.Now().Add(3 * time.Minute)}
+	route := borrowAdmissionFixture(&service.BorrowRoute{ID: uuid.NewString(), TargetID: targetID, TargetRevision: tstate.Revision, SourceID: source.ID, IdentityHash: "identity", CookieHash: uuid.NewString(), ExpiresAt: time.Now().Add(3 * time.Minute)})
 	require.NoError(t, r.Publish(ctx, route, "normal-route"))
 	selection, e = r.Selection(ctx)
 	require.NoError(t, e)
@@ -143,7 +143,7 @@ func TestTicketBorrowReturnOwnershipPreservesIDsProxyAndHistory(t *testing.T) {
 	require.NoError(t, e)
 	// Preserve a pre-existing route across transfer back without granting it new TTL.
 	expiry := time.Now().Add(time.Minute)
-	_, e = integrationDB.Exec(`INSERT INTO ticket_borrow_routes(id,target_id,target_revision,source_id,identity_hash,cookie_hash,gateway,secret,expires_at) VALUES($1,$2,$3,$4,'id','cookie','host','legacy-route',$5)`, uuid.NewString(), targetID, target.Revision, source.ID, expiry)
+	_, e = integrationDB.Exec(`INSERT INTO ticket_borrow_routes(id,target_id,target_revision,source_id,identity_hash,cookie_hash,gateway,secret,expires_at,admission_until) VALUES($1,$2,$3,$4,'id','cookie','host','legacy-route',$5,$5)`, uuid.NewString(), targetID, target.Revision, source.ID, expiry)
 	require.NoError(t, e)
 	ids, e := r.RestoreSources(ctx)
 	require.NoError(t, e)

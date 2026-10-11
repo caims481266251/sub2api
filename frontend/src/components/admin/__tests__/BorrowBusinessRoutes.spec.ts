@@ -3,7 +3,7 @@ import { mount } from '@vue/test-utils'
 import BorrowBusinessRoutes from '../BorrowBusinessRoutes.vue'
 import type { BorrowTarget } from '@/api/admin/ticketBorrowing'
 
-vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string, args?: Record<string, unknown>) => key + (args ? JSON.stringify(args) : '') }) }))
+vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string, args?: Record<string, unknown>) => key + (args ? JSON.stringify(args) : ''), te: () => true }) }))
 
 describe('business route occupancy', () => {
   it('shows shared account capacity separately from probes and keeps draining streams visible', async () => {

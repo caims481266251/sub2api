@@ -1,7 +1,7 @@
 import { apiClient } from '../client'
 export interface TimingSpan { name: string; start_ms: number; end_ms: number; attempt?: number }
 export interface TimingAttempt {
-  kind: string; parent?: number; number: number; account_id: number; proxy_id: number; start_ms: number; end_ms: number | null
+  kind: string; borrow_route_id?: string; parent?: number; number: number; account_id: number; proxy_id: number; start_ms: number; end_ms: number | null
   status: number; error?: string; terminal?: string; cleanup_canceled?: boolean; reused: boolean | null; request_bytes: number; response_bytes: number
   body_eof: boolean; events: Record<string, number>
 }

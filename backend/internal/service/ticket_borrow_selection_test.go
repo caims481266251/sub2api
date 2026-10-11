@@ -58,7 +58,7 @@ func TestBorrowNormalSourceUsesNormalCredentialsAndIndependentConcurrency(t *tes
 			cookie := "x." + base64.RawURLEncoding.EncodeToString([]byte(`{"host":"chat.gateway.unified-1.api.openai.com"}`)) + ".x"
 			up := &stateProbeUpstream{replies: []stateProbeReply{{status: 200, cookies: []string{"__oailb=" + cookie + "; Max-Age=230"}, body: stateProbeCompletedStream}}}
 			s.owner.httpUpstream = up
-			_, _, err := s.acquireSource(t.Context(), r.source, BorrowSettings{TTLSeconds: 230})
+			_, _, err := s.acquireSource(borrowTestCandidateContext(t.Context()), r.source, BorrowSettings{TTLSeconds: 230})
 			require.NoError(t, err)
 			require.Zero(t, slot.acquired, "source probing must not consume business capacity")
 			require.Zero(t, slot.released)

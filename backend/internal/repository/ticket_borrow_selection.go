@@ -2,7 +2,6 @@ package repository
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -121,43 +120,25 @@ func (r *ticketBorrowRepository) SourceOptions(ctx context.Context) (service.Bor
 	return out, err
 }
 func (r *ticketBorrowRepository) normalSources(ctx context.Context, sourceID int64) ([]service.BorrowSource, error) {
-	// Stable metadata rows own only borrowing leases/history, never credentials.
-	var err error
 	if sourceID == 0 {
-		_, err = r.db.ExecContext(ctx, `INSERT INTO ticket_borrow_sources(name,secret,subject_hash,subject_id,account_id)
+		_, err := r.db.ExecContext(ctx, `INSERT INTO ticket_borrow_sources(name,secret,subject_hash,subject_id,account_id)
  SELECT a.name,'','normal-account:'||a.id,'',a.id FROM accounts a CROSS JOIN ticket_borrow_selection c WHERE c.id=1 AND `+borrowNormalScope+`
  ON CONFLICT(account_id) WHERE account_id IS NOT NULL DO NOTHING`)
 		if err != nil {
 			return nil, err
 		}
 	}
-	if sourceID == 0 {
-		if err = r.reconcileProxyBindings(ctx); err != nil {
-			return nil, err
-		}
-	}
-	rows, err := r.db.QueryContext(ctx, `SELECT s.id,a.id,a.name,COALESCE(c.model_overrides->>a.id::text,c.default_model),s.revision,c.rotate_identity,s.cursor,
- s.last_reason,s.next_attempt_at,
- (a.proxy_id IS NOT NULL)::int,
- a.id IN (SELECT jsonb_array_elements_text(c.account_ids)::bigint),
+	rows, err := r.db.QueryContext(ctx, `SELECT s.id,a.id,a.name,COALESCE(c.model_overrides->>a.id::text,c.default_model),s.revision,s.cursor,
+ s.last_reason,s.next_attempt_at,a.id IN (SELECT jsonb_array_elements_text(c.account_ids)::bigint),
  COALESCE((SELECT jsonb_agg(ag.group_id ORDER BY ag.group_id) FROM account_groups ag JOIN groups g ON g.id=ag.group_id AND g.deleted_at IS NULL WHERE ag.account_id=a.id AND ag.group_id IN (SELECT jsonb_array_elements_text(c.group_ids)::bigint)),'[]'),
  CASE WHEN EXISTS(SELECT 1 FROM ticket_borrow_targets t WHERE t.account_id=a.id AND t.enabled) THEN 'source_is_target'
  WHEN a.status<>'active' OR NOT a.schedulable THEN 'source_account_unavailable'
- WHEN a.auto_pause_on_expired AND a.expires_at<=NOW() THEN 'source_account_expired'
- WHEN a.rate_limit_reset_at>NOW() THEN 'source_rate_limited'
- WHEN a.overload_until>NOW() OR a.temp_unschedulable_until>NOW() THEN 'source_account_cooling'
- WHEN EXISTS(SELECT 1 FROM ticket_borrow_rotation_accounts x WHERE x.account_id=a.id AND x.phase='draining' AND x.active_job IS NOT NULL) THEN 'borrow_rotation_pending'
- WHEN NOT c.use_proxy_pool OR p.id IS NULL OR NOT p.enabled OR p.retired_at IS NOT NULL THEN 'source_proxy_pool_unavailable'
- ELSE '' END, c.use_proxy_pool,COALESCE(p.id,0),COALESCE(b.device_id,''),
- COALESCE(p.protocol||'://'||CASE WHEN p.host LIKE '%:%' THEN '['||p.host||']' ELSE p.host END||':'||p.port,''),
- CASE WHEN $1<>0 AND c.use_proxy_pool AND p.enabled AND p.retired_at IS NULL THEN p.credential_ciphertext ELSE '' END,
- COALESCE(h.snapshot,'null'::jsonb),COALESCE(b.fingerprint_version,1),a.rate_limit_reset_at,s.lease_until,
- CASE WHEN (`+sourceRotationHealthReason+`)<>'' THEN (`+sourceRotationHealthReason+`)
- WHEN b.account_id IS NULL OR b.role<>'source' THEN 'rotation_binding_missing'
- WHEN EXISTS(SELECT 1 FROM ticket_borrow_rotation_accounts x WHERE x.account_id=a.id AND x.active_job IS NOT NULL) THEN 'borrow_rotation_pending'
- ELSE '' END,COALESCE(b.environment_version,0),COALESCE((SELECT revision FROM ticket_borrow_rotation_accounts WHERE account_id=a.id),0)
- FROM ticket_borrow_sources s JOIN accounts a ON a.id=s.account_id LEFT JOIN ticket_borrow_proxy_bindings b ON b.account_id=a.id LEFT JOIN proxy_pool_entries p ON p.id=b.entry_id
- LEFT JOIN ticket_borrow_fingerprint_history h ON h.fingerprint_hash=encode(sha256(convert_to(b.device_id,'UTF8')),'hex') CROSS JOIN ticket_borrow_selection c
+ WHEN a.auto_pause_on_expired AND a.expires_at<=clock_timestamp() THEN 'source_account_expired'
+ WHEN a.rate_limit_reset_at>clock_timestamp() THEN 'source_rate_limited'
+ WHEN a.overload_until>clock_timestamp() OR a.temp_unschedulable_until>clock_timestamp() THEN 'source_account_cooling'
+ WHEN NOT EXISTS(SELECT 1 FROM proxy_pool_entries WHERE enabled AND retired_at IS NULL) THEN 'source_proxy_pool_unavailable'
+ ELSE '' END,a.rate_limit_reset_at,s.lease_until
+ FROM ticket_borrow_sources s JOIN accounts a ON a.id=s.account_id CROSS JOIN ticket_borrow_selection c
  WHERE c.id=1 AND s.deleted_at IS NULL AND `+borrowNormalScope+` AND ($1=0 OR s.id=$1) ORDER BY s.id`, sourceID)
 	if err != nil {
 		return nil, err
@@ -165,50 +146,18 @@ func (r *ticketBorrowRepository) normalSources(ctx context.Context, sourceID int
 	defer rows.Close()
 	out := []service.BorrowSource{}
 	for rows.Next() {
-		var s service.BorrowSource
+		var source service.BorrowSource
 		var groups []byte
-		var device, ciphertext string
-		var fingerprint []byte
-		var fingerprintVersion int
-		if err = rows.Scan(&s.ID, &s.AccountID, &s.Name, &s.Model, &s.Revision, &s.RotateIdentity, &s.Cursor, &s.LastReason, &s.NextAttemptAt, &s.ProxyCount, &s.Explicit, &groups, &s.UnavailableReason, &s.UseProxyPool, &s.PoolEntryID, &device, &s.PoolEndpoint, &ciphertext, &fingerprint, &fingerprintVersion, &s.RateLimitResetAt, &s.LeaseUntil, &s.RotationUnavailableReason, &s.EnvironmentVersion, &s.RotationRevision); err != nil {
+		if err = rows.Scan(&source.ID, &source.AccountID, &source.Name, &source.Model, &source.Revision, &source.Cursor, &source.LastReason, &source.NextAttemptAt, &source.Explicit, &groups, &source.UnavailableReason, &source.RateLimitResetAt, &source.LeaseUntil); err != nil {
 			return nil, err
 		}
-		if err = json.Unmarshal(groups, &s.GroupIDs); err != nil {
+		if err = json.Unmarshal(groups, &source.GroupIDs); err != nil {
 			return nil, err
 		}
-		s.Enabled = s.UnavailableReason == ""
-		s.CanRotate = s.RotationUnavailableReason == ""
-		s.Secret.DeviceID = fmt.Sprintf("normal-account-%d", s.AccountID)
-		if s.UseProxyPool {
-			s.RotateIdentity = false
-			s.ProxyCount = 0
-			s.Secret.DeviceID = device
-			decodeErr := json.Unmarshal(fingerprint, &s.Secret.Fingerprint)
-			f := s.Secret.Fingerprint
-			if decodeErr != nil || fingerprintVersion < 1 || fingerprintVersion > 2 ||
-				(f == nil) || (f != nil && (f.DeviceID != device || service.ValidateBorrowFingerprint(f) != nil)) {
-				if s.Enabled {
-					s.Enabled, s.UnavailableReason = false, service.ErrBorrowFingerprintInvalid.Error()
-				}
-				s.Secret.Fingerprint = nil
-			} else if f != nil {
-				s.Secret.Profile = f.Profile
-			}
-			if s.PoolEntryID > 0 {
-				s.ProxyCount = 1
-				s.FingerprintID = fmt.Sprintf("%x", sha256.Sum256([]byte(device)))[:12]
-			}
-			if ciphertext != "" {
-				proxy, e := r.encryptor.Decrypt(ciphertext)
-				if e != nil {
-					return nil, errors.New("borrow_encryption_unavailable")
-				}
-				s.Secret.Proxies = []string{proxy}
-			}
-		} else {
-			s.PoolEntryID, s.PoolEndpoint = 0, ""
-		}
-		out = append(out, s)
+		source.Enabled = source.UnavailableReason == ""
+		source.UseProxyPool = true
+		source.RotationUnavailableReason = "borrow_rotation_per_candidate"
+		out = append(out, source)
 	}
 	return out, rows.Err()
 }

@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestTicketBorrowProxyBindingsStableSharedAndFailClosed(t *testing.T) {
+func TestTicketBorrowSourcesUsePoolWithoutPersistentBindings(t *testing.T) {
 	_, pool, enc := poolFixture(t)
 	r, target := borrowIntegrationFixture(t)
 	selection := borrowSelectionFixture(t, r)
@@ -32,26 +32,26 @@ func TestTicketBorrowProxyBindingsStableSharedAndFailClosed(t *testing.T) {
 	}
 	first := byAccount[a.ID]
 	require.True(t, first.Enabled)
-	require.NotEmpty(t, first.FingerprintID)
-	require.Equal(t, state.Entries[0].ID, first.PoolEntryID)
+	require.Empty(t, first.FingerprintID)
+	require.Zero(t, first.PoolEntryID)
 	require.Empty(t, byAccount[b.ID].UnavailableReason)
 	require.True(t, byAccount[b.ID].Enabled)
 	require.Equal(t, first.PoolEntryID, byAccount[b.ID].PoolEntryID)
-	require.NotEqual(t, first.FingerprintID, byAccount[b.ID].FingerprintID)
+	require.Empty(t, byAccount[b.ID].FingerprintID)
 	require.Equal(t, "source_is_target", byAccount[target].UnavailableReason)
 	full, err := r.Source(t.Context(), first.ID)
 	require.NoError(t, err)
-	require.Equal(t, []string{"http://user:private-password@a.example:80"}, full.Secret.Proxies)
+	require.Empty(t, full.Secret.Proxies)
 	public, err := json.Marshal(full)
 	require.NoError(t, err)
 	require.NotContains(t, string(public), "private-password")
 	require.NotContains(t, string(public), "user:")
-	require.NotContains(t, string(public), full.Secret.DeviceID)
+	require.NotContains(t, string(public), "target-token")
 	var normalProxy *int64
 	require.NoError(t, integrationDB.QueryRow(`SELECT proxy_id FROM accounts WHERE id=$1`, a.ID).Scan(&normalProxy))
 	require.Nil(t, normalProxy, "borrow binding must not change the normal account proxy")
 
-	// Reconstructed repositories and concurrent reconcilers retain the same binding.
+	// Concurrent readers must not allocate candidate environments or modify accounts.
 	restarted := NewTicketBorrowRepository(integrationDB, enc)
 	var wg sync.WaitGroup
 	errors := make(chan error, 4)
@@ -70,7 +70,7 @@ func TestTicketBorrowProxyBindingsStableSharedAndFailClosed(t *testing.T) {
 	require.Equal(t, full.FingerprintID, again.FingerprintID)
 
 	// An administrative disable immediately fences new sends, before reconciliation.
-	state, err = pool.SetEnabled(t.Context(), state.Revision, first.PoolEntryID, false)
+	state, err = pool.SetEnabled(t.Context(), state.Revision, state.Entries[0].ID, false)
 	require.NoError(t, err)
 	_, err = restarted.Source(t.Context(), first.ID)
 	require.ErrorIs(t, err, service.ErrBorrowUnavailable)
@@ -83,11 +83,11 @@ func TestTicketBorrowProxyBindingsStableSharedAndFailClosed(t *testing.T) {
 	}
 	require.True(t, byAccount[a.ID].Enabled)
 	require.True(t, byAccount[b.ID].Enabled)
-	require.NotEqual(t, first.PoolEntryID, byAccount[a.ID].PoolEntryID)
-	require.NotEqual(t, first.FingerprintID, byAccount[a.ID].FingerprintID)
-	require.NotEqual(t, byAccount[a.ID].PoolEntryID, byAccount[b.ID].PoolEntryID)
+	require.Zero(t, byAccount[a.ID].PoolEntryID)
+	require.Empty(t, byAccount[a.ID].FingerprintID)
+	require.Zero(t, byAccount[b.ID].PoolEntryID)
 
-	// Removal drains a live source lease before making its proxy reusable.
+	// Removing a source never creates or retains account proxy bindings.
 	_, err = integrationDB.Exec(`UPDATE ticket_borrow_sources SET lease_until=NOW()+INTERVAL '1 minute' WHERE id=$1`, first.ID)
 	require.NoError(t, err)
 	saved.AccountIDs = []int64{b.ID}
@@ -98,11 +98,11 @@ func TestTicketBorrowProxyBindingsStableSharedAndFailClosed(t *testing.T) {
 	require.Equal(t, byAccount[b.ID].FingerprintID, sources[0].FingerprintID)
 	var bindings int
 	require.NoError(t, integrationDB.QueryRow(`SELECT count(*) FROM ticket_borrow_proxy_bindings`).Scan(&bindings))
-	require.Equal(t, 2, bindings)
+	require.Zero(t, bindings)
 	_, err = integrationDB.Exec(`UPDATE ticket_borrow_sources SET lease_until=NULL WHERE id=$1`, first.ID)
 	require.NoError(t, err)
 	_, err = restarted.Sources(t.Context())
 	require.NoError(t, err)
 	require.NoError(t, integrationDB.QueryRow(`SELECT count(*) FROM ticket_borrow_proxy_bindings`).Scan(&bindings))
-	require.Equal(t, 1, bindings)
+	require.Zero(t, bindings)
 }

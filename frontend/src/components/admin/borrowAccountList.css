@@ -18,10 +18,6 @@
 .borrow-subline { @apply mt-1 block truncate text-xs leading-4 text-gray-500 dark:text-gray-400; }
 .borrow-link { @apply inline-flex min-h-8 items-center text-xs font-medium text-primary-700 hover:underline disabled:cursor-not-allowed disabled:opacity-40 dark:text-primary-400; }
 .borrow-actions .borrow-link { @apply block whitespace-nowrap; }
-.borrow-badge { @apply inline-flex max-w-full items-center truncate rounded-md px-2 py-0.5 text-xs font-medium; }
-.borrow-badge-good { @apply bg-emerald-50 text-emerald-700 dark:bg-emerald-900/25 dark:text-emerald-300; }
-.borrow-badge-warn { @apply bg-amber-50 text-amber-700 dark:bg-amber-900/25 dark:text-amber-300; }
-.borrow-badge-neutral { @apply bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300; }
 .borrow-empty { @apply px-4 py-12 text-center text-sm text-gray-500 dark:text-gray-400; }
 .borrow-stats { @apply flex flex-wrap gap-2 px-4 pb-3 text-xs; }
 .borrow-stat { @apply rounded-lg border border-gray-200 px-2.5 py-1.5 text-gray-600 hover:border-primary-300 dark:border-dark-600 dark:text-gray-300; }

@@ -31,13 +31,13 @@ func TestBorrowSchedulingTargetsAndUsableInventory(t *testing.T) {
 	require.False(t, needed, "stop speculative acquisition once inventory is full")
 	// A shortened Cookie deadline removes this route from new-request inventory
 	// even though the route row itself still has a future expiry.
-	_, err = r.ObserveCookie(ctx, first.CookieHash, time.Second)
+	_, err = r.ObserveCookie(ctx, first.CookieHash, -time.Second)
 	require.NoError(t, err)
 	inv, err := r.Inventory(ctx, acquisition.TargetID, acquisition.Identity)
 	require.NoError(t, err)
 	require.Equal(t, 1, inv.Count)
 	require.NotNil(t, inv.EarliestExpiry)
-	require.WithinDuration(t, second.ExpiresAt, *inv.EarliestExpiry, time.Millisecond)
+	require.WithinDuration(t, second.AdmissionUntil, *inv.EarliestExpiry, time.Millisecond)
 	needed, err = r.NeedsCandidate(ctx, acquisition, nil)
 	require.NoError(t, err)
 	require.True(t, needed)

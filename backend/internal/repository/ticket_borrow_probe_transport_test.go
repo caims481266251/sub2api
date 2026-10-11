@@ -32,7 +32,7 @@ func TestTicketBorrowProbeAndBusinessConnectionCachesAreIndependent(t *testing.T
 				require.NoError(t, err)
 				defer func() { atomic.AddInt64(&probe.inFlight, -1); probe.client.CloseIdleConnections() }()
 				// Even the maximum client-cache count cannot let probes exclude business.
-				business, err := acquire(service.HTTPUpstreamProfileOpenAIHarvest, 1)
+				business, err := acquire(service.HTTPUpstreamProfileOpenAI, 1)
 				require.NoError(t, err)
 				defer func() { atomic.AddInt64(&business.inFlight, -1); business.client.CloseIdleConnections() }()
 				require.NotSame(t, probe, business)
@@ -80,7 +80,7 @@ func TestTicketBorrowSaturatedProbeTransportDoesNotQueueBusiness(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("probe did not enter transport")
 	}
-	business, _ := http.NewRequestWithContext(service.WithHTTPUpstreamProfile(ctx, service.HTTPUpstreamProfileOpenAIHarvest), "POST", server.URL+"/responses", strings.NewReader("{}"))
+	business, _ := http.NewRequestWithContext(service.WithHTTPUpstreamProfile(ctx, service.HTTPUpstreamProfileOpenAI), "POST", server.URL+"/responses", strings.NewReader("{}"))
 	resp, err := s.Do(business, "", 11, 1)
 	require.NoError(t, err, "business must complete before the probe connection is released")
 	require.NoError(t, resp.Body.Close())

@@ -82,7 +82,7 @@ func TestTicketBorrowParallelProbesDoNotBlockBusiness(t *testing.T) {
 			defer func() { cancel(); <-done }()
 			go func() {
 				defer close(done)
-				s.runTarget(ctx, BorrowTarget{AccountID: 11, Revision: 2, ProbePolicy: BorrowProbePolicy{Concurrency: concurrency, RenewBeforeSeconds: 15}}, BorrowSettings{Running: true, TTLSeconds: 230}, "parallel")
+				s.runTarget(ctx, BorrowTarget{AcquisitionIdentity: BorrowAcquisitionSource, AccountID: 11, Revision: 2, ProbePolicy: BorrowProbePolicy{Concurrency: concurrency, RenewBeforeSeconds: 15}}, BorrowSettings{Running: true, TTLSeconds: 230}, "parallel")
 			}()
 			expectedProbes := concurrency
 			if expectedProbes == 0 {
@@ -132,9 +132,11 @@ func TestTicketBorrowBusinessUsesConfiguredTargetProxyOrDirect(t *testing.T) {
 			}
 			r.route.IdentityHash = s.targetIdentity(a)
 			r.route.Secret.Proxy = "http://borrow-only.proxy.test:9999"
-			resp, err := s.ForwardHTTP(borrowRequest(t), "http://incoming.proxy.test:7777", 11, 1, nil, func(req *http.Request, proxy string, _ int64, _ int, _ *tlsfingerprint.Profile) (*http.Response, error) {
+			req := borrowRequest(t)
+			req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAI))
+			resp, err := s.ForwardHTTP(req, "http://incoming.proxy.test:7777", 11, 1, nil, func(req *http.Request, proxy string, _ int64, _ int, _ *tlsfingerprint.Profile) (*http.Response, error) {
 				require.Equal(t, expected, proxy)
-				require.Equal(t, HTTPUpstreamProfileOpenAIHarvest, HTTPUpstreamProfileFromContext(req.Context()))
+				require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(req.Context()))
 				require.NoError(t, BorrowTargetRequestConnected(req))
 				return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(stateProbeCompletedStream))}, nil
 			})

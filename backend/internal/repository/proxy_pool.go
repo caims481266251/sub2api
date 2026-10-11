@@ -71,6 +71,11 @@ func (r *proxyPoolRepository) Apply(ctx context.Context, revision int64, mode st
 	if err = lockProxyPool(ctx, tx, revision); err != nil {
 		return empty, err
 	}
+	// Pool edits and candidate allocation share a one-way lock order. Record
+	// removals for every identity, including targets idle during this edit.
+	if err = lockBorrowCandidateAllocator(ctx, tx); err != nil {
+		return empty, err
+	}
 	identities := make([]string, 0, len(entries))
 	changed := int64(0)
 	for _, e := range entries {
@@ -113,6 +118,10 @@ func (r *proxyPoolRepository) Apply(ctx context.Context, revision int64, mode st
 			return empty, err
 		}
 	}
+	if _, err = tx.ExecContext(ctx, `UPDATE ticket_borrow_candidate_proxy_usage u SET available=false
+ FROM proxy_pool_entries p WHERE p.id=u.entry_id AND (NOT p.enabled OR p.retired_at IS NOT NULL) AND u.available`); err != nil {
+		return empty, err
+	}
 	state, err := loadProxyPool(ctx, tx)
 	if err != nil {
 		return empty, err
@@ -127,6 +136,11 @@ func (r *proxyPoolRepository) SetEnabled(ctx context.Context, revision, id int64
 	}
 	defer tx.Rollback()
 	if err = lockProxyPool(ctx, tx, revision); err != nil {
+		return empty, err
+	}
+	// Pool edits and candidate allocation share a one-way lock order. Record
+	// removals for every identity, including targets idle during this edit.
+	if err = lockBorrowCandidateAllocator(ctx, tx); err != nil {
 		return empty, err
 	}
 	var current bool
@@ -144,6 +158,10 @@ func (r *proxyPoolRepository) SetEnabled(ctx context.Context, revision, id int64
 		if _, err = tx.ExecContext(ctx, `UPDATE proxy_pool_state SET revision=revision+1,updated_at=clock_timestamp() WHERE id=1`); err != nil {
 			return empty, err
 		}
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE ticket_borrow_candidate_proxy_usage u SET available=false
+ FROM proxy_pool_entries p WHERE p.id=u.entry_id AND (NOT p.enabled OR p.retired_at IS NOT NULL) AND u.available`); err != nil {
+		return empty, err
 	}
 	state, err := loadProxyPool(ctx, tx)
 	if err != nil {

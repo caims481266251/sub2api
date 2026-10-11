@@ -141,7 +141,7 @@ func TestTicketBorrowRouteChecksDoNotReserve(t *testing.T) {
 	require.Zero(t, activeBorrowLeases(repo))
 }
 
-func TestBorrowClientCancellationSurvivesUpstreamDetachment(t *testing.T) {
+func TestBorrowBusinessPreservesNormalUsageDraining(t *testing.T) {
 	for _, withOwner := range []bool{false, true} {
 		t.Run(map[bool]string{false: "no-key-owner", true: "key-owner"}[withOwner], func(t *testing.T) {
 			s, repo := borrowFixture()
@@ -169,11 +169,16 @@ func TestBorrowClientCancellationSurvivesUpstreamDetachment(t *testing.T) {
 			cancelClient()
 			require.NoError(t, upstream.Err(), "normal usage-draining context remains detached")
 			select {
-			case err := <-readDone:
-				require.Error(t, err)
-			case <-time.After(time.Second):
-				t.Fatal("borrowed stream stayed blocked after client cancellation")
+			case <-readDone:
+				t.Fatal("borrowed stream stopped before normal usage draining completed")
+			case <-time.After(20 * time.Millisecond):
 			}
+			require.NoError(t, transport.Err())
+			require.Equal(t, 1, activeBorrowLeases(repo))
+			_, err = writer.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_drained\",\"usage\":{\"output_tokens\":5}}}\n\n"))
+			require.NoError(t, err)
+			require.NoError(t, writer.Close())
+			require.NoError(t, <-readDone)
 			require.Eventually(t, func() bool { return activeBorrowLeases(repo) == 0 }, time.Second, time.Millisecond)
 			require.ErrorIs(t, transport.Err(), context.Canceled)
 			require.NoError(t, resp.Body.Close())
@@ -188,9 +193,7 @@ func TestBorrowClientCancellationDuringHeaders(t *testing.T) {
 	s, repo := borrowFixture()
 	client, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	upstream, release := detachUpstreamContext(client)
-	defer release()
-	_, err := s.ForwardHTTP(borrowRequest(t).WithContext(upstream), "", 11, 5, nil, func(req *http.Request, _ string, _ int64, _ int, _ *tlsfingerprint.Profile) (*http.Response, error) {
+	_, err := s.ForwardHTTP(borrowRequest(t).WithContext(client), "", 11, 5, nil, func(req *http.Request, _ string, _ int64, _ int, _ *tlsfingerprint.Profile) (*http.Response, error) {
 		cancel()
 		select {
 		case <-req.Context().Done():

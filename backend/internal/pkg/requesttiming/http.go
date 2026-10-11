@@ -14,6 +14,17 @@ import (
 )
 
 type attemptKey struct{}
+type borrowRouteKey struct{}
+
+// WithBorrowRoute adds a non-secret routing ID to timing only. Updating the
+// enclosing egress attempt also covers transports that began tracing earlier.
+func WithBorrowRoute(ctx context.Context, id string) context.Context {
+	if parent, ok := ctx.Value(attemptKey{}).(*Trace); ok {
+		parent.update(func(a *Attempt) { a.BorrowRouteID = id })
+	}
+	return context.WithValue(ctx, borrowRouteKey{}, id)
+}
+
 type Trace struct {
 	c     *Collector
 	index int
@@ -47,6 +58,7 @@ func startAttempt(req *http.Request, accountID, proxyID int64, kind string, pare
 	}
 	idx := len(c.data.Attempts)
 	c.data.Attempts = append(c.data.Attempts, Attempt{Kind: kind, Parent: parent, Number: idx + 1, AccountID: accountID, ProxyID: proxyID, StartMS: c.offset(time.Now()), RequestBytes: req.ContentLength, Events: map[string]float64{}})
+	c.data.Attempts[idx].BorrowRouteID, _ = req.Context().Value(borrowRouteKey{}).(string)
 	c.mu.Unlock()
 	t := &Trace{c: c, index: idx}
 	ctx := context.WithValue(req.Context(), attemptKey{}, t)

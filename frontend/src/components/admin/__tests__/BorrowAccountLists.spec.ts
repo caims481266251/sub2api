@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import Select from '@/components/common/Select.vue'
 import BorrowSourceList from '../BorrowSourceList.vue'
@@ -9,14 +9,36 @@ const source = (id: number): BorrowSource => ({ can_rotate: true, id, account_id
 const now = Date.now()
 const target = (id: number): BorrowTarget => ({ account_id: id, name: `target ${id}`, enabled: true, revision: 1, ready: true, phase: 'verifying', reason: 'target_probe_passed', expires_at: new Date(now+120000).toISOString(), server_now: new Date(now).toISOString(), next_attempt_at: '', inflight: 3, probe_policy: { revision: 1, concurrency: 3, renew_before_seconds: 15 } })
 
+beforeEach(() => sessionStorage.clear())
+
 describe('account management lists', () => {
+  it('keeps source cooldown, previous acquisition and paused automatic rotation independent', () => {
+    const current = { ...source(1), enabled: false, unavailable_reason: 'source_account_cooling', last_reason: 'source_cookie_acquired' }
+    const w = mount(BorrowSourceList, { props: { sources: [current], rotations: [{ account_id: 1, automatic: true, interval_seconds: 30 } as import('@/api/admin/ticketBorrowing').BorrowRotationState], groups: [], running: false, busy: false, rotationLoaded: true, selectionDirty: false, selected: [] } })
+    expect(w.get('[data-testid="source-eligibility"]').text()).toBe('ticketBorrowing.tags.cooling')
+    expect(w.get('[data-testid="source-last-result"]').text()).toBe('ticketBorrowing.tags.candidateAcquired')
+    expect(w.text()).toContain('ticketBorrowing.simplified.randomEnvironment')
+    expect(w.find('[data-tag-value="rotationActive"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('does not use historical success to claim an expired route is accepting', () => {
+    const current = { ...target(1), inflight: 0, usable_until: new Date(now - 1000).toISOString() }
+    const w = mount(BorrowTargetList, { props: { targets: [current], running: false, now, dirtyIds: {} } })
+    expect(w.find('[data-tag-value="noRoute"]').exists()).toBe(true)
+    expect(w.find('[data-tag-kind="phase"][data-tag-value="paused"]').exists()).toBe(true)
+    expect(w.find('[data-tag-value="target_probe_passed"]').exists()).toBe(true)
+    expect(w.find('[data-tag-value="ready"]').exists()).toBe(false)
+    w.unmount()
+  })
+
   it('shows normal-account rate-limit state and reset time for a source', async () => {
     const limited = { ...source(1), enabled: false, unavailable_reason: 'source_rate_limited', rate_limit_reset_at: '2026-11-08T15:47:30Z' }
     const w = mount(BorrowSourceList, { props: { sources: [limited], rotations: [], groups: [], running: true, busy: false, rotationLoaded: true, selectionDirty: false, selected: [] } })
-    expect(w.get('[data-saved-source-id="1"] .borrow-badge').text()).toBe('ticketBorrowing.management.rateLimited')
+    expect(w.get('[data-saved-source-id="1"] [data-testid="source-eligibility"] .borrow-tag').text()).toBe('ticketBorrowing.tags.rateLimited')
     expect(w.get('[data-testid="source-rate-limit-reset"]').text()).toContain(new Date(limited.rate_limit_reset_at).toLocaleString())
     await w.setProps({ sources: [source(1)] })
-    expect(w.get('[data-saved-source-id="1"] .borrow-badge').text()).toBe('ticketBorrowing.management.eligible')
+    expect(w.get('[data-saved-source-id="1"] [data-testid="source-eligibility"] .borrow-tag').text()).toBe('ticketBorrowing.management.eligible')
     expect(w.find('[data-testid="source-rate-limit-reset"]').exists()).toBe(false)
     w.unmount()
   })
@@ -39,22 +61,14 @@ describe('account management lists', () => {
     expect(w.emitted('update:selected')?.at(-1)?.[0]).toEqual([])
     expect(w.find('[data-probe-select="26"]').exists()).toBe(false)
     expect(w.text()).toContain('ticketBorrowing.management.selectionCleared')
-    expect(w.get('[data-target-row="26"]').text()).toContain('concurrencyValue{"count":2}')
+    expect(w.get('[data-target-row="26"]').text()).toContain('ticketBorrowing.management.accountConcurrency')
     w.unmount()
   })
-  it('exposes all-account proxy and fingerprint switching in the toolbar across pages and filters', async () => {
-    const sources = Array.from({length: 25}, (_, i) => source(i+1))
-    sources.push({...source(26), pool_entry_id: undefined}, {...source(27), unavailable_reason: 'source_is_target'}, {...source(28), use_proxy_pool: false})
-    const w = mount(BorrowSourceList, { props: { sources, rotations: [], groups: [], running: false, busy: false, rotationLoaded: true, selectionDirty: false, selected: [] } })
-    const all = w.get('.borrow-toolbar [data-testid="rotate-all"]')
-    expect(all.element.closest('details')).toBeNull()
-    await w.get('[data-testid="source-search"]').setValue('source 1')
-    await all.trigger('click')
-    expect(w.emitted('rotate')?.[0]?.[0]).toEqual(Array.from({length: 25}, (_, i) => i+1))
-    await w.setProps({ busy: true })
-    expect(all.attributes('disabled')).toBeDefined()
-    await w.setProps({ busy: false, rotationLoaded: false })
-    expect(all.attributes('disabled')).toBeDefined()
+  it('explains automatic random environments without manual rotation controls', () => {
+    const w = mount(BorrowSourceList, { props: { sources: [source(1)], groups: [], running: false, busy: false, selectionDirty: false, selected: [] } })
+    expect(w.text()).toContain('ticketBorrowing.simplified.randomEnvironment')
+    expect(w.find('[data-testid="rotate-all"]').exists()).toBe(false)
+    expect(w.find('[data-testid="rotation-batch-settings"]').exists()).toBe(false)
     w.unmount()
   })
   it('limits 1000 sources to one page and clears batch selection on filter changes', async () => {
@@ -101,22 +115,6 @@ describe('account management lists', () => {
     expect(w.get('[data-target-row="1"]').text()).toContain('ticketBorrowing.management.phases.paused')
     await w.setProps({ now: now+11000 })
     expect(w.findAll('[data-target-row]')).toHaveLength(0)
-    w.unmount()
-  })
-})
-
-describe('source rotation eligibility', () => {
-  it('skips unhealthy and draining sources but permits a rate-limited normal account', async () => {
-    const sources = [source(1), {...source(2), can_rotate: false, rotation_unavailable_reason: 'source_account_unavailable', unavailable_reason: 'source_account_unavailable'}, {...source(3), enabled: false, unavailable_reason: 'source_rate_limited'}, {...source(4), can_rotate: false, rotation_unavailable_reason: 'borrow_rotation_pending'}]
-    const w = mount(BorrowSourceList, { props: { sources, rotations: [], groups: [], running: true, busy: false, rotationLoaded: true, selectionDirty: false, selected: [1, 2] } })
-    await w.get('[data-testid="rotate-all"]').trigger('click')
-    expect(w.emitted('rotate')?.[0]?.[0]).toEqual([1, 3])
-    expect(w.get('[data-rotate-source="2"]').attributes('disabled')).toBeDefined()
-    expect(w.get('[data-rotate-source="2"]').attributes('title')).toContain('source_account_unavailable')
-    expect(w.get('[data-rotate-source="3"]').attributes('disabled')).toBeUndefined()
-    await w.get('[data-testid="rotate-selected"]').trigger('click')
-    expect(w.emitted('rotate')?.[1]?.[0]).toEqual([1, 2])
-    expect(w.get('[data-testid="rotation-excluded"]').text()).toContain('"count":2')
     w.unmount()
   })
 })

@@ -59,7 +59,7 @@ func TestTicketBorrowBatchDeadlineStillPersistsProbeOutcome(t *testing.T) {
 	s.owner.httpUpstream = &borrowDeadlineUpstream{onTarget: func() { base.mu.Lock(); base.route = servingRoute; base.mu.Unlock() }, stateProbeUpstream: &stateProbeUpstream{replies: []stateProbeReply{{status: 200, cookies: []string{"__oailb=" + cookie + "; Max-Age=230"}, body: stateProbeCompletedStream}}}}
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
-	s.runTarget(ctx, BorrowTarget{AccountID: 11, Revision: 2}, BorrowSettings{Running: true, TTLSeconds: 230}, "expired-work")
+	s.runTarget(ctx, BorrowTarget{AcquisitionIdentity: BorrowAcquisitionSource, AccountID: 11, Revision: 2}, BorrowSettings{Running: true, TTLSeconds: 230}, "expired-work")
 	require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
 	require.True(t, r.resultContextLive, "recovery persistence must survive the work deadline")
 	require.Equal(t, "target_probe_inconclusive", r.outcome)
@@ -116,12 +116,12 @@ func TestTicketBorrowSemanticErrorsPersistWaitAndKeepValidRoute(t *testing.T) {
 					s.owner.httpUpstream = &borrowSignalArrivalUpstream{stateProbeUpstream: up, onTarget: func() { base.mu.Lock(); base.route = servingRoute; base.mu.Unlock() }}
 				}
 				if sourceFails {
-					c, _, err := s.acquireSource(t.Context(), r.source, BorrowSettings{TTLSeconds: 230})
+					c, _, err := s.acquireSource(borrowTestCandidateContext(t.Context()), r.source, BorrowSettings{TTLSeconds: 230})
 					require.ErrorIs(t, err, ErrBorrowUnavailable)
 					require.Nil(t, c, "a failed stream must not supply a candidate, even with a Cookie header")
 					require.Equal(t, tc.sourceReason, r.reason)
 				} else {
-					s.runTarget(t.Context(), BorrowTarget{AccountID: 11, Revision: 2}, BorrowSettings{Running: true, TTLSeconds: 230}, "signal-worker")
+					s.runTarget(t.Context(), BorrowTarget{AcquisitionIdentity: BorrowAcquisitionSource, AccountID: 11, Revision: 2}, BorrowSettings{Running: true, TTLSeconds: 230}, "signal-worker")
 					require.Equal(t, tc.targetReason, r.reason)
 					require.Equal(t, tc.targetReason, r.outcome)
 					require.Equal(t, 700*time.Second, r.recovery)

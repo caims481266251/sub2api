@@ -9,8 +9,10 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
 
-const borrowAccountSignature = `md5(jsonb_build_array(a.credentials,a.proxy_id,a.extra->'enable_tls_fingerprint',a.extra->'tls_fingerprint_profile_id',
- (SELECT jsonb_build_array(b.entry_id,b.environment_version) FROM ticket_borrow_proxy_bindings b WHERE b.account_id=a.id AND b.role='target'))::text)`
+const borrowAccountSignature = `md5(jsonb_build_array(a.credentials,a.proxy_id,a.extra->'enable_tls_fingerprint',a.extra->'tls_fingerprint_profile_id')::text)`
+
+// Must match service.BorrowRenewalLead. Computed in the same database snapshot.
+const borrowRenewalLead = `GREATEST(1,LEAST(CASE WHEN t.acquisition_duration_ms>0 THEN ((t.acquisition_duration_ms*3/2+999)/1000)::int+2 ELSE 15 END,GREATEST(1,s.admission_window_seconds/2)))`
 
 func borrowInventory(ctx context.Context, db borrowQueryer, id int64, identity string) (*service.BorrowInventory, error) {
 	var f service.BorrowInventoryFacts
@@ -19,16 +21,16 @@ func borrowInventory(ctx context.Context, db borrowQueryer, id int64, identity s
 	var running, enabled bool
 	var next, nextProbe time.Time
 	var upstream, budget, lease sql.NullTime
-	err := db.QueryRowContext(ctx, `SELECT clock_timestamp(),s.replenishment,s.min_route_remaining_seconds,
- CASE WHEN t.probe_policy_override THEN t.renew_before_seconds ELSE s.renew_before_seconds END,
+	err := db.QueryRowContext(ctx, `SELECT clock_timestamp(),s.replenishment,0,
+ `+borrowRenewalLead+`,
  t.last_batch_started_at,t.last_inventory_state,t.refresh_generation,t.processed_generation,t.next_attempt_at,t.next_probe_at,
  t.upstream_wait_until,t.budget_wait_until,t.lease_until,s.running,t.enabled,
  (SELECT count(*) FROM ticket_borrow_routes r LEFT JOIN ticket_borrow_cookie_deadlines d ON d.cookie_hash=r.cookie_hash
  WHERE r.target_id=t.account_id AND r.target_revision=t.revision AND r.identity_hash=$2 AND NOT r.validation_only AND r.inventory_eligible AND r.revoked_at IS NULL
- AND LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at))>clock_timestamp()+s.min_route_remaining_seconds*INTERVAL '1 second'),
- (SELECT min(LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at))) FROM ticket_borrow_routes r LEFT JOIN ticket_borrow_cookie_deadlines d ON d.cookie_hash=r.cookie_hash
+ AND LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at),r.admission_until)>clock_timestamp()),
+ (SELECT min(LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at),r.admission_until)) FROM ticket_borrow_routes r LEFT JOIN ticket_borrow_cookie_deadlines d ON d.cookie_hash=r.cookie_hash
  WHERE r.target_id=t.account_id AND r.target_revision=t.revision AND r.identity_hash=$2 AND NOT r.validation_only AND r.inventory_eligible AND r.revoked_at IS NULL
- AND LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at))>clock_timestamp()+s.min_route_remaining_seconds*INTERVAL '1 second')
+ AND LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at),r.admission_until)>clock_timestamp())
  FROM ticket_borrow_targets t CROSS JOIN ticket_borrow_settings s WHERE t.account_id=$1 AND s.id=1`, id, identity).Scan(
 		&f.Now, &raw, &f.MinRemainingSeconds, &f.RenewBeforeSeconds, &f.LastStarted, &f.LastState, &f.RefreshGeneration, &f.ProcessedGeneration, &next, &nextProbe,
 		&upstream, &budget, &lease, &running, &enabled, &f.Count, &f.EarliestExpiry)

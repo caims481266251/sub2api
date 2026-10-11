@@ -59,11 +59,6 @@ func APIKeySlotLeaseLost(ctx context.Context) bool {
 // Detach client cancellation, but never detach the capacity owner's stop signal.
 func detachAPIKeyUpstreamContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	base := context.WithoutCancel(ctx)
-	// Carry the original client lifetime through nested detachments. Borrowed
-	// HTTP streams use it to stop; ordinary streams retain usage-drain semantics.
-	if ctx.Value(borrowClientLifetimeKey{}) == nil {
-		base = context.WithValue(base, borrowClientLifetimeKey{}, ctx)
-	}
 	owner, ok := apiKeyAdmissionOwnerFromContext(ctx)
 	if !ok {
 		return base, func() {}

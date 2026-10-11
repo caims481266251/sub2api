@@ -1,7 +1,7 @@
 <template>
   <section class="min-w-0 space-y-4 rounded-xl border border-gray-200 bg-gray-50/60 p-4 dark:border-dark-600 dark:bg-dark-900/30 sm:p-5" :data-rotation-source="accountId">
     <div>
-      <h3 class="break-words text-sm font-semibold">{{ name }} <span class="font-normal text-gray-500">#{{ accountId }}</span></h3>
+      <h3 class="break-words text-sm font-semibold">{{ name }} <span class="font-normal text-gray-500 dark:text-gray-400">#{{ accountId }}</span></h3>
       <p class="mt-1.5 max-w-3xl text-xs leading-5 text-gray-600 dark:text-gray-400">{{ t('ticketBorrowing.rotation.policyHint') }}</p>
     </div>
     <dl v-if="state?.pool_entry_id" class="grid gap-3 rounded-lg bg-white p-3 text-sm dark:bg-dark-800 sm:grid-cols-2">
@@ -9,17 +9,18 @@
       <div class="min-w-0"><dt class="text-xs text-gray-500 dark:text-gray-400">{{ t('ticketBorrowing.fixedFingerprint') }}</dt><dd class="mt-1 break-all font-mono text-xs">{{ state.fingerprint_id }}</dd></div>
     </dl>
     <p v-if="state?.selection_kind" class="text-xs leading-5 text-gray-600 dark:text-gray-400" data-testid="rotation-choice">{{ t(`ticketBorrowing.rotation.choices.${state.selection_kind}`) }}</p>
-    <p v-if="state?.reason" class="text-sm" role="status">{{ t(`ticketBorrowing.reasons.${state.reason}`) }}</p>
+    <div v-if="state?.reason" class="space-y-1"><p class="text-xs text-gray-500 dark:text-gray-400">{{ t(state.active_job ? 'ticketBorrowing.tags.currentExecution' : 'ticketBorrowing.tags.lastRotation') }}</p><BorrowTag :value="state.reason" detail /></div>
+    <div class="flex flex-wrap gap-2"><BorrowTag kind="state" :value="!loaded || !state ? 'unknown' : state.automatic ? 'autoEnabled' : 'autoDisabled'" /><BorrowTag v-if="loaded && state?.active_job" kind="state" value="rotationActive" /><BorrowTag v-else-if="loaded && state?.automatic" kind="state" :value="running ? 'rotationWaiting' : 'paused'" /></div>
     <dl class="grid gap-3 text-sm sm:grid-cols-2">
       <div><dt class="text-xs text-gray-500 dark:text-gray-400">{{ t('ticketBorrowing.rotation.last') }}</dt><dd class="mt-1 tabular-nums">{{ date(state?.last_at) }}</dd></div>
-      <div><dt class="text-xs text-gray-500 dark:text-gray-400">{{ t('ticketBorrowing.rotation.next') }}</dt><dd class="mt-1 tabular-nums">{{ state?.active_job ? t('ticketBorrowing.rotation.inProgress') : !state?.automatic ? t('ticketBorrowing.disabled') : running ? date(state?.next_at) : t('ticketBorrowing.paused') }}</dd></div>
+      <div><dt class="text-xs text-gray-500 dark:text-gray-400">{{ t('ticketBorrowing.rotation.next') }}</dt><dd class="mt-1 tabular-nums">{{ loaded && state?.automatic && running && !state.active_job ? date(state.next_at) : '—' }}</dd></div>
     </dl>
     <div class="grid items-start gap-4 border-t border-gray-200 pt-4 dark:border-dark-600 sm:grid-cols-2">
       <div class="min-w-0">
         <span class="input-label">{{ t('ticketBorrowing.rotation.automatic') }}</span>
         <label class="flex min-h-11 cursor-pointer items-center gap-3 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm dark:border-dark-600 dark:bg-dark-800">
           <input v-model="draft.automatic" type="checkbox" class="h-4 w-4 shrink-0 accent-primary-600" :disabled="busy || !loaded" :aria-label="t('ticketBorrowing.rotation.automatic')" data-testid="rotation-auto" />
-          {{ t(draft.automatic ? 'ticketBorrowing.enabled' : 'ticketBorrowing.disabled') }}
+          <BorrowTag kind="state" :value="draft.automatic ? 'enabled' : 'disabled'" /><BorrowTag v-if="dirty" kind="state" value="unsaved" />
         </label>
       </div>
       <div class="min-w-0">
@@ -36,12 +37,13 @@
       <button type="button" class="btn btn-secondary w-full sm:w-auto" :disabled="busy || !loaded || canRotate === false || !hasBinding || !!state?.active_job" data-testid="rotation-now" @click="$emit('rotate')">{{ t('ticketBorrowing.rotation.now') }}</button>
       <button v-if="dirty || conflict" type="button" class="btn btn-ghost w-full sm:w-auto" :disabled="busy" data-testid="rotation-revert" @click="reset">{{ t('ticketBorrowing.revert') }}</button>
     </div>
-    <p v-if="rotationUnavailableReason" class="text-sm text-amber-700 dark:text-amber-300" role="status">{{ t(`ticketBorrowing.reasons.${rotationUnavailableReason}`) }}</p>
+    <BorrowTag v-if="rotationUnavailableReason" :value="rotationUnavailableReason" detail />
     <p v-if="conflict" role="alert" class="text-sm text-amber-700 dark:text-amber-400">{{ t('ticketBorrowing.remoteChange') }}</p>
     <p v-if="!running" class="text-xs leading-5 text-amber-700 dark:text-amber-400">{{ t('ticketBorrowing.rotation.pausedHint') }}</p>
   </section>
 </template>
 <script setup lang="ts">
+import BorrowTag from './BorrowTag.vue'
 import { computed, watch } from 'vue'
 import { useBorrowEditorState, type BorrowEditorState } from '@/composables/useBorrowEditorState'
 import { useI18n } from 'vue-i18n'

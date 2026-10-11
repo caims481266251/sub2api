@@ -28,12 +28,7 @@ func (p *BorrowReplenishmentSettings) Validate() error {
 	if p.Shadow {
 		return errors.New("borrow_shadow_unsupported")
 	}
-	if p.MaintenanceIntervalSeconds != nil && (*p.MaintenanceIntervalSeconds < 10 || *p.MaintenanceIntervalSeconds > 300 || *p.MaintenanceIntervalSeconds < p.IntervalSeconds) {
-		return errors.New("borrow_settings_invalid")
-	}
-	if p.Inventory < 1 || p.Inventory > 4 || p.IntervalSeconds < 1 || p.IntervalSeconds > 60 || p.HoldSeconds < 1 || p.HoldSeconds > 150 {
-		return errors.New("borrow_settings_invalid")
-	}
+
 	return nil
 }
 
@@ -51,26 +46,6 @@ type BorrowReplenishmentRepository interface {
 	EndReplenishment(context.Context, BorrowAcquisition, int64, string) error
 }
 
-// Keep one acquisition worker dedicated to the retained source. The other
-// workers explore without waiting for that source, and cannot steal its slot.
-func borrowReplenishmentBatch(batch []BorrowSource, state *BorrowReplenishmentState, concurrency int) []BorrowSource {
-	if state == nil {
-		return batch
-	}
-	for i, source := range batch {
-		if source.ID == state.SourceID {
-			if concurrency == 1 && state.Attempts%2 == 0 {
-				out := append([]BorrowSource{}, batch[:i]...)
-				out = append(out, batch[i+1:]...)
-				return append(out, source)
-			}
-			out := append([]BorrowSource{source}, batch[:i]...)
-			return append(out, batch[i+1:]...)
-		}
-	}
-	return batch
-}
-
 // No credentials or proxy URLs: lifecycle events are safe to export with the
 // ordinary candidate evidence stream.
 type BorrowReplenishmentAudit struct {
@@ -84,9 +59,5 @@ func borrowSubjectHash(a *Account) string {
 	return borrowHash(borrowCredential(a.Credentials, "chatgpt_account_id") + ":" + borrowCredential(a.Credentials, "chatgpt_user_id"))
 }
 
-func (p *BorrowReplenishmentSettings) MaintenanceSeconds() int {
-	if p.MaintenanceIntervalSeconds != nil {
-		return *p.MaintenanceIntervalSeconds
-	}
-	return max(30, p.IntervalSeconds)
-}
+// Retained for legacy callers; healthy inventory has no periodic maintenance.
+func (p *BorrowReplenishmentSettings) MaintenanceSeconds() int { return 0 }
