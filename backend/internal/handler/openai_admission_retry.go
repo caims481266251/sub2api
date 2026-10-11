@@ -3,7 +3,6 @@ package handler
 import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
-	"github.com/tidwall/gjson"
 )
 
 // The forward call has already released its concurrency slot. Reselect only
@@ -15,8 +14,7 @@ func retryOpenAIInitialAdmission(c *gin.Context, err error, result *service.Open
 		return false
 	}
 	// These requests may depend on upstream state held by the selected account.
-	if gjson.GetBytes(body, "previous_response_id").String() != "" ||
-		gjson.GetBytes(body, "conversation").Exists() {
+	if !service.OpenAIInitialAdmissionCanReselect(c.Request.Context(), body) {
 		return false
 	}
 	if _, alreadyExcluded := excluded[accountID]; alreadyExcluded {

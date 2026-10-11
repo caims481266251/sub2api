@@ -9,6 +9,18 @@ const target = (id = 11, revision = 1): BorrowTarget => ({ account_id: id, name:
 const input = (w: ReturnType<typeof mount>, name: string) => w.get(`[data-testid="${name}"]`)
 beforeEach(() => vi.clearAllMocks())
 describe('per-target probe policy', () => {
+  it('releases the standalone saving signal when unmounted and ignores its late result', async () => {
+    let resolve!: (value: BorrowTarget) => void
+    api.saveProbePolicy.mockReturnValueOnce(new Promise<BorrowTarget>(r => { resolve = r }))
+    const w = mount(BorrowProbePolicy, { props: { target: target() } })
+    await input(w, 'probe-concurrency').setValue(5)
+    await input(w, 'probe-policy-save').trigger('click')
+    expect(w.emitted('saving')?.at(-1)).toEqual([true])
+    w.unmount()
+    expect(w.emitted('saving')?.at(-1)).toEqual([false])
+    resolve(target(11, 2)); await flushPromises()
+    expect(w.emitted('saved')).toBeUndefined()
+  })
   it('inherits live global values and supports an explicit account override', async () => {
     const inherited = { ...target(), probe_policy: { revision: 1, concurrency: 2, renew_before_seconds: 150, use_global: true, global_concurrency: 2, global_renew_before_seconds: 150 } }
     const w = mount(BorrowProbePolicy, { props: { target: inherited } })

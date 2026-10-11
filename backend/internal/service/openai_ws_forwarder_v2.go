@@ -35,6 +35,9 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	lastFailureReason string,
 	agentTaskRecoveryTried *bool,
 ) (*OpenAIForwardResult, error) {
+	// HTTP ingress can use WS internally and later fall back to HTTP. A local
+	// rejection on that later path must not claim the whole forward was unsent.
+	claimOpenAIInitialUpstreamAttempt(ctx)
 	if anchor := codexWSAnchorFromContext(ctx); anchor != nil {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithDeadline(ctx, anchor.expires)

@@ -118,7 +118,7 @@ func (s *OpenAIGatewayService) handleOpenAIUpstreamTransportError(ctx context.Co
 	if routeErr, ok := s.astraRouteFailover(ctx, account, err).(*UpstreamFailoverError); ok {
 		return routeErr
 	}
-	if IsOpenAITurnAdmissionError(err) || IsOpenAIRPMError(err) {
+	if IsOpenAITurnAdmissionError(err) || IsOpenAIRPMError(err) || errors.Is(err, ErrBorrowResponseRejected) {
 		return err
 	}
 	if errors.Is(err, ErrCodexTicketResponseRejected) {

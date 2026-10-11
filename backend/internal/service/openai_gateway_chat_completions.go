@@ -71,6 +71,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	defaultMappedModel string,
 	compatPromptCacheTenantIsolated bool,
 ) (*OpenAIForwardResult, error) {
+	ctx = withOpenAIInitialAdmission(ctx)
 	latest, admissionErr := s.admitOpenAITurn(
 		context.WithoutCancel(ctx),
 		c,
@@ -78,10 +79,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		gjson.GetBytes(body, "model").String(),
 	)
 	if admissionErr != nil {
-		if !agentIdentityTaskRecoveryWasTried(ctx) {
-			return nil, markOpenAIInitialAdmissionError(admissionErr)
-		}
-		return nil, admissionErr
+		return nil, markOpenAIInitialAdmissionForContext(ctx, admissionErr)
 	}
 	account = latest
 	rememberOpenCodeInboundBody(c, body)

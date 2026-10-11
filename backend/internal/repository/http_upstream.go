@@ -387,7 +387,7 @@ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, acco
 // doUpstreamRequest owns cancellation for one attempt, without cancelling the
 // caller's context (which may be detached for billing or reused for retries).
 func doUpstreamRequest(client *http.Client, req *http.Request) (result *http.Response, resultErr error) {
-	if err := service.BorrowBeforeSend(req); err != nil {
+	if err := service.BorrowBeforeTransport(req); err != nil {
 		return nil, err
 	}
 	recovery := service.BorrowBusinessRecoveryFromContext(req.Context())
@@ -443,7 +443,7 @@ func doUpstreamRequest(client *http.Client, req *http.Request) (result *http.Res
 		cancel()
 		return nil, cause
 	}
-	if errors.Is(cause, service.ErrBorrowUnavailable) || errors.Is(cause, service.ErrBorrowRecoveryWaiting) || errors.Is(cause, service.ErrBorrowPaused) {
+	if service.IsOpenAITurnAdmissionError(cause) || errors.Is(cause, service.ErrBorrowRecoveryWaiting) || errors.Is(cause, service.ErrBorrowPaused) {
 		if resp != nil && resp.Body != nil {
 			_ = resp.Body.Close()
 		}

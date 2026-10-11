@@ -20,12 +20,20 @@ import { useI18n } from 'vue-i18n'
 import { ticketBorrowing, type BorrowSelection } from '@/api/admin/ticketBorrowing'
 import { useBorrowEditorState, type BorrowEditorState } from '@/composables/useBorrowEditorState'
 export interface SourceModelDraft { revision: number; inherit: boolean; model: string }
-const props = defineProps<{ accountId: number; selection: BorrowSelection; disabled: boolean; editorState?: BorrowEditorState<SourceModelDraft> }>()
+const props = defineProps<{
+  accountId: number
+  selection: BorrowSelection
+  disabled: boolean
+  editorState?: BorrowEditorState<SourceModelDraft>
+  pending?: boolean
+  saveModel?: (accountId: number, selection: BorrowSelection) => Promise<BorrowSelection>
+}>()
 const emit = defineEmits<{ saved: [selection: BorrowSelection]; dirty: [value: boolean]; saving: [value: boolean]; editorState: [value: BorrowEditorState<SourceModelDraft>] }>()
 const { t, te } = useI18n()
 const value = (): SourceModelDraft => ({ revision: props.selection.revision, inherit: props.selection.model_overrides[props.accountId] === undefined, model: props.selection.model_overrides[props.accountId] ?? props.selection.default_model })
-const { draft, baseline, dirty } = useBorrowEditorState(value(), props.editorState, state => emit('editorState', state))
-const saving = ref(false), error = ref('')
+const { draft, baseline, dirty } = useBorrowEditorState(value(), () => props.editorState, state => emit('editorState', state))
+const submitting = ref(false), error = ref('')
+const saving = computed(() => submitting.value || props.pending === true)
 const conflict = computed(() => draft.value.revision !== props.selection.revision)
 function reset() { draft.value = value(); baseline.value = JSON.stringify(draft.value); error.value = '' }
 watch(() => props.selection, () => { if (!dirty.value) reset() })
@@ -38,9 +46,9 @@ async function save() {
   const input = { ...props.selection, model_overrides: { ...props.selection.model_overrides } }
   if (draft.value.inherit) delete input.model_overrides[props.accountId]
   else input.model_overrides[props.accountId] = draft.value.model.trim()
-  saving.value = true; error.value = ''
+  submitting.value = true; error.value = ''
   try {
-    const saved = await ticketBorrowing.saveSelection(input)
+    const saved = await (props.saveModel ? props.saveModel(props.accountId, input) : ticketBorrowing.saveSelection(input))
     if (disposed) return
     draft.value = { ...draft.value, revision: saved.revision, model: saved.model_overrides[props.accountId] ?? saved.default_model }
     baseline.value = JSON.stringify(draft.value)
@@ -50,6 +58,6 @@ async function save() {
     const detail = e as { reason?: string; message?: string }
     const key = `ticketBorrowing.reasons.${detail.reason || detail.message}`
     error.value = te(key) ? t(key) : t('ticketBorrowing.failure')
-  } finally { if (!disposed) saving.value = false }
+  } finally { if (!disposed) submitting.value = false }
 }
 </script>

@@ -1014,7 +1014,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				return
 			}
 			if lastAdmissionErr != nil && lastFailoverErr == nil {
-				status, code, message := openAIAdmissionClientError(err)
+				status, code, message := openAIAdmissionClientError(lastAdmissionErr)
 				h.handleStreamingAwareError(c, status, code, message, streamStarted)
 			} else if lastFailoverErr != nil {
 				h.handleFailoverExhausted(c, lastFailoverErr, streamStarted)
@@ -1183,7 +1183,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			})
 		}
 		if err != nil {
-			if service.IsOpenAITurnAdmissionError(err) {
+			if service.IsOpenAITurnAdmissionError(err) || errors.Is(err, service.ErrBorrowResponseRejected) {
 				status, code, message := openAIAdmissionClientError(err)
 				h.handleStreamingAwareError(c, status, code, message, streamStarted)
 				return
@@ -1618,6 +1618,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 	failedAccountIDs := make(map[int64]struct{})
 	sameAccountRetryCount := make(map[int64]int)
 	var lastFailoverErr *service.UpstreamFailoverError
+	var lastAdmissionErr error
 	var rpmAdmission openAIRPMAdmission
 	var oauth429FailoverState service.OpenAIOAuth429FailoverState
 	effectiveMappedModel := preferredMappedModel
@@ -1678,7 +1679,10 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 					return
 				}
 			} else {
-				if lastFailoverErr != nil {
+				if lastAdmissionErr != nil && lastFailoverErr == nil {
+					status, code, message := openAIAdmissionClientError(lastAdmissionErr)
+					h.anthropicStreamingAwareError(c, status, code, message, streamStarted)
+				} else if lastFailoverErr != nil {
 					h.handleAnthropicFailoverExhausted(c, lastFailoverErr, streamStarted)
 				} else {
 					h.anthropicStreamingAwareError(c, http.StatusBadGateway, "api_error", "Upstream request failed", streamStarted)
@@ -1738,6 +1742,11 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			}()
 			return h.gatewayService.ForwardAsAnthropic(rpmAdmission.forwardContext(c.Request.Context(), account), c, account, forwardBody, promptCacheKey, defaultMappedModel)
 		}()
+		if retryOpenAIInitialAdmission(c, err, result, body, account.ID, failedAccountIDs, &switchCount, maxAccountSwitches) {
+			lastAdmissionErr = err
+			reqLog.Info("openai_messages.admission_reselecting", zap.Int64("account_id", account.ID), zap.Int("switch_count", switchCount))
+			continue
+		}
 		if h.handleOpenAIRPMForwardError(c, err, streamStarted, true) {
 			return
 		}
@@ -1803,7 +1812,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			})
 		}
 		if err != nil {
-			if service.IsBorrowRouteUnavailable(err) {
+			if service.IsOpenAITurnAdmissionError(err) || errors.Is(err, service.ErrBorrowResponseRejected) {
 				status, code, message := openAIAdmissionClientError(err)
 				h.anthropicStreamingAwareError(c, status, code, message, streamStarted)
 				return

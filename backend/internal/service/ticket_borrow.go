@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
@@ -429,7 +430,7 @@ func (s *TicketBorrowService) Check(ctx context.Context, id int64, model, transp
 	continuation := borrowHTTPContinuationFromContext(ctx)
 	t, err := s.repo.Target(ctx, id)
 	if err != nil {
-		return ErrBorrowUnavailable
+		return borrowAdmissionError(err)
 	}
 	if !t.Enabled {
 		if continuation != nil || borrowPreferredPass(ctx) {
@@ -443,12 +444,15 @@ func (s *TicketBorrowService) Check(ctx context.Context, id int64, model, transp
 		return ErrBorrowUnavailable
 	}
 	a, err := s.owner.accountRepo.GetByID(ctx, t.AccountID)
-	if err != nil || a == nil || !a.IsSchedulable() {
+	if err != nil {
+		return borrowAdmissionError(err)
+	}
+	if a == nil || !a.IsSchedulable() {
 		return ErrBorrowUnavailable
 	}
 	_, identity, err := s.targetEnvironment(ctx, a)
 	if err != nil {
-		return ErrBorrowUnavailable
+		return borrowAdmissionError(err)
 	}
 	if continuation != nil {
 		if err := s.waitResponseBinding(ctx, id, continuation.Response); err != nil {
@@ -469,10 +473,7 @@ func (s *TicketBorrowService) Check(ctx context.Context, id int64, model, transp
 		return err
 	}
 	_, err = s.repo.Route(ctx, t.AccountID, identity, preferred)
-	if err != nil {
-		return ErrBorrowUnavailable
-	}
-	return nil
+	return borrowAdmissionError(err)
 }
 
 // This hook is below both legacy borrowing and business forwarding. Only the
@@ -499,7 +500,7 @@ func (s *TicketBorrowService) ForwardHTTP(req *http.Request, proxy string, id in
 	continuation := borrowHTTPContinuationFromContext(req.Context())
 	target, err := s.repo.Target(req.Context(), id)
 	if err != nil {
-		return nil, ErrBorrowUnavailable
+		return nil, borrowAdmissionError(err)
 	}
 	if !target.Enabled {
 		if continuation != nil {
@@ -525,12 +526,15 @@ func (s *TicketBorrowService) ForwardHTTP(req *http.Request, proxy string, id in
 		return nil, ErrBorrowUnavailable
 	}
 	account, err := s.owner.accountRepo.GetByID(req.Context(), target.AccountID)
-	if err != nil || account == nil || !account.IsSchedulable() {
-		return nil, ErrBorrowUnavailable
+	if err != nil {
+		return nil, borrowAdmissionError(err)
+	}
+	if account == nil || !account.IsSchedulable() {
+		return nil, borrowPreSendRejection(ErrBorrowUnavailable)
 	}
 	_, identity, err := s.targetEnvironment(req.Context(), account)
 	if err != nil {
-		return nil, ErrBorrowUnavailable
+		return nil, borrowPreSendRejection(err)
 	}
 	hint, hasHint := req.Context().Value(borrowBindingKey{}).(borrowBindingHint)
 	if !hasHint {
@@ -578,7 +582,7 @@ func (s *TicketBorrowService) ForwardHTTP(req *http.Request, proxy string, id in
 		}
 	}
 	if err != nil {
-		return nil, ErrBorrowUnavailable
+		return nil, borrowPreSendRejection(err)
 	}
 	use := newBorrowRouteUse(req.Context(), allocator, leaseID, 15*time.Second)
 	bodyOwnsLease := false
@@ -589,29 +593,30 @@ func (s *TicketBorrowService) ForwardHTTP(req *http.Request, proxy string, id in
 	}()
 	req = req.WithContext(use.ctx)
 	if route.Secret.Endpoint == "" || req.URL.Scheme+"://"+req.URL.Host+req.URL.EscapedPath() != route.Secret.Endpoint {
-		return nil, ErrBorrowUnavailable
+		return nil, borrowPreSendRejection(ErrBorrowUnavailable)
 	}
 	r := req.Clone(context.WithValue(req.Context(), borrowPreparedKey{}, true))
 	// Business keeps the normal gateway transport profile and connection pool.
 	// Fresh randomized connections belong to acquisition/probes, not user traffic.
 	r = r.WithContext(context.WithValue(r.Context(), borrowBeforeSendKey{}, func(ctx context.Context) error {
 		latest, e := s.owner.accountRepo.GetByID(ctx, target.AccountID)
-		if e != nil || latest == nil || !latest.IsSchedulable() {
+		if e != nil {
+			return borrowAdmissionError(e)
+		}
+		if latest == nil || !latest.IsSchedulable() {
 			return ErrBorrowUnavailable
 		}
 		_, identity, e := s.targetEnvironment(ctx, latest)
 		if e != nil {
-			return ErrBorrowUnavailable
+			return borrowAdmissionError(e)
 		}
 		if e := allocator.RenewRoute(ctx, leaseID); e != nil {
-			return ErrBorrowUnavailable
+			return borrowAdmissionError(e)
 		}
 		_, e = s.repo.Route(ctx, target.AccountID, identity, route.ID)
-		if e != nil {
-			return ErrBorrowUnavailable
-		}
-		return nil
+		return borrowAdmissionError(e)
 	}))
+	r = r.WithContext(context.WithValue(r.Context(), borrowHTTPTransportStartedKey{}, &atomic.Bool{}))
 	// Keep the normal business identity. Probe headers and TLS never enter this request.
 	if choice != nil {
 		if err := applyBorrowHTTPContinuation(r, choice); err != nil {
@@ -644,10 +649,15 @@ func (s *TicketBorrowService) ForwardHTTP(req *http.Request, proxy string, id in
 			_ = s.repo.RefreshTarget(ctx, target.AccountID)
 			_ = s.repo.Event(ctx, BorrowEvent{TargetID: target.AccountID, SourceID: route.SourceID, RouteID: route.ID, Stage: "route", Reason: reason})
 			cancel()
-			if resp.Body != nil {
-				resp.Body.Close()
+			// Error responses belong to the ordinary upstream error policy (401,
+			// 429, 5xx, request-scoped vetoes, etc.). Keep their body and headers
+			// readable until the existing forwarding code classifies them.
+			if resp.StatusCode < http.StatusBadRequest {
+				if resp.Body != nil {
+					resp.Body.Close()
+				}
+				return nil, ErrBorrowResponseRejected
 			}
-			return nil, ErrBorrowUnavailable
 		}
 		if err == nil && resp.Body != nil && resp.Body != http.NoBody {
 			observed := &borrowObservedBody{ReadCloser: resp.Body, owner: s, target: target.AccountID, route: route.ID}

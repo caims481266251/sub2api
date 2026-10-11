@@ -379,7 +379,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		// attempt using the stale scheduler snapshot.
 		latest, admissionErr := s.admitOpenAITurn(ctx, c, account, actualModel)
 		if admissionErr != nil {
-			return nil, admissionErr
+			return nil, markOpenAIInitialAdmissionForContext(ctx, admissionErr)
 		}
 		account = latest
 		token, _, err := s.GetAccessToken(ctx, account)

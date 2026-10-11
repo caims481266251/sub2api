@@ -69,7 +69,7 @@
         <p v-if="error" role="alert" class="mb-3 text-sm text-red-600">{{ error }}</p>
         <p class="mb-3 text-xs text-gray-500 dark:text-gray-400">{{ t('ticketBorrowing.management.drawerDraftHint') }}</p>
         <form id="borrow-selection-form" class="space-y-4" @submit.prevent="saveSelection">
-          <BorrowSourceScopeEditor v-if="sourceEditor === 'scope'" :model-value="selection" :accounts="options.accounts" :groups="options.groups" :disabled="busy || loading || !selectionLoaded" @change="applyScope" />
+          <BorrowSourceScopeEditor v-show="sourceEditor === 'scope'" :model-value="selection" :accounts="options.accounts" :groups="options.groups" :disabled="busy || loading || !selectionLoaded" @change="applyScope" />
           <fieldset v-if="sourceEditor === 'defaults'" :disabled="busy || loading || !selectionLoaded" class="card min-w-0 space-y-4 p-4 sm:p-5">
             <h2 class="font-semibold">{{ t('ticketBorrowing.configureModels') }}</h2>
             <div class="grid gap-5 md:grid-cols-2">
@@ -81,7 +81,7 @@
               <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('ticketBorrowing.poolBindingHint') }}</p>
               <RouterLink to="/admin/proxies#pool" class="text-sm text-primary-600">{{ t('ticketBorrowing.managePool') }}</RouterLink>
             </div>
-            <div v-if="overrideCount" class="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-blue-50 p-3 text-sm dark:bg-blue-900/20"><p>{{ t('ticketBorrowing.overrideCount', { count: overrideCount }) }}</p><button type="button" class="btn btn-secondary btn-sm" data-testid="reset-models" @click="resetModels">{{ t('ticketBorrowing.resetModels') }}</button></div>
+            <div v-if="overrideCount" class="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-blue-50 p-3 text-sm dark:bg-blue-900/20"><p>{{ t('ticketBorrowing.overrideCount', { count: overrideCount }) }}</p><button type="button" class="btn btn-secondary btn-sm" :disabled="busy || loading" data-testid="reset-models" @click="resetModels">{{ t('ticketBorrowing.resetModels') }}</button></div>
           </fieldset>
 
           <details class="text-xs text-gray-500 dark:text-gray-400"><summary class="cursor-pointer">{{ t('ticketBorrowing.management.help') }}</summary><p class="my-3">{{ t('ticketBorrowing.scope.saveHint') }}</p><button type="button" class="btn btn-ghost" :disabled="busy || !selectionLoaded || !(selection.group_ids.length || selection.account_ids.length || selection.excluded_account_ids?.length)" data-testid="clear-source-scope" @click="clearSelection">{{ t('ticketBorrowing.clearSelection') }}</button></details>
@@ -105,7 +105,7 @@
         <dl class="mt-5 grid gap-4 text-sm"><div><dt class="text-xs text-gray-500 dark:text-gray-400">{{ t('ticketBorrowing.tags.currentEligibility') }}</dt><dd class="mt-1"><BorrowTag :kind="activeSource.unavailable_reason ? 'reason' : 'state'" :value="activeSource.unavailable_reason || (activeSource.enabled ? 'eligible' : 'unavailable')" detail /></dd></div><div><dt class="text-xs text-gray-500 dark:text-gray-400">{{ t('ticketBorrowing.model') }}</dt><dd class="mt-1 break-all">{{ activeSource.model }}</dd></div><div><dt class="text-xs text-gray-500 dark:text-gray-400">{{ t('ticketBorrowing.savedSourceResult') }}</dt><dd class="mt-1"><BorrowTag :value="activeSource.last_reason" detail /></dd></div></dl>
         <BorrowReasonHint :code="activeSource.unavailable_reason || activeSource.last_reason || ''" />
         <button class="mt-2 text-sm text-primary-600" @click="openRecords({ source_account_id: activeSource.account_id })">{{ t('ticketBorrowing.management.relatedRecords') }}</button>
-        <BorrowSourceModel v-if="savedSelection" :key="activeSource.account_id" :account-id="activeSource.account_id" :selection="savedSelection" :disabled="busy || selectionDirty" :editor-state="modelEditorStates[activeSource.account_id]" @editor-state="modelEditorStates[activeSource.account_id] = $event" @dirty="modelDrafts[activeSource.account_id] = $event" @saving="modelSaving = $event" @saved="modelSaved" />
+        <BorrowSourceModel v-if="savedSelection" :key="activeSource.account_id" :account-id="activeSource.account_id" :selection="savedSelection" :disabled="busy || loading || selectionDirty" :pending="modelSaving" :save-model="saveSourceModel" :editor-state="modelEditorStates[activeSource.account_id]" @editor-state="modelEditorStates[activeSource.account_id] = $event" @dirty="modelDrafts[activeSource.account_id] = $event" />
       </template>
     </BaseDialog>
     <BaseDialog :show="!!activeTarget" :title="activeTarget ? `${activeTarget.name} · #${activeTarget.account_id}` : ''" width="wide" placement="right" :show-close-button="!probeSaving && !busy" :close-on-escape="!probeSaving && !busy" @close="!probeSaving && !busy && (targetDetailId = null)">
@@ -119,7 +119,7 @@
           <p class="text-xs leading-5 text-gray-500 dark:text-gray-400">{{ t('ticketBorrowing.simplified.environments') }}</p>
           <button v-if="target.enabled && target.acquisition_identity === 'source'" class="text-sm text-primary-600" @click="targetDetailId = null; tab = 'sources'">{{ t('ticketBorrowing.management.manageSources') }}</button>
           <button class="text-sm text-primary-600" @click="openRecords({ target_id: target.account_id })">{{ t('ticketBorrowing.management.relatedRecords') }}</button>
-          <details><summary class="cursor-pointer text-sm">{{ t('ticketBorrowing.simplified.advanced') }}</summary><BorrowProbePolicy :target="target" :editor-state="probeEditorStates[target.account_id]" @editor-state="probeEditorStates[target.account_id] = $event" @saving="probeSaving = $event" @saved="acceptProbeTarget" @dirty="probeDrafts[target.account_id] = $event" /></details>
+          <details><summary class="cursor-pointer text-sm">{{ t('ticketBorrowing.simplified.advanced') }}</summary><BorrowProbePolicy :target="target" :disabled="busy || loading" :pending="probeSaving" :save-policy="saveProbePolicy" :editor-state="probeEditorStates[target.account_id]" @editor-state="probeEditorStates[target.account_id] = $event" @dirty="probeDrafts[target.account_id] = $event" /></details>
           </section>
           <dl class="grid gap-4 rounded-lg border border-gray-100 p-3 text-sm dark:border-dark-700 sm:grid-cols-3"><div v-if="usable(target)" class="min-w-0"><dt class="text-xs text-gray-500 dark:text-gray-400">{{ t('ticketBorrowing.gateway') }}</dt><dd class="mt-1 break-all">{{ target.gateway }}</dd></div><div><dt class="text-xs text-gray-500 dark:text-gray-400">{{ t('ticketBorrowing.phase') }}</dt><dd class="mt-1"><BorrowTargetStatus :target="target" :running="backgroundRunning" :now="now + offset" :source-budget="savedSettings?.source_budget" /></dd></div><div><dt class="text-xs text-gray-500 dark:text-gray-400">{{ t('ticketBorrowing.reason') }}</dt><dd class="mt-1"><BorrowTag :value="target.reason" detail /></dd></div></dl>
           <BorrowBusinessRoutes :target="target" :now="now + offset" @records="openRecords({ target_id: target.account_id, route_id: $event })" /><BorrowTargetStatistics :target-id="target.account_id" :observation="availability[target.account_id]" @records="openRecords({ target_id: target.account_id, route_id: $event })" />
@@ -185,6 +185,35 @@ async function modelSaved(value: BorrowSelection) {
  catch (e) { if (!disposed) { pollError.value = true; failure(e) } }
 }
 const probeEditorStates = ref<Record<number, BorrowEditorState<ProbePolicy>>>({})
+// Keep save completion and cached drafts alive when a detail drawer is unmounted.
+async function saveProbePolicy(accountId: number, policy: ProbePolicy): Promise<BorrowTarget> {
+ probeSaving.value = true; error.value = ''; refreshGeneration++
+ try {
+  const target = await api.saveProbePolicy(accountId, policy)
+  if (!disposed) {
+   const draft = { ...target.probe_policy! }
+   probeEditorStates.value[accountId] = { draft, baseline: JSON.stringify(draft) }
+   probeDrafts.value[accountId] = false
+   acceptProbeTarget(target)
+  }
+  return target
+ } catch (e) { if (!disposed) failure(e); throw e }
+ finally { probeSaving.value = false }
+}
+async function saveSourceModel(accountId: number, input: BorrowSelection): Promise<BorrowSelection> {
+ modelSaving.value = true; error.value = ''; refreshGeneration++
+ try {
+  const value = await api.saveSelection(input)
+  if (!disposed) {
+   const draft: SourceModelDraft = { revision: value.revision, inherit: value.model_overrides[accountId] === undefined, model: value.model_overrides[accountId] ?? value.default_model }
+   modelEditorStates.value[accountId] = { draft, baseline: JSON.stringify(draft) }
+   modelDrafts.value[accountId] = false
+   await modelSaved(value)
+  }
+  return value
+ } catch (e) { if (!disposed) failure(e); throw e }
+ finally { modelSaving.value = false }
+}
 const activeSource = computed(() => sources.value.find(s => s.account_id === sourceDetailId.value))
 const activeTarget = computed(() => targets.value.find(s => s.account_id === targetDetailId.value))
 function openSource(id: number) { sourceDetailId.value = id }
@@ -307,24 +336,25 @@ async function removeSources(ids: number[]) {
   if (ids.some(id => modelDrafts.value[id])) { reportError(t('ticketBorrowing.scope.detailDraft')); return }
   const frozenIds = [...ids]
   sourceEditor.value = 'scope'
-  busy.value = true
+  actionBusy.value = true
   try {
     // Group membership can change while the saved-source list is polling.
     // Refresh options before deciding which removed accounts need exclusions.
     const latest = await api.sourceOptions()
     if (disposed) return
     options.value = latest
-    busy.value = false
+    actionBusy.value = false
     applyScope(changeSourceScope(selection.value, latest.accounts, frozenIds, false))
     if (!scopeError.value) { sourceSelection.value = [] }
   } catch (e) { failure(e) }
-  finally { busy.value = false }
+  finally { actionBusy.value = false }
 }
 function clearSelection() { applyScope({ ...selection.value, group_ids: [], account_ids: [], excluded_account_ids: [] }) }
 function resetModels() { for (const a of preview.value) delete selection.value.model_overrides[a.id] }
 const lastUpdated = ref<number | null>(null)
 const pollError = ref(false), eventsLoading = ref(false), oldestEventCursor = ref(0)
-const loading = ref(false), busy = ref(false), error = ref(''), hasOlder = ref(false)
+const loading = ref(false), actionBusy = ref(false), error = ref(''), hasOlder = ref(false)
+const busy = computed(() => actionBusy.value || probeSaving.value || modelSaving.value)
 const now = ref(Date.now()); let offset = 0; let disposed = false; let polling = false; let refreshGeneration = 0
 function reportError(message: string) { error.value = message; appStore.showError(message) }
 function failure(e: unknown) { const v = e as { reason?: string; message?: string }; const key = `ticketBorrowing.reasons.${v?.reason || v?.message}`; reportError(te(key) ? t(key) : t('ticketBorrowing.failure')) }
@@ -363,10 +393,10 @@ async function reload() {
 }
 async function action(fn: () => Promise<unknown>, message = 'saved') {
   if (busy.value || loading.value) return
-  busy.value = true; error.value = ''
+  actionBusy.value = true; error.value = ''
   try { await fn(); if (message) appStore.showSuccess(t(`ticketBorrowing.${message}`)); await reload() }
   catch (e) { failure(e) }
-  finally { busy.value = false }
+  finally { actionBusy.value = false }
 }
 async function saveSelection() {
   if (!scopeWithinLimits(selection.value)) { scopeError.value = t('ticketBorrowing.scope.limit'); return }
@@ -470,7 +500,7 @@ function closeBatchProbe() {
 }
 async function saveBatchProbe(input: BorrowProbeBatchInput) {
  if (busy.value || loading.value || probeSaving.value || !batchProbeAccounts.value) return
- busy.value = true; batchProbeError.value = ''; error.value = ''
+ actionBusy.value = true; batchProbeError.value = ''; error.value = ''
  try {
   const results = await api.saveProbePolicies(input)
   batchProbeResults.value = results
@@ -482,11 +512,11 @@ async function saveBatchProbe(input: BorrowProbeBatchInput) {
  } catch (e) {
   failure(e)
   batchProbeError.value = error.value
- } finally { busy.value = false }
+ } finally { actionBusy.value = false }
 }
 async function retryBatchProbe() {
  if (busy.value || loading.value || !batchProbeResults.value) return
- busy.value = true; batchProbeError.value = ''
+ actionBusy.value = true; batchProbeError.value = ''
  try {
   const failed = new Set(batchProbeResults.value.filter(r => r.status === 'failed').map(r => r.account_id))
   const rows = await api.targets()
@@ -496,15 +526,15 @@ async function retryBatchProbe() {
   batchProbeAccounts.value = retry.map(t => ({ account_id: t.account_id, name: t.name, revision: t.probe_policy!.revision }))
   batchProbeSelected.value = [...failed]; batchProbeResults.value = null
  } catch (e) { failure(e); batchProbeError.value = error.value }
- finally { busy.value = false }
+ finally { actionBusy.value = false }
 }
 const probeDirty = computed(() => Object.values(probeDrafts.value).some(Boolean))
 const hasUnsavedChanges = computed(() => Object.values(modelDrafts.value).some(Boolean) || selectionDirty.value || settingsDirty.value || probeDirty.value || batchProbeDirty.value)
 function beforeUnload(event: BeforeUnloadEvent) {
- if (hasUnsavedChanges.value || (batchProbeAccounts.value && busy.value)) { event.preventDefault(); event.returnValue = '' }
+ if (hasUnsavedChanges.value || probeSaving.value || modelSaving.value || (batchProbeAccounts.value && busy.value)) { event.preventDefault(); event.returnValue = '' }
 }
 onBeforeRouteLeave(() => {
- if (batchProbeAccounts.value && busy.value) return false
+ if (probeSaving.value || modelSaving.value || (batchProbeAccounts.value && busy.value)) return false
  return !hasUnsavedChanges.value || window.confirm(t('ticketBorrowing.leaveConfirm'))
 })
 const clock = setInterval(() => { now.value = Date.now() }, 1000)

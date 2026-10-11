@@ -212,7 +212,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 				return
 			} else {
 				if lastAdmissionErr != nil && lastFailoverErr == nil {
-					status, code, message := openAIAdmissionClientError(err)
+					status, code, message := openAIAdmissionClientError(lastAdmissionErr)
 					h.handleStreamingAwareError(c, status, code, message, streamStarted)
 				} else if lastFailoverErr != nil {
 					h.handleFailoverExhausted(c, lastFailoverErr, streamStarted)
@@ -342,7 +342,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 			})
 		}
 		if err != nil {
-			if service.IsOpenAITurnAdmissionError(err) {
+			if service.IsOpenAITurnAdmissionError(err) || errors.Is(err, service.ErrBorrowResponseRejected) {
 				status, code, message := openAIAdmissionClientError(err)
 				h.handleStreamingAwareError(c, status, code, message, streamStarted)
 				return

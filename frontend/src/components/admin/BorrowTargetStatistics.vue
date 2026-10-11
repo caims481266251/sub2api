@@ -50,6 +50,6 @@ async function loadTiming(id: number) {
  catch { if (version === timingGeneration) error.value = true }
  finally { if (version === timingGeneration) timingLoading.value = false }
 }
-watch([() => props.targetId, minutes], () => { stats.value = undefined; timings.value = []; timingGeneration++; void load() }, { immediate: true })
+watch([() => props.targetId, minutes], () => { stats.value = undefined; timings.value = []; timingGeneration++; timingLoading.value = false; void load() }, { immediate: true })
 onBeforeUnmount(() => { generation++; timingGeneration++ })
 </script>

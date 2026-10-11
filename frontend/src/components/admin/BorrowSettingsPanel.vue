@@ -14,7 +14,7 @@
       </section>
       <section class="card min-w-0 overflow-hidden" data-testid="settings-limits">
           <details class="rounded-lg bg-blue-50 p-3 text-sm dark:bg-blue-900/20" data-testid="global-policy-impact"><summary class="cursor-pointer">{{ t('ticketBorrowing.management.policyImpact', { inherited: targets?.filter(v => v.enabled && v.probe_policy?.use_global).length ?? 0, overridden: targets?.filter(v => v.enabled && !v.probe_policy?.use_global).length ?? 0 }) }}</summary><ul class="mt-2 space-y-1 text-xs"><li v-for="target in targets?.filter(v => v.enabled)" :key="target.account_id"><button type="button" class="text-primary-600 underline" @click="$emit('target', target.account_id)">{{ target.name }} #{{ target.account_id }}</button> <BorrowTag kind="state" :value="target.probe_policy?.use_global ? 'inherited' : 'overridden'" /></li></ul></details>
-        <details data-testid="settings-advanced" :open="!sourceValid || !probeValid || !globalProbeValid || !continueTimeoutValid">
+        <details data-testid="settings-advanced" :open="advancedOpen" @toggle="advancedOpen = ($event.target as HTMLDetailsElement).open">
           <summary class="cursor-pointer px-5 py-4"><span class="text-sm font-semibold">{{ t('ticketBorrowing.management.probeLimits') }}</span><span class="mt-1 block text-xs text-gray-500 dark:text-gray-400">{{ t('ticketBorrowing.management.probeSummary', { source: sourceBudget, target: probeBudget, concurrency: globalProbeConcurrency, timeout: continueTimeout }) }}</span></summary>
         <div class="space-y-5 p-5">
           <div class="grid gap-4 sm:grid-cols-2">
@@ -57,7 +57,7 @@
 </template>
 <script setup lang="ts">
 import BorrowTag from './BorrowTag.vue'
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { BorrowSettings, BorrowRecoverySettings, BorrowTarget } from '@/api/admin/ticketBorrowing'
 const model = defineModel<BorrowSettings & { recovery: BorrowRecoverySettings }>({ required: true })
@@ -78,6 +78,10 @@ const admissionValid = computed(() => inRange(admissionWindow.value, 1, 240))
 const globalProbeValid = computed(() => inRange(globalProbeConcurrency.value, 1, 32))
 const sourceValid = computed(() => inRange(model.value.recovery.source_requests_per_minute, 1, 120))
 const probeValid = computed(() => inRange(model.value.recovery.probe_requests_per_minute, 2, 60))
+const advancedOpen = ref(false)
+watch([sourceValid, probeValid, globalProbeValid, continueTimeoutValid], validity => {
+  if (validity.some(value => !value)) advancedOpen.value = true
+}, { immediate: true })
 const valid = computed(() => continueTimeoutValid.value && admissionValid.value && globalProbeValid.value && sourceValid.value && probeValid.value)
 const waitSeconds = computed(() => props.saved?.source_budget?.available_at ? Math.max(0, Math.ceil((Date.parse(props.saved.source_budget.available_at)-props.now)/1000)) : 0)
 const budgetPercent = computed(() => { const budget = props.saved?.source_budget; return budget && budget.limit > 0 ? Math.min(100, Math.max(0, budget.used / budget.limit * 100)) : 0 })

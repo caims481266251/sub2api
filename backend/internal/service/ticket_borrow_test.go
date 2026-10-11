@@ -273,7 +273,8 @@ func TestTicketBorrowBusinessFailureRevokesOnlyItsBinding(t *testing.T) {
 		r.route = &copy
 		return &http.Response{StatusCode: 200, Header: http.Header{"X-Codex-Turn-State": []string{"changed"}}, Body: http.NoBody}, nil
 	})
-	require.ErrorIs(t, e, ErrBorrowUnavailable)
+	require.ErrorIs(t, e, ErrBorrowResponseRejected)
+	require.False(t, IsBorrowRouteUnavailable(e), "a response identity change is not a pre-send route rejection")
 	require.Equal(t, []string{"route-a"}, r.revoked)
 	require.NotNil(t, r.route)
 	require.Equal(t, "route-b", r.route.ID)
@@ -305,7 +306,9 @@ func TestTicketBorrowCannotBypassWithProbeOrClientHeader(t *testing.T) {
 	})
 	require.ErrorIs(t, e, ErrBorrowUnavailable)
 	r.unavailable = true
-	require.ErrorIs(t, s.Check(t.Context(), 11, "gpt-6-astra", "http"), ErrBorrowUnavailable)
+	err := s.Check(t.Context(), 11, "gpt-6-astra", "http")
+	require.True(t, IsOpenAITurnAdmissionError(err))
+	require.False(t, IsBorrowRouteUnavailable(err), "storage failures do not prove a missing route")
 }
 func TestTicketBorrowRedactsAllStoredSecrets(t *testing.T) {
 	s := BorrowSource{Name: "source", Secret: BorrowSourceSecret{Credentials: map[string]any{"access_token": "SECRET"}, Proxies: []string{"http://u:PASSWORD@proxy"}}}

@@ -115,6 +115,7 @@ func TestBorrowBusinessCancellationPreservesSharedHTTP2Stream(t *testing.T) {
 		return doUpstreamRequest(client, sent)
 	})
 	require.ErrorIs(t, err, service.ErrBorrowUnavailable)
+	require.False(t, service.IsOpenAIInitialAdmissionRejection(err), "a GotConn rejection must not assert whole-forward replay safety")
 	select {
 	case info := <-gotConn:
 		require.True(t, info.Reused, "the cancellation must occur on the active shared H2 connection")

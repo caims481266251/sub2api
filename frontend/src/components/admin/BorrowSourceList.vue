@@ -60,7 +60,10 @@ const filtered = computed(() => props.sources.filter(s => {
 }).sort((a,b) => sort.value === 'name' ? (a.name || '').localeCompare(b.name || '') || a.account_id-b.account_id : a.account_id-b.account_id))
 const rows = computed(() => filtered.value.slice((page.value-1)*pageSize.value, page.value*pageSize.value))
 const pages = computed(() => Math.max(1, Math.ceil(filtered.value.length/pageSize.value)))
-watch(pages, n => { page.value = Math.min(page.value, n) })
+watch([pages, () => filtered.value.length], ([n, count]) => {
+  // Preserve the preferred page while initial data is loading, then clamp it.
+  if (count > 0) page.value = Math.max(1, Math.min(Math.floor(page.value), n))
+}, { immediate: true })
 watch([search, filter, group], () => { page.value = 1; selectionCleared.value = props.selected.length > 0; emit('update:selected', []) })
 watch([sort, pageSize], () => { page.value = 1 })
 const selectablePage = computed(() => rows.value.filter(s => s.account_id > 0).map(s => s.account_id))

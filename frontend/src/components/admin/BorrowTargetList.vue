@@ -57,7 +57,10 @@ const rows = computed(() => filtered.value.slice((page.value-1)*pageSize.value, 
 const pages = computed(() => Math.max(1, Math.ceil(filtered.value.length/pageSize.value)))
 watch([search, filter, phase], () => { page.value = 1; selectionCleared.value = props.selected.length > 0; emit('update:selected', []) })
 watch([sort, pageSize], () => { page.value = 1 })
-watch(pages, n => { page.value = Math.min(page.value, n) })
+watch([pages, () => filtered.value.length], ([n, count]) => {
+  // Preserve the preferred page while initial data is loading, then clamp it.
+  if (count > 0) page.value = Math.max(1, Math.min(Math.floor(page.value), n))
+}, { immediate: true })
 const configurableTargets = computed(() => props.targets.filter(target => target.account_id > 0 && (target.probe_policy?.revision ?? 0) > 0))
 const selectablePage = computed(() => rows.value.filter(target => target.account_id > 0 && (target.probe_policy?.revision ?? 0) > 0).map(target => target.account_id))
 const allPageSelected = computed(() => selectablePage.value.length > 0 && selectablePage.value.every(id => props.selected.includes(id)))

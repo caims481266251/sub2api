@@ -91,6 +91,7 @@ func prismBrowserResponsesURL(baseURL string) string {
 
 // Forward forwards request to OpenAI API
 func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (result *OpenAIForwardResult, resultErr error) {
+	ctx = withOpenAIInitialAdmission(ctx)
 	if astraSchedulingAppliesToRequest(s.cfg.AstraRouting(ctx), account, gjson.GetBytes(body, "model").String(), getOpenAIGroupIDFromContext(c)) {
 		if err := s.checkAstraSchedulingRoute(ctx, account); err != nil {
 			return nil, err
@@ -110,7 +111,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	defer requesttiming.Observe(ctx, "forward_attempt")()
 	latest, admissionErr := s.admitOpenAITurn(ctx, c, account, extractOpenAICodexTicketModel(body))
 	if admissionErr != nil {
-		return nil, markOpenAIInitialAdmissionError(admissionErr)
+		return nil, markOpenAIInitialAdmissionForContext(ctx, admissionErr)
 	}
 	account = latest
 	beginUpstreamResponseModelObservation(c)
@@ -1238,7 +1239,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	for {
 		latest, admissionErr := s.admitOpenAITurn(ctx, c, account, extractOpenAICodexTicketModel(body))
 		if admissionErr != nil {
-			return nil, admissionErr
+			return nil, markOpenAIInitialAdmissionForContext(ctx, admissionErr)
 		}
 		account = latest
 		token, _, err = s.GetAccessToken(ctx, account)
@@ -1281,7 +1282,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		upstreamStart := time.Now()
 		resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account)
 		SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
-		if errors.Is(err, ErrCodexTicketResponseRejected) {
+		// A local rejection or a terminal response-identity failure must retain
+		// its classification even if the header timer expired at the same time.
+		if IsOpenAITurnAdmissionError(err) || errors.Is(err, ErrBorrowResponseRejected) || errors.Is(err, ErrCodexTicketResponseRejected) {
 			if headerGuard != nil {
 				headerGuard.close()
 			}

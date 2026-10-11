@@ -37,9 +37,8 @@ func IsOpenAITurnAdmissionError(err error) bool {
 	return errors.As(err, &denied)
 }
 
-// markOpenAIInitialAdmissionError is used only at the entry to an HTTP forward,
-// before any upstream work. Later per-send/WS admission failures must stay
-// unmarked: an earlier send may already have executed the request.
+// markOpenAIInitialAdmissionError requires proof that this entire account
+// attempt has not sent a request. A later per-send/WS rejection is insufficient.
 func markOpenAIInitialAdmissionError(err error) error {
 	var denied *OpenAITurnAdmissionError
 	if !errors.As(err, &denied) || (denied.Reason != "account_binding_changed" && denied.Reason != "borrow_route_unavailable") {
@@ -47,12 +46,13 @@ func markOpenAIInitialAdmissionError(err error) error {
 	}
 	copy := *denied
 	copy.initialHTTPForward = true
+	copy.cause = err
 	return &copy
 }
 
-// IsOpenAIInitialAdmissionRejection identifies a route change before this HTTP
-// forward started. Callers must still check cancellation, downstream writes,
-// continuation state and their account-switch budget before reselecting.
+// IsOpenAIInitialAdmissionRejection identifies a local rejection before the
+// first upstream send of this HTTP forward. Callers must still check cancellation,
+// downstream writes, continuation state and their account-switch budget.
 func IsOpenAIInitialAdmissionRejection(err error) bool {
 	var denied *OpenAITurnAdmissionError
 	return errors.As(err, &denied) && denied.initialHTTPForward
@@ -372,7 +372,7 @@ func (s *OpenAIGatewayService) admitOpenAITurnWithGroup(
 	}
 	if s.borrowRoutes != nil {
 		if err := s.borrowRoutes.Check(ctx, latest.ID, outboundModel, "http"); err != nil {
-			return nil, &OpenAITurnAdmissionError{Reason: "borrow_route_unavailable", cause: err}
+			return nil, borrowAdmissionError(err)
 		}
 	}
 	if openAITurnRouteFingerprint(latest) != openAITurnRouteFingerprint(selected) {

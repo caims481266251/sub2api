@@ -56,6 +56,7 @@ func TestBorrowHTTPContinuationScopeAndInput(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, converted)
 	require.False(t, gjson.GetBytes(effective, "previous_response_id").Exists())
+	require.False(t, OpenAIInitialAdmissionCanReselect(effectiveCtx, effective), "normalization must preserve the account-binding veto")
 	require.Equal(t, gjson.GetBytes(body, "input").Raw, gjson.GetBytes(effective, "input").Raw)
 	require.Equal(t, "high", gjson.GetBytes(effective, "reasoning.effort").String())
 	require.Equal(t, "resp_original", gjson.GetBytes(body, "previous_response_id").String())

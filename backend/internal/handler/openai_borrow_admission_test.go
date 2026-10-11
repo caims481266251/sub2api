@@ -27,7 +27,7 @@ func (u *borrowUnavailableHTTPUpstream) Do(*http.Request, string, int64, int) (*
 	return nil, fmt.Errorf("transport admission: %w", service.ErrBorrowUnavailable)
 }
 
-func TestBorrowUnavailableReturns429WithoutAddingAccountRetry(t *testing.T) {
+func TestBorrowUnprovenTransportRejectionDoesNotReplay(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, endpoint := range []string{"responses", "chat/completions", "messages"} {
 		for _, stream := range []bool{false, true} {
@@ -55,10 +55,10 @@ func TestBorrowUnavailableReturns429WithoutAddingAccountRetry(t *testing.T) {
 				case "messages":
 					h.Messages(c)
 				}
-				require.Equal(t, http.StatusTooManyRequests, rec.Code, rec.Body.String())
-				require.Equal(t, "rate_limit_error", gjson.GetBytes(rec.Body.Bytes(), "error.type").String())
-				require.Contains(t, gjson.GetBytes(rec.Body.Bytes(), "error.message").String(), "gateway route")
-				require.Equal(t, 1, upstream.calls, "return to caller without adding a new retry")
+				require.Equal(t, http.StatusServiceUnavailable, rec.Code, rec.Body.String())
+				require.Equal(t, "api_error", gjson.GetBytes(rec.Body.Bytes(), "error.type").String())
+				require.Contains(t, gjson.GetBytes(rec.Body.Bytes(), "error.message").String(), "routing")
+				require.Equal(t, 1, upstream.calls, "a raw error does not prove that the business request was never sent")
 				_, recordedUpstreamError := c.Get(service.OpsUpstreamErrorsKey)
 				require.False(t, recordedUpstreamError, "local rejection must not be recorded as upstream rate limiting")
 				repo.slots.mu.Lock()
@@ -74,8 +74,11 @@ func TestBorrowUnavailableSelectionHTTPClassification(t *testing.T) {
 	fallback := noAccountErrorClassification{Status: http.StatusServiceUnavailable, ErrType: "api_error", Message: "Service temporarily unavailable"}
 	err := fmt.Errorf("%w: %w", service.ErrNoAvailableAccounts, service.ErrBorrowUnavailable)
 	got := classifySelectionFailureError(err, fallback)
-	require.Equal(t, http.StatusTooManyRequests, got.Status)
-	require.Equal(t, "rate_limit_error", got.ErrType)
+	require.Equal(t, fallback, got)
+	mixed := fmt.Errorf("rate_limited=1: %w", err)
+	require.Equal(t, fallback, classifySelectionFailureError(mixed, fallback), "one route veto and one limited account do not prove all accounts are rate limited")
+	rpm := fmt.Errorf("%w: %w", service.ErrOpenAIRPMExhausted, err)
+	require.Equal(t, http.StatusTooManyRequests, classifySelectionFailureError(rpm, fallback).Status)
 	require.Equal(t, fallback, classifySelectionFailureError(service.ErrNoAvailableAccounts, fallback))
 	modelNotFound := noAccountErrorClassification{Status: http.StatusNotFound, ModelNotFound: true}
 	require.Equal(t, modelNotFound, classifySelectionFailureError(err, modelNotFound))

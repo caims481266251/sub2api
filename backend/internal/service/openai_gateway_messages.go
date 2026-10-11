@@ -33,6 +33,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	promptCacheKey string,
 	defaultMappedModel string,
 ) (*OpenAIForwardResult, error) {
+	ctx = withOpenAIInitialAdmission(ctx)
 	latest, admissionErr := s.admitOpenAITurn(
 		context.WithoutCancel(ctx),
 		c,
@@ -40,7 +41,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		gjson.GetBytes(body, "model").String(),
 	)
 	if admissionErr != nil {
-		return nil, admissionErr
+		return nil, markOpenAIInitialAdmissionForContext(ctx, admissionErr)
 	}
 	account = latest
 	// 工具 Schema 清洗必须先于所有分流：下游每条路径（原生 Anthropic 直通、
