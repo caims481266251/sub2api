@@ -1,15 +1,15 @@
 # GitHub 发布与在线更新
 
-本分支的发布仓库是 `caims481266251/sub2api`。当前版本 `2.10.7` 基于本地 `2.10.1` 的借票管理、代理池、批量参数和恢复机制；不代表已合并其他仓库的 `2.10.2–2.10.4`。
+本分支的发布仓库是 `caims481266251/sub2api`。当前版本 `2.10.8` 基于本地 `2.10.1` 的借票管理、代理池、批量参数和恢复机制；不代表已合并其他仓库的 `2.10.2–2.10.4`。
 
 ## 发布方式
 
 将已验证的代码推送到本仓库主分支后，创建带说明的正式 tag：
 
 ```bash
-git tag -a v2.10.8 -m "Release v2.10.8" -m "本次更新说明"
+git tag -a v2.10.9 -m "Release v2.10.9" -m "本次更新说明"
 git push origin main
-git push origin v2.10.8
+git push origin v2.10.9
 ```
 
 `.github/workflows/release.yml` 接收 `v*` tag，自动构建前端及 Windows AMD64、macOS AMD64/ARM64、Linux AMD64/ARM64 更新包，发布 `checksums.txt`、GitHub Release 和 GHCR 多架构镜像。正式 tag 固定完整发布，不能被仓库的 `SIMPLE_RELEASE` 变量降级为仅镜像模式。手动触发仍可选择 simple release，但该模式不提供系统内在线更新包。
@@ -25,7 +25,7 @@ git push origin v2.10.8
 Docker 部署可通过页面更新当前容器中的二进制；重新创建容器会恢复镜像内版本，因此持久升级还应更新 Compose 镜像 tag 并重新创建应用容器：
 
 ```yaml
-image: ghcr.io/caims481266251/sub2api:2.10.7
+image: ghcr.io/caims481266251/sub2api:2.10.8
 ```
 
 ```bash
@@ -57,3 +57,10 @@ docker compose up -d --no-deps app
 - 借票请求沿用普通帐号的状态和恢复处理，补充相关服务、仓储和 TLS 捕获回归。
 - 新增迁移 284–288；旧迁移内容保持原样。
 - 保留正式 tag 完整发布和系统内在线更新能力。
+
+## v2.10.8 更新
+
+- 完善多路借票生命周期、持续路由库存与补充机制，优先选择最新可用路由。
+- 支持 HTTP 请求续接、续接超时管理，以及客户端取消后的路由租约及时清理。
+- 完善业务优先级调度、来源范围管理和借票控制界面。
+- 新增数据库迁移 289–294，保留正式 tag 自动发布与系统在线更新能力。
