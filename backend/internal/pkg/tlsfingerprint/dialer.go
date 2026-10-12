@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"time"
 
@@ -333,7 +334,16 @@ func performTLSHandshake(ctx context.Context, conn net.Conn, profile *Profile, a
 		return nil, fmt.Errorf("apply TLS preset: %w", err)
 	}
 
-	if err := tlsConn.HandshakeContext(ctx); err != nil {
+	trace := httptrace.ContextClientTrace(ctx)
+	if trace != nil && trace.TLSHandshakeStart != nil {
+		trace.TLSHandshakeStart()
+	}
+	handshakeErr := tlsConn.HandshakeContext(ctx)
+	if trace != nil && trace.TLSHandshakeDone != nil {
+		state := tlsConn.ConnectionState()
+		trace.TLSHandshakeDone(tls.ConnectionState{Version: state.Version, HandshakeComplete: state.HandshakeComplete, CipherSuite: state.CipherSuite, NegotiatedProtocol: state.NegotiatedProtocol}, handshakeErr)
+	}
+	if err := handshakeErr; err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("TLS handshake failed: %w", err)
 	}

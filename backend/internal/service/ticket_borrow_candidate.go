@@ -123,6 +123,14 @@ type BorrowCandidateEnvironmentRepository interface {
 	ReleaseCandidateEnvironment(context.Context, string) error
 }
 
+// BorrowCompatibilityRepository keeps a short-lived circuit breaker for a
+// source/target/environment combination. It is optional so older stores and
+// unit-test repositories continue to support normal borrowing.
+type BorrowCompatibilityRepository interface {
+	CheckBorrowCompatibility(context.Context, int64, string, string) (time.Time, bool, error)
+	RecordBorrowCompatibility(context.Context, int64, string, string, string, bool) (time.Time, error)
+}
+
 type BorrowTargetIdentityRepository interface {
 	SetTargetIdentity(context.Context, int64, bool, int64, int64, string) error
 }
@@ -154,6 +162,16 @@ func borrowProxyIdentity(a *Account) string {
 
 func borrowAdmissionDeadline(start time.Time, window int, expiry time.Time) time.Time {
 	return minBorrowTime(start.Add(time.Duration(window)*time.Second), expiry)
+}
+
+// borrowCompatibilityKey scopes the circuit breaker to stable routing
+// dimensions. Cookie pairs are deliberately excluded: a source can mint a
+// fresh __oailb value for every candidate, and including it would make every
+// failure look like a new combination so consecutive failures could never
+// reach the backoff threshold. Cookie-pair hashes remain on the candidate as
+// evidence for diagnosing which concrete ticket failed.
+func borrowCompatibilityKey(targetIdentity string, sourceID int64, gateway string, entryID int64) string {
+	return borrowHash(fmt.Sprintf("%s\x00%d\x00%s\x00%d", targetIdentity, sourceID, gateway, entryID))
 }
 
 // Automatic lead consumes at most half the admission window, leaving useful

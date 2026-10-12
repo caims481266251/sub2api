@@ -59,7 +59,17 @@ export interface BorrowSettings { admission_window_seconds?: number; replenishme
 export interface BorrowEnvironment {
   identity_hash?: string; profile_hash?: string; configured_proxy_hash?: string; client_version?: string; body_hash?: string
 }
+export interface BorrowHTTPAttempt {
+ phase: string; number: number; started_at: string; duration_ms: number; status: number
+ events: Record<string, number>; error_class?: string; failure_stage?: string; timeout_stage?: string; cancellation_cause?: string; terminal?: string; connection_reused?: boolean
+}
+export interface BorrowProbePhase { duration_ms: number; retry_count: number; attempts: BorrowHTTPAttempt[] }
+export interface BorrowPhaseStatistics { requests: number; diagnostic_samples: number; retries: number; average_ms: number | null; timeouts: number; error_classes?: Record<string, number>; timeout_stages?: Record<string, number>; cancellations?: Record<string, number> }
 export interface BorrowCandidateDetails {
+ pool_enqueued_at?: string; pool_claimed_at?: string; pool_minimum_remaining_ms?: number
+ source_http?: BorrowHTTPAttempt; mint?: BorrowProbePhase; continue?: BorrowProbePhase; cancellation_cause?: string; probe_queue_ms?: number
+ gateway_priority?: string
+ source_queue_ms?: number; source_preparation_ms?: number; source_network_ms?: number; publication_ms?: number
  acquisition_identity?: 'self' | 'source'; acquisition_started_at?: string; admission_until?: string; upstream_expires_at?: string
  pool_entry_id?: number; allocation_round?: number; proxy_session_randomized?: boolean; business?: BorrowEnvironment
  replenishment?: { environment_version?: number; until?: string; shadow?: boolean; inventory?: number; exit_reason?: string }
@@ -79,7 +89,29 @@ export interface BorrowEvent {
 }
 export interface BorrowEventQuery { before?: number; after?: number; target_id?: number; source_account_id?: number; source_id?: number; stage?: string; reason?: string; candidate_id?: string; route_id?: string; search?: string; since?: string; until?: string; hide_rotations?: boolean }
 const base = '/admin/accounts/ticket-borrowing'
+
+export interface BorrowCandidatePoolConfig { capacity: number; revision: number }
+export interface BorrowCandidatePoolSummary extends BorrowCandidatePoolConfig {
+  running: boolean; occupied: number; acquiring: number; queued: number; claimed: number; waiting_targets: number; demand_slots: number
+}
+export type BorrowCandidatePoolState = 'acquiring' | 'queued' | 'claimed' | 'finished'
+export interface BorrowCandidatePoolQuery {
+  state?: BorrowCandidatePoolState | 'active' | 'all'; source_account_id?: number; target_id?: number; search?: string; page?: number; page_size?: number
+}
+export interface BorrowCandidatePoolItem {
+  id: string; state: BorrowCandidatePoolState; source_id: number; source_account_id: number; source_name: string
+  target_id: number; target_name: string; gateway: string; created_at: string; enqueued_at?: string; claimed_at?: string
+  finished_at?: string; admission_until?: string; queue_until?: string; reason: string; route_id?: string
+}
+export interface BorrowCandidatePoolPage {
+  summary: BorrowCandidatePoolSummary; items: BorrowCandidatePoolItem[]; total: number; page: number; page_size: number; server_now: string
+}
+export interface BorrowCandidatePoolDetail extends BorrowCandidatePoolItem { details?: BorrowCandidateDetails; server_now: string }
+
 export const ticketBorrowing = {
+ candidatePool: async (query: BorrowCandidatePoolQuery = {}) => (await apiClient.get<BorrowCandidatePoolPage>(`${base}/candidate-pool`, { params: query })).data,
+ candidatePoolDetail: async (id: string) => (await apiClient.get<BorrowCandidatePoolDetail>(`${base}/candidate-pool/${encodeURIComponent(id)}`)).data,
+ saveCandidatePoolConfig: async (value: BorrowCandidatePoolConfig) => (await apiClient.put<BorrowCandidatePoolConfig>(`${base}/candidate-pool/config`, value)).data,
  rotations: async () => (await apiClient.get<BorrowRotationState[]>(`${base}/rotations`)).data,
  rotate: async (role: 'source', account_ids: number[], request_id: string) => (await apiClient.post<BorrowRotationJob>(`${base}/rotations`, { role, account_ids, request_id })).data,
  saveRotationPolicy: async (id: number, policy: BorrowRotationPolicy) => (await apiClient.put<BorrowRotationState[]>(`/admin/accounts/${id}/ticket-borrowing/rotation`, policy)).data,
@@ -129,6 +161,9 @@ export interface BorrowRotationState extends BorrowRotationPolicy {
 export interface BorrowRotationJob { skipped?: { account_id: number; reason: string }[]; id: string; role: 'source'; account_ids: number[]; phase: string; reason: string }
 
 export interface BorrowStatistics {
+ mint?: BorrowPhaseStatistics; continue?: BorrowPhaseStatistics
+ shared_target_inflight: number; shared_target_count: number
+ candidates: number; gateways: number; source_failed: number; inconclusive: number; route_changed: number; prioritized: number; rechecked: number; last_success_at?: string
  target_id: number; since: string; until: string
  passed: number; published: number; ticket_changed: number; timeout: number; cancelled: number; other: number; skipped: number; inflight: number
  routes: { route_id: string; gateway: string; requests: number; completed: number; interrupted: number; unconfirmed: number; visible_samples: number; visible_average_ms: number | null; semantic_samples: number; semantic_average_ms: number | null; average_age_ms: number | null; latest_usage_id: number }[]

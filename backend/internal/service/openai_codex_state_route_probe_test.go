@@ -163,7 +163,7 @@ func TestBorrowedRouteRetryBackoffHonorsDeadline(t *testing.T) {
 	defer cancel()
 	calls := 0
 	result := &OpenAICodexStateProbeResult{}
-	_, err := retryOpenAICodexStateRouteShot(ctx, result, true, func() (openAICodexStateShot, error) {
+	_, err := retryOpenAICodexStateRouteShot(ctx, result, true, func(context.Context) (openAICodexStateShot, error) {
 		calls++
 		return openAICodexStateShot{}, errors.New("connection reset")
 	})

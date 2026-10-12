@@ -1,11 +1,14 @@
 export type BorrowTagTone = 'success' | 'info' | 'warning' | 'danger' | 'neutral' | 'category'
-export type BorrowTagKind = 'reason' | 'stage' | 'state' | 'phase' | 'route' | 'maintenance' | 'verdict' | 'failure' | 'trigger' | 'statistic' | 'terminal' | 'http'
+export type BorrowTagKind = 'reason' | 'stage' | 'state' | 'phase' | 'route' | 'maintenance' | 'verdict' | 'failure' | 'trigger' | 'statistic' | 'terminal' | 'http' | 'pool'
 type TagSpec = readonly [BorrowTagTone, string]
 const label = (tone: BorrowTagTone, key: string): TagSpec => [tone, `ticketBorrowing.tags.${key}`]
 
 // Explicit reason codes keep normal cancellation and intermediate progress separate
 // from failed verification. Unknown codes always remain neutral and visible.
 const reasons: Record<string, TagSpec> = {
+  candidate_gateway_prioritized: label('info', 'gatewayPrioritized'),
+  candidate_gateway_recheck: label('info', 'gatewayRecheck'),
+  gateway_feedback_unavailable: label('warning', 'gatewayFeedbackUnavailable'),
   source_cookie_acquired: label('info', 'candidateAcquired'),
   source_attempt_finished: label('neutral', 'sourceFinished'),
   source_failed: label('danger', 'sourceFailed'),
@@ -43,6 +46,7 @@ const reasons: Record<string, TagSpec> = {
   target_unauthorized: label('danger', 'credentials'),
   target_credentials_unavailable: label('danger', 'credentials'),
   target_unavailable: label('warning', 'targetUnavailable'),
+  target_lease_lost: ['warning', 'ticketBorrowing.reasons.target_lease_lost'],
   target_business_busy: label('warning', 'concurrencyWait'),
   target_rate_limited: label('warning', 'rateLimited'),
   target_proxy_pool_unavailable: label('warning', 'proxyUnavailable'),
@@ -59,6 +63,17 @@ const reasons: Record<string, TagSpec> = {
   candidate_publish_expired: label('warning', 'publishExpired'),
   candidate_publish_conflict: label('warning', 'publishConflict'),
   candidate_publish_failed: label('danger', 'publishFailed'),
+  candidate_pool_enqueued: label('info', 'candidatePoolEnqueued'),
+  candidate_pool_claimed: label('info', 'candidatePoolClaimed'),
+  candidate_pool_source_failed: label('warning', 'candidatePoolSourceFailed'),
+  candidate_pool_source_deferred: label('warning', 'candidatePoolSourceDeferred'),
+  candidate_pool_source_abandoned: label('warning', 'candidatePoolAbandoned'),
+  candidate_pool_configuration_changed: label('neutral', 'configurationChanged'),
+  candidate_pool_no_consumers: label('neutral', 'candidatePoolNoConsumers'),
+  candidate_pool_expired_or_stopped: label('neutral', 'candidatePoolExpired'),
+  candidate_pool_verification_abandoned: label('warning', 'candidatePoolAbandoned'),
+  candidate_pool_window_too_short: label('warning', 'candidatePoolWindowShort'),
+  candidate_time_budget_insufficient: label('warning', 'candidateTimeBudget'),
   candidate_store_unavailable: label('warning', 'dataUnavailable'),
   replenishment_started: label('info', 'replenishmentStarted'),
   replenishment_ended: label('neutral', 'replenishmentEnded'),
@@ -95,6 +110,12 @@ const reasons: Record<string, TagSpec> = {
 }
 
 const groups: Partial<Record<BorrowTagKind, Record<string, TagSpec>>> = {
+  pool: {
+    acquiring: ['info', 'ticketBorrowing.candidatePool.states.acquiring'],
+    queued: ['category', 'ticketBorrowing.candidatePool.states.queued'],
+    claimed: ['info', 'ticketBorrowing.candidatePool.states.claimed'],
+    finished: ['neutral', 'ticketBorrowing.candidatePool.states.finished']
+  },
   reason: reasons,
   stage: Object.fromEntries(['source', 'target', 'candidate', 'route', 'replenishment', 'rotation', 'diagnostic', 'business'].map(key => [key, ['category', `ticketBorrowing.stages.${key}`] as TagSpec])),
   phase: {
@@ -129,18 +150,20 @@ const groups: Partial<Record<BorrowTagKind, Record<string, TagSpec>>> = {
     sourceRole: label('category', 'sourceRole'), targetRole: label('category', 'targetRole'),
     saved: label('success', 'saved'), failed: label('danger', 'saveFailed'),
     unsaved: ['warning', 'ticketBorrowing.unsaved'], unknown: label('neutral', 'unknown'),
+    gatewayNormal: label('neutral', 'gatewayNormal'), gatewayPrioritized: label('info','gatewayPrioritized'), gatewayRecheck: label('info','gatewayRecheck'),
     stale: label('warning', 'stale')
   },
   maintenance: Object.fromEntries(['search', 'refill', 'renew', 'healthy'].map(key => [key, [key === 'healthy' ? 'success' : 'info', `ticketBorrowing.replenishment.states.${key}`] as TagSpec])),
   verdict: { healthy: label('success', 'probePassed'), degraded: label('danger', 'ticketChanged'), inconclusive: label('warning', 'inconclusive') },
   failure: {
+    candidate_time_budget_insufficient: label('warning', 'candidateTimeBudget'),
     unsupported: label('warning', 'unsupported'), account_error: label('danger', 'credentials'), rate_limited: label('warning', 'rateLimited'),
     model_unsupported: label('warning', 'unsupportedModel'), upstream_error: label('danger', 'upstreamError'), network_error: label('danger', 'networkError'),
     stream_error: label('warning', 'incomplete'), no_ticket: label('warning', 'noTicket'), cancelled: label('neutral', 'cancelled'),
     target_continue_timeout: label('warning', 'probeTimeout'), route_changed: label('warning', 'routeChanged')
   },
   trigger: { automatic: label('category', 'automatic'), manual: label('category', 'manual') },
-  statistic: Object.fromEntries(Object.entries({passed:'success',published:'success',ticket_changed:'danger',timeout:'warning',cancelled:'neutral',other:'neutral',skipped:'neutral',inflight:'info'}).map(([key,tone]) => [key,[tone as BorrowTagTone,`ticketBorrowing.statistics.${key}`] as TagSpec])),
+  statistic: Object.fromEntries(Object.entries({candidates:'info',gateways:'category',source_failed:'warning',inconclusive:'warning',route_changed:'warning',prioritized:'info',rechecked:'info',passed:'success',published:'success',ticket_changed:'danger',timeout:'warning',cancelled:'neutral',other:'neutral',skipped:'neutral',inflight:'info'}).map(([key,tone]) => [key,[tone as BorrowTagTone,`ticketBorrowing.statistics.${key}`] as TagSpec])),
   terminal: { completed: label('success', 'upstreamCompleted'), failed: label('danger', 'upstreamFailed'), incomplete: label('warning', 'incomplete'), cancelled: label('neutral', 'cancelled') }
 }
 

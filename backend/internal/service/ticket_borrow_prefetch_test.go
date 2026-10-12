@@ -117,6 +117,13 @@ func TestTicketBorrowStoppedRoundCancelsSlowSources(t *testing.T) {
 			}
 			require.Equal(t, 1, counts[want])
 			require.Equal(t, 2, counts["source:source_acquisition_cancelled"])
+			if paused {
+				for _, event := range base.events {
+					if event.Reason == "source_acquisition_cancelled" {
+						require.Equal(t, "user_stop", event.Details.CancellationCause)
+					}
+				}
+			}
 		})
 	}
 }
@@ -174,6 +181,9 @@ func TestTicketBorrowSuccessfulPublicationCancelsSlowSpeculativeSources(t *testi
 	require.Equal(t, 2, counts["source:source_acquisition_cancelled"])
 	for _, event := range base.events {
 		require.NotEqual(t, "source_failed", event.Reason)
+		if event.Reason == "source_acquisition_cancelled" {
+			require.Equal(t, "batch_success", event.Details.CancellationCause)
+		}
 	}
 }
 

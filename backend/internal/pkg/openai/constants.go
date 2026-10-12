@@ -216,12 +216,21 @@ func IsGPT61SolModelSpelling(model string) bool {
 	}
 }
 
-// ValidateGPT61SolReasoningEffort rejects disabled reasoning instead of silently
-// increasing the client's requested effort on compatibility paths.
+// NormalizeGPT61SolReasoningEffort applies the configured compatibility default
+// for clients that send none to a model that requires reasoning.
+func NormalizeGPT61SolReasoningEffort(model, effort string) string {
+	if IsGPT61SolModelSpelling(model) && strings.EqualFold(strings.TrimSpace(effort), "none") {
+		return "high"
+	}
+	return effort
+}
+
+// ValidateGPT61SolReasoningEffort permits the none -> high compatibility default
+// while retaining validation for other unsupported explicit values.
 func ValidateGPT61SolReasoningEffort(model, effort string) error {
 	if IsGPT61SolModelSpelling(model) {
-		switch strings.ToLower(strings.TrimSpace(effort)) {
-		case "none", "minimal":
+		switch strings.ToLower(strings.TrimSpace(NormalizeGPT61SolReasoningEffort(model, effort))) {
+		case "minimal":
 			return fmt.Errorf("gpt-6.1-sol does not support reasoning effort %q; use low, medium, high, xhigh or max", effort)
 		}
 	}

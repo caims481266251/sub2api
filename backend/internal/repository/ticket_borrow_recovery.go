@@ -9,6 +9,10 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
 
+// Both reservation paths hold the target row before counting or inserting.
+const borrowBackgroundInflight = `(SELECT count(*) FROM ticket_borrow_requests WHERE target_id=$1 AND kind='probe' AND finished_at IS NULL AND lease_until>clock_timestamp())
+ + (SELECT count(*) FROM ticket_borrow_source_attempts WHERE target_id=$1 AND source_id IS NULL AND completed_at IS NULL AND lease_until>clock_timestamp())`
+
 // All request reservations and recovery transitions serialize on the target row.
 // A crashed process leaves a bounded lease, never an indefinitely positive counter.
 func reapBorrowRequests(ctx context.Context, tx *sql.Tx, id int64) error {
@@ -54,7 +58,7 @@ func (r *ticketBorrowRepository) BeginTargetRequest(ctx context.Context, q servi
 		var running, cooled bool
 		var inflight, concurrency int
 		var raw []byte
-		if err = tx.QueryRowContext(ctx, `SELECT s.running,s.recovery,COALESCE(t.upstream_wait_until<=clock_timestamp(),true),(SELECT count(*) FROM ticket_borrow_requests WHERE target_id=$1 AND kind='probe' AND finished_at IS NULL AND lease_until>clock_timestamp()),CASE WHEN t.probe_policy_override THEN t.probe_concurrency ELSE s.probe_concurrency END FROM ticket_borrow_targets t CROSS JOIN ticket_borrow_settings s WHERE t.account_id=$1 AND s.id=1`, q.TargetID).Scan(&running, &raw, &cooled, &inflight, &concurrency); err != nil {
+		if err = tx.QueryRowContext(ctx, `SELECT s.running,s.recovery,COALESCE(t.upstream_wait_until<=clock_timestamp(),true),(`+borrowBackgroundInflight+`),CASE WHEN t.probe_policy_override THEN t.probe_concurrency ELSE s.probe_concurrency END FROM ticket_borrow_targets t CROSS JOIN ticket_borrow_settings s WHERE t.account_id=$1 AND s.id=1`, q.TargetID).Scan(&running, &raw, &cooled, &inflight, &concurrency); err != nil {
 			return err
 		}
 		if !running {
@@ -150,11 +154,12 @@ func (r *ticketBorrowRepository) MarkTargetRequestSent(ctx context.Context, q se
 
 func borrowRequestDetails(q service.BorrowRequest) ([]byte, error) {
 	return json.Marshal(struct {
+		Diagnostic             *service.BorrowHTTPAttempt `json:"diagnostic,omitempty"`
 		ContinueTimeoutSeconds int                        `json:"continue_timeout_seconds,omitempty"`
 		CandidateID            string                     `json:"candidate_id,omitempty"`
 		RouteID                string                     `json:"route_id,omitempty"`
 		Environment            *service.BorrowEnvironment `json:"environment,omitempty"`
-	}{q.ContinueTimeoutSeconds, q.CandidateID, q.RouteID, q.Environment})
+	}{q.Diagnostic, q.ContinueTimeoutSeconds, q.CandidateID, q.RouteID, q.Environment})
 }
 func (r *ticketBorrowRepository) RenewTargetRequest(ctx context.Context, q service.BorrowRequest) error {
 	if q.Kind != "probe" {
@@ -182,10 +187,16 @@ func (r *ticketBorrowRepository) EndTargetRequest(ctx context.Context, q service
 	if _, err = tx.ExecContext(ctx, `SELECT account_id FROM ticket_borrow_targets WHERE account_id=$1 FOR UPDATE`, q.TargetID); err != nil {
 		return err
 	}
+	diagnostic, err := json.Marshal(struct {
+		Diagnostic *service.BorrowHTTPAttempt `json:"diagnostic,omitempty"`
+	}{q.Diagnostic})
+	if err != nil {
+		return err
+	}
 	// Finishing business records activity but never extends an upstream deadline.
-	_, err = tx.ExecContext(ctx, `WITH ended AS (UPDATE ticket_borrow_requests SET finished_at=clock_timestamp(),status=$2,outcome=$3 WHERE id=$1 AND finished_at IS NULL RETURNING target_id,finished_at)
+	_, err = tx.ExecContext(ctx, `WITH ended AS (UPDATE ticket_borrow_requests SET finished_at=clock_timestamp(),status=$2,outcome=$3,details=COALESCE(details,'{}'::jsonb)||$4::jsonb WHERE id=$1 AND finished_at IS NULL RETURNING target_id,finished_at)
  UPDATE ticket_borrow_targets t SET last_request_finished_at=GREATEST(t.last_request_finished_at,e.finished_at)
- FROM ended e WHERE t.account_id=e.target_id`, q.ID, status, outcome)
+ FROM ended e WHERE t.account_id=e.target_id`, q.ID, status, outcome, diagnostic)
 	if err != nil {
 		return err
 	}
@@ -206,7 +217,7 @@ func (r *ticketBorrowRepository) RecordProbeOutcome(ctx context.Context, id int6
 	}
 	if reason == "target_probe_passed" {
 		_, err = tx.ExecContext(ctx, `UPDATE ticket_borrow_targets SET consecutive_failures=0 WHERE account_id=$1`, id)
-	} else if reason == "target_ticket_changed" || reason == "target_probe_inconclusive" || reason == "target_route_changed" || reason == "target_continue_timeout" {
+	} else if reason == "target_ticket_changed" || reason == "target_route_changed" || reason == "target_continue_timeout" {
 		_, err = tx.ExecContext(ctx, `UPDATE ticket_borrow_targets SET consecutive_failures=consecutive_failures+1 WHERE account_id=$1`, id)
 	}
 	if err != nil {

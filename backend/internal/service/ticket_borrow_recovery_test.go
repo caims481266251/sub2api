@@ -75,7 +75,7 @@ func TestBorrowedRouteDoesNotRetryRecoveryGate(t *testing.T) {
 	for _, gate := range []error{ErrBorrowPaused, ErrBorrowRecoveryWaiting} {
 		count := 0
 		result := &OpenAICodexStateProbeResult{}
-		_, err := retryOpenAICodexStateRouteShot(t.Context(), result, true, func() (openAICodexStateShot, error) { count++; return openAICodexStateShot{}, gate })
+		_, err := retryOpenAICodexStateRouteShot(t.Context(), result, true, func(context.Context) (openAICodexStateShot, error) { count++; return openAICodexStateShot{}, gate })
 		require.ErrorIs(t, err, gate)
 		require.Equal(t, 1, count)
 	}

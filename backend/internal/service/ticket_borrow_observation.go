@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
@@ -37,6 +39,72 @@ func borrowEnvironment(req *http.Request, proxy string, profile *tlsfingerprint.
 		}
 	}
 	return out
+}
+
+// borrowCanonicalCookieHeader returns a stable, name-sorted representation of
+// the two routing cookies. It is used only as input to a one-way hash; raw
+// cookie values never enter borrow evidence.
+func borrowCanonicalCookieHeader(header string) string {
+	values := make(map[string]string, 2)
+	for _, part := range strings.Split(header, ";") {
+		name, value, ok := strings.Cut(strings.TrimSpace(part), "=")
+		name, value = strings.TrimSpace(name), strings.TrimSpace(value)
+		if !ok || value == "" || (name != "__cflb" && name != "__oailb") {
+			continue
+		}
+		values[name] = value
+	}
+	return borrowCanonicalCookieValues(values)
+}
+
+func borrowCanonicalCookieValues(values map[string]string) string {
+	names := make([]string, 0, len(values))
+	for name, value := range values {
+		if value != "" && (name == "__cflb" || name == "__oailb") {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	parts := make([]string, 0, len(names))
+	for _, name := range names {
+		parts = append(parts, name+"="+values[name])
+	}
+	return strings.Join(parts, "; ")
+}
+
+// borrowCookieHeaderHashes returns balancer (__cflb), route (__oailb), and
+// complete-pair hashes in that order. An empty component remains empty so
+// callers can distinguish a missing Cookie from an actual value.
+func borrowCookieHeaderHashes(header string) (balancer, route, pair string) {
+	values := make(map[string]string, 2)
+	for _, part := range strings.Split(header, ";") {
+		name, value, ok := strings.Cut(strings.TrimSpace(part), "=")
+		name, value = strings.TrimSpace(name), strings.TrimSpace(value)
+		if ok && value != "" && (name == "__cflb" || name == "__oailb") {
+			values[name] = value
+		}
+	}
+	if values["__cflb"] != "" {
+		balancer = borrowHash(values["__cflb"])
+	}
+	if values["__oailb"] != "" {
+		route = borrowHash(values["__oailb"])
+	}
+	if canonical := borrowCanonicalCookieValues(values); canonical != "" {
+		pair = borrowHash(canonical)
+	}
+	return balancer, route, pair
+}
+
+func borrowCookieResponseHashes(cookies []*http.Cookie) (balancer, route, pair string) {
+	values := make(map[string]string, 2)
+	for _, cookie := range cookies {
+		if cookie == nil || cookie.Value == "" || (cookie.Name != "__cflb" && cookie.Name != "__oailb") || cookie.MaxAge < 0 {
+			continue
+		}
+		values[cookie.Name] = cookie.Value
+	}
+	return borrowCookieHeaderHashes(borrowCanonicalCookieValues(values))
 }
 
 func (d BorrowCandidateDetails) snapshot(expires time.Time, now time.Time) *BorrowCandidateDetails {

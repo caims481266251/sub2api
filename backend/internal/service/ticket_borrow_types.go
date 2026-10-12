@@ -151,6 +151,7 @@ func BorrowAcquisitionFromContext(ctx context.Context) (BorrowAcquisition, bool)
 }
 
 type BorrowRequest struct {
+	Diagnostic             *BorrowHTTPAttempt `json:"diagnostic,omitempty"`
 	ContinueTimeoutSeconds int                `json:"continue_timeout_seconds,omitempty"`
 	Identity               string             `json:"-"`
 	ID                     string             `json:"id"`
@@ -179,6 +180,16 @@ type BorrowEnvironment struct {
 }
 
 type BorrowCandidateDetails struct {
+	PoolEnqueuedAt         *time.Time                  `json:"pool_enqueued_at,omitempty"`
+	PoolClaimedAt          *time.Time                  `json:"pool_claimed_at,omitempty"`
+	PoolMinimumRemainingMS int64                       `json:"pool_minimum_remaining_ms,omitempty"`
+	SourceHTTP             *BorrowHTTPAttempt          `json:"source_http,omitempty"`
+	Mint                   *BorrowProbePhase           `json:"mint,omitempty"`
+	Continue               *BorrowProbePhase           `json:"continue,omitempty"`
+	CancellationCause      string                      `json:"cancellation_cause,omitempty"`
+	SourceAcquiredAt       *time.Time                  `json:"source_acquired_at,omitempty"`
+	ProbeQueueMS           *int64                      `json:"probe_queue_ms,omitempty"`
+	GatewayPriority        string                      `json:"gateway_priority,omitempty"`
 	AcquisitionIdentity    string                      `json:"acquisition_identity,omitempty"`
 	AcquisitionStartedAt   *time.Time                  `json:"acquisition_started_at,omitempty"`
 	UpstreamExpiresAt      *time.Time                  `json:"upstream_expires_at,omitempty"`
@@ -211,20 +222,31 @@ type BorrowCandidateDetails struct {
 	Target                   BorrowEnvironment         `json:"target"`
 	TargetIdentityHash       string                    `json:"target_identity_hash,omitempty"`
 	CookieHash               string                    `json:"cookie_hash,omitempty"`
-	Gateway                  string                    `json:"gateway,omitempty"`
-	CookieObservedAt         *time.Time                `json:"cookie_observed_at,omitempty"`
-	ExpiresAt                *time.Time                `json:"expires_at,omitempty"`
-	CookieAgeMS              *int64                    `json:"cookie_age_ms,omitempty"`
-	RemainingMS              *int64                    `json:"remaining_ms,omitempty"`
-	VerificationPreparedAt   *time.Time                `json:"verification_prepared_at,omitempty"`
-	CookieAgeAtProbeMS       *int64                    `json:"cookie_age_at_probe_ms,omitempty"`
-	RemainingAtProbeMS       *int64                    `json:"remaining_at_probe_ms,omitempty"`
-	SourceAttempts           int                       `json:"source_attempts,omitempty"`
-	ProbeRetries             int                       `json:"probe_retries,omitempty"`
-	ProbeVerdict             string                    `json:"probe_verdict,omitempty"`
-	ProbeFailure             string                    `json:"probe_failure,omitempty"`
-	MintStatus               int                       `json:"mint_status,omitempty"`
-	ContinueStatus           int                       `json:"continue_status,omitempty"`
+	// Cookie hashes are deliberately split so we can distinguish the source
+	// route pair from the target mint's balancer cookie without persisting raw
+	// cookies. CookieHash remains the canonical __oailb hash used for routing.
+	SourceBalancerHash        string     `json:"source_balancer_hash,omitempty"`
+	SourceCookiePairHash      string     `json:"source_cookie_pair_hash,omitempty"`
+	TargetBalancerHash        string     `json:"target_balancer_hash,omitempty"`
+	TargetCookiePairHash      string     `json:"target_cookie_pair_hash,omitempty"`
+	MintTicketHash            string     `json:"mint_ticket_hash,omitempty"`
+	ContinueTicketHash        string     `json:"continue_ticket_hash,omitempty"`
+	CompatibilityHash         string     `json:"compatibility_hash,omitempty"`
+	CompatibilityBackoffUntil *time.Time `json:"compatibility_backoff_until,omitempty"`
+	Gateway                   string     `json:"gateway,omitempty"`
+	CookieObservedAt          *time.Time `json:"cookie_observed_at,omitempty"`
+	ExpiresAt                 *time.Time `json:"expires_at,omitempty"`
+	CookieAgeMS               *int64     `json:"cookie_age_ms,omitempty"`
+	RemainingMS               *int64     `json:"remaining_ms,omitempty"`
+	VerificationPreparedAt    *time.Time `json:"verification_prepared_at,omitempty"`
+	CookieAgeAtProbeMS        *int64     `json:"cookie_age_at_probe_ms,omitempty"`
+	RemainingAtProbeMS        *int64     `json:"remaining_at_probe_ms,omitempty"`
+	SourceAttempts            int        `json:"source_attempts,omitempty"`
+	ProbeRetries              int        `json:"probe_retries,omitempty"`
+	ProbeVerdict              string     `json:"probe_verdict,omitempty"`
+	ProbeFailure              string     `json:"probe_failure,omitempty"`
+	MintStatus                int        `json:"mint_status,omitempty"`
+	ContinueStatus            int        `json:"continue_status,omitempty"`
 }
 type BorrowSettings struct {
 	AdmissionWindowSeconds *int                         `json:"admission_window_seconds,omitempty"`
@@ -384,6 +406,7 @@ type TicketBorrowRepository interface {
 	Target(context.Context, int64) (BorrowTarget, error)
 	SetTarget(context.Context, int64, bool, int64) error
 	AcquireJob(context.Context, string, int64, string) (bool, error)
+	RenewTargetLease(context.Context, BorrowAcquisition) error
 	SetPhase(context.Context, int64, string, string) error
 	FinishJob(context.Context, string, int64, string, string, time.Duration) error
 	RefreshTarget(context.Context, int64) error

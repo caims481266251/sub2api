@@ -4,6 +4,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"testing"
 	"time"
@@ -222,4 +223,48 @@ func renewBorrowTestJob(t *testing.T, r service.TicketBorrowRepository, q servic
 	ok, err := r.AcquireJob(service.WithBorrowAcquisition(ctx, service.BorrowAcquisition{TargetID: q.TargetID, Revision: q.Revision, Identity: q.Identity}), "target", q.TargetID, q.BatchID)
 	require.NoError(t, err)
 	require.True(t, ok)
+}
+
+func TestTicketBorrowProbeDiagnosticPersistenceAndPhaseStatistics(t *testing.T) {
+	r, id, q := borrowRecoveryFixture(t)
+	q.Environment = &service.BorrowEnvironment{IdentityHash: "reservation-identity"}
+	q = recoveryRequest(t, r, q)
+	// The connected identity must survive final diagnostic merging.
+	q.Environment = &service.BorrowEnvironment{IdentityHash: "connected-identity"}
+	_, err := integrationDB.Exec(`UPDATE ticket_borrow_requests SET details=jsonb_set(details,'{environment}', '{"identity_hash":"connected-identity"}') WHERE id=$1`, q.ID)
+	require.NoError(t, err)
+	q.Diagnostic = &service.BorrowHTTPAttempt{Phase: "mint", Number: 2, DurationMS: 1500, Status: 200, Events: map[string]int64{"response_headers": 300, "completed": 1400, "eof": 1500}, Terminal: "completed"}
+	require.NoError(t, r.EndTargetRequest(t.Context(), q, 200, "eof"))
+	// Idempotent completion cannot replace evidence with later cleanup.
+	q.Diagnostic.ErrorClass = "cancelled"
+	require.NoError(t, r.EndTargetRequest(t.Context(), q, 200, "closed"))
+	var raw []byte
+	require.NoError(t, integrationDB.QueryRow(`SELECT details FROM ticket_borrow_requests WHERE id=$1`, q.ID).Scan(&raw))
+	var saved struct {
+		Diagnostic  service.BorrowHTTPAttempt `json:"diagnostic"`
+		Environment service.BorrowEnvironment `json:"environment"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &saved))
+	require.Empty(t, saved.Diagnostic.ErrorClass)
+	require.Equal(t, "connected-identity", saved.Environment.IdentityHash)
+	next := q
+	next.ID = uuid.NewString()
+	next.Phase = "continue"
+	next.Diagnostic = nil
+	require.NoError(t, r.BeginTargetRequest(t.Context(), next))
+	next.Diagnostic = &service.BorrowHTTPAttempt{Phase: "continue", Number: 1, DurationMS: 7005, ErrorClass: "timeout", TimeoutStage: "eof", CancellationCause: "continue_deadline", Events: map[string]int64{"completed": 6000}}
+	require.NoError(t, r.EndTargetRequest(t.Context(), next, 200, "target_continue_timeout"))
+	// A historical attempt counts as a request, without fabricated timing/retries.
+	_, err = integrationDB.Exec(`INSERT INTO ticket_borrow_requests(id,target_id,kind,phase,lease_until,finished_at,details) VALUES($1,$2,'probe','mint',NOW()+INTERVAL '1 minute',NOW(),'{}')`, uuid.NewString(), id)
+	require.NoError(t, err)
+	stats, err := r.(service.BorrowStatisticsRepository).BorrowStatistics(t.Context(), id, 15)
+	require.NoError(t, err)
+	require.Equal(t, 2, stats.Mint.Requests)
+	require.Equal(t, 1, stats.Mint.DiagnosticSamples)
+	require.Equal(t, 1, stats.Mint.Retries)
+	require.Equal(t, 1500.0, *stats.Mint.AverageMS)
+	require.Equal(t, 1, stats.Continue.Requests)
+	require.Equal(t, 1, stats.Continue.Timeouts)
+	require.Equal(t, 1, stats.Continue.TimeoutStages["eof"])
+	require.Equal(t, 1, stats.Continue.Cancellations["continue_deadline"])
 }

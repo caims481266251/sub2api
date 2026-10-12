@@ -68,8 +68,35 @@ func (s *TicketBorrowService) trackTargetRequest(req *http.Request, q BorrowRequ
 			q.ContinueTimeoutSeconds = *settings.ContinueTimeoutSeconds
 		}
 	}
-	if err := s.repo.BeginTargetRequest(req.Context(), q); err != nil {
+	diagnostic := borrowTrace(req.Context())
+	if err := s.checkPoolVerificationTime(req.Context(), q.Phase); err != nil {
+		diagnostic.finish(req.Context(), err)
 		return nil, err
+	}
+	priority := 1
+	if q.Phase == "continue" {
+		priority = 2
+	}
+	releaseSlot, slotErr := acquireBorrowProbeSlot(req.Context(), priority)
+	if slotErr != nil {
+		diagnostic.finish(req.Context(), slotErr)
+		return nil, slotErr
+	}
+	if diagnostic != nil {
+		diagnostic.mark("slot_acquired", "admission")
+	}
+	if err := s.checkPoolVerificationTime(req.Context(), q.Phase); err != nil {
+		diagnostic.finish(req.Context(), err)
+		releaseSlot()
+		return nil, err
+	}
+	if err := s.repo.BeginTargetRequest(req.Context(), q); err != nil {
+		diagnostic.finish(req.Context(), err)
+		releaseSlot()
+		return nil, err
+	}
+	if diagnostic != nil {
+		diagnostic.mark("admitted", "connection")
 	}
 	var ctx context.Context
 	var cancel context.CancelFunc
@@ -89,6 +116,9 @@ func (s *TicketBorrowService) trackTargetRequest(req *http.Request, q BorrowRequ
 	}
 	prior, _ := ctx.Value(borrowBeforeSendKey{}).(func(context.Context) error)
 	ctx = context.WithValue(ctx, borrowBeforeSendKey{}, func(ctx context.Context) error {
+		if err := s.checkPoolVerificationTime(ctx, q.Phase); err != nil {
+			return err
+		}
 		if prior != nil {
 			if err := prior(ctx); err != nil {
 				return err
@@ -97,6 +127,9 @@ func (s *TicketBorrowService) trackTargetRequest(req *http.Request, q BorrowRequ
 		return s.repo.CheckTargetRequest(ctx, q)
 	})
 	ctx = context.WithValue(ctx, borrowConnectedKey{}, func(connected *http.Request) error {
+		if err := s.checkPoolVerificationTime(connected.Context(), q.Phase); err != nil {
+			return err
+		}
 		sent := q
 		if sent.Kind == "probe" {
 			environment := borrowEnvironment(connected, proxy, profile)
@@ -108,14 +141,18 @@ func (s *TicketBorrowService) trackTargetRequest(req *http.Request, q BorrowRequ
 	var once sync.Once
 	finish := func(status int, outcome string) {
 		once.Do(func() {
+			defer releaseSlot()
 			if borrowContinueTimedOut(context.Cause(ctx)) {
 				outcome = borrowContinueTimeoutReason
 			}
 			close(done)
+			diagnostic.finish(ctx, nil)
+			ended := q
+			ended.Diagnostic = diagnostic.snapshot()
 			cancel()
 			cleanup, stop := context.WithTimeout(context.WithoutCancel(req.Context()), 3*time.Second)
 			defer stop()
-			if err := s.repo.EndTargetRequest(cleanup, q, status, outcome); err != nil {
+			if err := s.repo.EndTargetRequest(cleanup, ended, status, outcome); err != nil {
 				slog.Warn("borrow_probe_request_cleanup_failed", "request_id", q.ID, "target_id", q.TargetID, "phase", q.Phase)
 			}
 		})
@@ -146,6 +183,7 @@ func (s *TicketBorrowService) trackTargetRequest(req *http.Request, q BorrowRequ
 	resp, err := send(req.WithContext(ctx), proxy, id, n, profile)
 	if err != nil {
 		err = requestError(err)
+		diagnostic.finish(ctx, err)
 		if resp != nil && resp.Body != nil {
 			_ = resp.Body.Close()
 		}
@@ -156,6 +194,7 @@ func (s *TicketBorrowService) trackTargetRequest(req *http.Request, q BorrowRequ
 		finish(0, "empty_response")
 		return nil, ErrBorrowUnavailable
 	}
+	diagnostic.response(resp, ctx)
 	if resp.Body == nil {
 		err = requestError(nil)
 		finish(resp.StatusCode, "headers_only")
@@ -164,7 +203,7 @@ func (s *TicketBorrowService) trackTargetRequest(req *http.Request, q BorrowRequ
 		if q.Phase == "continue" {
 			// Closing also interrupts readers whose transport does not wake Read on
 			// cancellation. Accounting still ends only after Read/Close returns.
-			context.AfterFunc(ctx, func() { _ = body.closeBody() })
+			context.AfterFunc(ctx, func() { diagnostic.interrupted(ctx); _ = body.closeBody() })
 		}
 		resp.Body = body
 	}
@@ -214,6 +253,10 @@ func (b *borrowActivityBody) closeBody() error {
 
 func borrowAcquisitionReason(err error) string {
 	switch {
+	case errors.Is(err, ErrBorrowCandidateTimeBudget):
+		return "candidate_time_budget_insufficient"
+	case errors.Is(err, ErrBorrowCandidatePoolWindow):
+		return "candidate_pool_window_too_short"
 	case errors.Is(err, ErrBorrowRouteReady):
 		return "target_route_ready"
 	case errors.Is(err, ErrBorrowRequestBudget):

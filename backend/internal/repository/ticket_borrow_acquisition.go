@@ -13,6 +13,13 @@ type borrowQueryer interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
+// Shared by admission and task renewal so a stale owner cannot extend itself.
+const borrowAcquisitionActive = `t.enabled AND a.deleted_at IS NULL AND a.status='active' AND a.schedulable
+ AND (NOT a.auto_pause_on_expired OR a.expires_at IS NULL OR a.expires_at>clock_timestamp())
+ AND ($2=0 OR t.revision=$2) AND ($3='' OR (t.lease_token=$3 AND t.lease_until>clock_timestamp()
+ AND t.lease_settings_revision=s.revision AND t.lease_policy_revision=t.probe_policy_revision AND t.lease_acquisition_revision=t.acquisition_revision
+ AND ($4='' OR t.lease_identity='' OR t.lease_identity=$4) AND t.lease_account_signature=` + borrowAccountSignature + `))`
+
 // The target row serializes acquisition reservations and publication. Identity
 // is the same snapshot used by normal route admission, not a proxy-pool version.
 // Automatic renewal compares against the same persisted cutoff as business admission.
@@ -20,11 +27,7 @@ func checkBorrowAcquisition(ctx context.Context, db borrowQueryer, a service.Bor
 	var running, active, ready, upstream bool
 	var budgetUntil sql.NullTime
 	var now time.Time
-	err := db.QueryRowContext(ctx, `SELECT s.running,t.enabled AND a.deleted_at IS NULL AND a.status='active' AND a.schedulable AND (NOT a.auto_pause_on_expired OR a.expires_at IS NULL OR a.expires_at>clock_timestamp())
-
- AND ($2=0 OR t.revision=$2) AND ($3='' OR (t.lease_token=$3 AND t.lease_until>clock_timestamp()
- AND t.lease_settings_revision=s.revision AND t.lease_policy_revision=t.probe_policy_revision AND t.lease_acquisition_revision=t.acquisition_revision
- AND ($4='' OR t.lease_identity='' OR t.lease_identity=$4) AND t.lease_account_signature=`+borrowAccountSignature+`)),
+	err := db.QueryRowContext(ctx, `SELECT s.running,`+borrowAcquisitionActive+`,
  NOT COALESCE((s.replenishment->>'enabled')::boolean,false) AND EXISTS(SELECT 1 FROM ticket_borrow_routes r LEFT JOIN ticket_borrow_cookie_deadlines d ON d.cookie_hash=r.cookie_hash
  WHERE r.target_id=t.account_id AND r.target_revision=t.revision AND r.revoked_at IS NULL AND r.inventory_eligible AND NOT r.validation_only
  AND ($4='' OR r.identity_hash=$4) AND LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at),r.admission_until)>clock_timestamp()+`+borrowRenewalLead+`*INTERVAL '1 second'),
@@ -60,6 +63,32 @@ func checkBorrowAcquisition(ctx context.Context, db borrowQueryer, a service.Bor
 
 func (r *ticketBorrowRepository) CheckAcquisition(ctx context.Context, a service.BorrowAcquisition) error {
 	return checkBorrowAcquisition(ctx, r.db, a, true)
+}
+
+// Renewal holds ownership through verification/publication and draining. It
+// does not grant a new HTTP request or bypass inventory, cooldowns or budgets.
+func (r *ticketBorrowRepository) RenewTargetLease(ctx context.Context, a service.BorrowAcquisition) error {
+	if a.Lease == "" {
+		return service.ErrBorrowUnavailable
+	}
+	var renewed int
+	err := r.db.QueryRowContext(ctx, `WITH renewed AS (
+ UPDATE ticket_borrow_targets t SET lease_until=clock_timestamp()+$5*INTERVAL '1 millisecond'
+ FROM ticket_borrow_settings s,accounts a
+ WHERE s.id=1 AND s.running AND t.account_id=$1 AND a.id=t.account_id AND `+borrowAcquisitionActive+`
+ RETURNING t.account_id,t.lease_token,t.lease_until
+ ), intents AS (
+ UPDATE ticket_borrow_source_intents i SET expires_at=r.lease_until FROM renewed r
+ WHERE i.target_id=r.account_id AND i.batch_id=r.lease_token AND i.pool_candidate_id IS NULL
+ AND i.expires_at>clock_timestamp()
+ ) SELECT count(*) FROM renewed`, a.TargetID, a.Revision, a.Lease, a.Identity, service.BorrowTargetLeaseTTL.Milliseconds()).Scan(&renewed)
+	if err != nil {
+		return err
+	}
+	if renewed != 1 {
+		return service.ErrBorrowUnavailable
+	}
+	return nil
 }
 
 // Every actual source attempt, including retries, consumes the global budget.

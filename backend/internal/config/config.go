@@ -1172,6 +1172,8 @@ type GatewayConfig struct {
 	// GrokResponseHeaderTimeout bounds the pre-first-byte wait for xAI/Grok.
 	// A zero value uses the provider-safe default instead of the generic gateway timeout.
 	GrokResponseHeaderTimeout int `mapstructure:"grok_response_header_timeout"`
+	// Internal rollout rollback: fixed batches and FIFO; concurrency safety remains enabled.
+	BorrowAdaptiveProbingDisabled bool `mapstructure:"borrow_adaptive_probing_disabled"`
 	// Borrow business recovery is request scoped; disabled restores legacy retries.
 	BorrowBusinessRecoveryDisabled       bool `mapstructure:"borrow_business_recovery_disabled"`
 	BorrowBusinessRetryWindowSeconds     int  `mapstructure:"borrow_business_retry_window_seconds"`
@@ -2798,6 +2800,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.client_idle_ttl_seconds", 900)
 	viper.SetDefault("gateway.concurrency_slot_ttl_minutes", 30) // 并发槽位过期时间（支持超长请求）
 	viper.SetDefault("gateway.stream_data_interval_timeout", 180)
+	viper.SetDefault("gateway.borrow_adaptive_probing_disabled", false)
 	viper.SetDefault("gateway.borrow_business_recovery_disabled", false)
 	viper.SetDefault("gateway.borrow_business_retry_window_seconds", 15)
 	viper.SetDefault("gateway.borrow_business_recovery_timeout_seconds", 30)

@@ -18,6 +18,14 @@ func (h *AccountHandler) borrowService(c *gin.Context) *service.TicketBorrowServ
 	return h.accountTestService.TicketBorrow
 }
 func borrowError(c *gin.Context, err error) {
+	if errors.Is(err, service.ErrBorrowPoolNotFound) {
+		response.Error(c, 404, err.Error())
+		return
+	}
+	if errors.Is(err, service.ErrBorrowPoolQuery) || errors.Is(err, service.ErrBorrowPoolCapacity) {
+		response.BadRequest(c, err.Error())
+		return
+	}
 	if errors.Is(err, service.ErrBorrowRotationRetired) {
 		response.ErrorWithDetails(c, 410, "Every acquisition now allocates a fresh environment", err.Error(), nil)
 		return

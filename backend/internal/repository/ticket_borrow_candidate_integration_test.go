@@ -189,6 +189,12 @@ func TestBorrowCandidateSourcePermitAndCredentialFence(t *testing.T) {
 	var actual int64
 	require.NoError(t, integrationDB.QueryRow(`SELECT acquisition_account_id FROM ticket_borrow_source_attempts WHERE intent_id=$1`, permit).Scan(&actual))
 	require.Equal(t, account.ID, actual)
+	status, err := r.Target(ctx, a.TargetID)
+	require.NoError(t, err)
+	require.Zero(t, status.Inflight, "external source acquisition does not occupy the target background slots")
+	request := probeRequest(a)
+	require.NoError(t, r.BeginTargetRequest(ctx, request))
+	require.NoError(t, r.EndTargetRequest(ctx, request, 200, "eof"))
 	start := time.Now()
 	route := &service.BorrowRoute{ID: uuid.NewString(), TargetID: a.TargetID, TargetRevision: a.Revision, IdentityHash: a.Identity,
 		AcquisitionIdentity: service.BorrowAcquisitionSource, AcquisitionAccountID: account.ID, SourceID: source.ID, SourceRevision: source.Revision,

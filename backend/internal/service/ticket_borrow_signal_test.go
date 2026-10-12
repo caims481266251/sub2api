@@ -48,7 +48,7 @@ func (u *borrowDeadlineUpstream) DoWithTLS(req *http.Request, proxy string, id i
 	return u.stateProbeUpstream.DoWithTLS(req, proxy, id, n, profile)
 }
 
-func TestTicketBorrowBatchDeadlineStillPersistsProbeOutcome(t *testing.T) {
+func TestTicketBorrowTaskCancellationStillPersistsProbeOutcome(t *testing.T) {
 	s, base := borrowFixture()
 	servingRoute := base.route
 	base.route = nil

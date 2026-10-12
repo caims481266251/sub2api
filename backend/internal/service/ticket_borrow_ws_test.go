@@ -158,15 +158,6 @@ func TestBorrowWSNativeContinuationRetainsPreviousResponse(t *testing.T) {
 	lease.Release()
 	require.Zero(t, activeBorrowLeases(repo))
 }
-func TestBorrowWSChangedCookieFailsBeforePayload(t *testing.T) {
-	p, _, repo, d, req := borrowWSPoolFixture(t)
-	d.responseHeader = http.Header{"Set-Cookie": {"__oailb=different; Path=/"}}
-	_, err := p.Acquire(t.Context(), req)
-	require.ErrorIs(t, err, ErrBorrowUnavailable)
-	require.Zero(t, activeBorrowLeases(repo))
-	require.Empty(t, d.conns[0].writes)
-}
-
 func TestBorrowWSAcquisitionDoesNotOwnBusinessLifetime(t *testing.T) {
 	p, _, repo, d, req := borrowWSPoolFixture(t)
 	business, cancelBusiness := context.WithCancel(t.Context())
@@ -232,6 +223,38 @@ func TestBorrowWSUnauthorizedHandshakeRevokesRoute(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, dialErr.StatusCode)
 	require.Equal(t, []string{"route-a"}, repo.revoked)
 	require.Zero(t, activeBorrowLeases(repo))
+}
+
+func TestBorrowWSChangedHandshakeKeepsRouteUntilExpiry(t *testing.T) {
+	for _, change := range []string{"cookie", "expired-cookie", "deleted-cookie", "shortened-cookie"} {
+		t.Run(change, func(t *testing.T) {
+			p, _, repo, dialer, req := borrowWSPoolFixture(t)
+			dialer.responseHeader = borrowChangedResponseHeaders(change)
+			first, err := p.Acquire(t.Context(), req)
+			require.NoError(t, err, "a changed handshake Cookie must not close a usable socket")
+			defer first.Release()
+			second, err := p.Acquire(t.Context(), req)
+			require.NoError(t, err, "another request can still reserve the unexpired route")
+			defer second.Release()
+			require.Len(t, dialer.headers, 2)
+			require.Empty(t, repo.revoked)
+			payload := json.RawMessage(`{"type":"response.create","model":"gpt-6-sol","input":"hello"}`)
+			require.NoError(t, first.WriteJSONContext(t.Context(), payload))
+			require.NoError(t, second.WriteJSONContext(t.Context(), payload))
+			repo.mu.Lock()
+			repo.now = repo.route.ExpiresAt
+			repo.mu.Unlock()
+			require.Equal(t, 2, activeBorrowLeases(repo))
+			for _, lease := range []*openAIWSConnLease{first, second} {
+				raw, err := lease.ReadMessageContext(t.Context())
+				require.NoError(t, err)
+				require.Contains(t, string(raw), "response.completed")
+				require.ErrorIs(t, lease.WriteJSONContext(t.Context(), payload), ErrBorrowUnavailable)
+				lease.Release()
+			}
+			require.Zero(t, activeBorrowLeases(repo))
+		})
+	}
 }
 
 func TestBorrowWSNormalGatewayStreamsAndRecordsUsage(t *testing.T) {

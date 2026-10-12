@@ -73,7 +73,7 @@ func TestTicketBorrowSourceBudgetCountsNewCandidatesAndStopsBeforeSend(t *testin
 func TestTicketBorrowBudgetErrorStopsTargetRetries(t *testing.T) {
 	calls := 0
 	gate := &BorrowBudgetWaitError{Scope: "target", Until: time.Now().Add(time.Minute), RetryAfter: time.Minute}
-	_, err := retryOpenAICodexStateRouteShot(t.Context(), &OpenAICodexStateProbeResult{}, true, func() (openAICodexStateShot, error) { calls++; return openAICodexStateShot{}, gate })
+	_, err := retryOpenAICodexStateRouteShot(t.Context(), &OpenAICodexStateProbeResult{}, true, func(context.Context) (openAICodexStateShot, error) { calls++; return openAICodexStateShot{}, gate })
 	require.ErrorIs(t, err, ErrBorrowRequestBudget)
 	require.Equal(t, 1, calls)
 }

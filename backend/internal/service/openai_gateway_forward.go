@@ -122,6 +122,13 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	if shouldForwardOpenAIResponsesViaChatCompletions(account, body) {
 		SetActualOpenAIUpstreamEndpoint(c, "/v1/chat/completions")
 	}
+	if account.IsOpenAI() {
+		next, _, err := normalizeGPT61SolReasoningBody(body, account.GetMappedModel(gjson.GetBytes(body, "model").String()))
+		if err != nil {
+			return nil, err
+		}
+		body = next
+	}
 	filteredBody, filterErr := filterOpenAIResponsesNoneReasoningEffortForAccount(account, body)
 	if filterErr != nil {
 		return nil, filterErr

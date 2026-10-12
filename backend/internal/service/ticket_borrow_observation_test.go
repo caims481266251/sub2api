@@ -202,6 +202,7 @@ func TestTicketBorrowObservationCorrelatesCandidatesAndRecordsDiscardedPrefetch(
 				} else {
 					discarded++
 					require.Equal(t, "candidate_unused_after_success", event.Reason)
+					require.Equal(t, "batch_success", d.CancellationCause)
 				}
 			}
 			require.Len(t, sources, 3)

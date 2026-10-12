@@ -220,15 +220,11 @@ func (s *TicketBorrowService) observeWSHandshake(ctx context.Context, route *Bor
 	if route == nil {
 		return nil
 	}
-	reason := borrowResponseFailure(&http.Request{Header: http.Header{}}, route, &http.Response{StatusCode: status, Header: headers})
-	if reason == "" {
-		return nil
+	s.observeBorrowBusinessResponse((&http.Request{Header: http.Header{}}).WithContext(ctx), route, &http.Response{StatusCode: status, Header: headers})
+	if status == http.StatusUnauthorized {
+		return ErrBorrowUnavailable
 	}
-	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-	defer cancel()
-	_ = s.repo.Revoke(cleanup, route.TargetID, route.ID, reason)
-	_ = s.repo.RefreshTarget(cleanup, route.TargetID)
-	return ErrBorrowUnavailable
+	return nil
 }
 
 type borrowWSFrameConn struct {

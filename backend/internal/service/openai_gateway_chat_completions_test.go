@@ -1250,18 +1250,15 @@ func TestGPT6MappedCompatibilityBridgesKeepReasoningAndTools(t *testing.T) {
 	}
 }
 
-func TestGPT61SolRejectsDisabledReasoningBeforeForwarding(t *testing.T) {
+func TestGPT61SolRejectsMinimalReasoningBeforeForwarding(t *testing.T) {
 	for _, body := range []string{
-		`{"model":"public","reasoning_effort":"none"}`,
 		`{"model":"public","reasoning":{"effort":"minimal"}}`,
-		`{"model":"public","output_config":{"effort":"none"}}`,
-		`{"model":"public","thinking":{"type":"disabled"}}`,
 		`{"model":"gpt-6.1-sol-minimal"}`,
 	} {
 		require.Error(t, validateGPT61SolCompatRequest([]byte(body), "gpt-6.1-sol"))
 		require.NoError(t, validateGPT61SolCompatRequest([]byte(body), "gpt-6-sol"))
 	}
-	for _, field := range []string{`"reasoning_effort":"none"`, `"reasoning_effort":"minimal"`, `"tools":[{"type":"function","function":{"name":"lookup"}}]`} {
+	for _, field := range []string{`"reasoning_effort":"minimal"`, `"tools":[{"type":"function","function":{"name":"lookup"}}]`} {
 		body := []byte(`{"model":"public",` + field + `,"messages":[{"role":"user","content":"hello"}]}`)
 		rec := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(rec)
@@ -1294,7 +1291,7 @@ func TestGPT61SolMessagesEffortAliasesPreserveIntent(t *testing.T) {
 		require.Equal(t, "gpt-6.1-sol", req.Model)
 		require.Equal(t, effort, req.OutputConfig.Effort)
 		_, err := apicompat.AnthropicToResponses(req)
-		if effort == "none" || effort == "minimal" {
+		if effort == "minimal" {
 			require.Error(t, err)
 		} else {
 			require.NoError(t, err)
@@ -1302,16 +1299,16 @@ func TestGPT61SolMessagesEffortAliasesPreserveIntent(t *testing.T) {
 	}
 }
 
-func TestGPT61SolOnlyChatFallbackRejectsToolsAndDisabledReasoning(t *testing.T) {
+func TestGPT61SolOnlyChatFallbackRejectsToolsAndMinimalReasoning(t *testing.T) {
 	for _, responses := range []bool{false, true} {
 		bodies := []string{
 			`{"model":"public","max_tokens":100,"messages":[{"role":"user","content":"hi"}],"tools":[{"name":"lookup","input_schema":{"type":"object"}}]}`,
-			`{"model":"public","max_tokens":100,"messages":[{"role":"user","content":"hi"}],"thinking":{"type":"disabled"}}`,
+			`{"model":"public","max_tokens":100,"messages":[{"role":"user","content":"hi"}],"output_config":{"effort":"minimal"}}`,
 		}
 		if responses {
 			bodies = []string{
 				`{"model":"public","input":"hi","tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}]}`,
-				`{"model":"public","input":"hi","reasoning":{"effort":"none"}}`,
+				`{"model":"public","input":"hi","reasoning":{"effort":"minimal"}}`,
 			}
 		}
 		for _, body := range bodies {

@@ -132,13 +132,13 @@ func ProbeAstraExperimentWithOptions(ctx context.Context, upstream HTTPUpstream,
 	}
 	routeChanged := false
 	runOpenAICodexStateProbe(ctx, result, pinned, func(state, cookie string) (openAICodexStateShot, error) {
-		return retryOpenAICodexStateRouteShot(ctx, result, state == "", func() (openAICodexStateShot, error) {
+		return retryOpenAICodexStateRouteShot(ctx, result, state == "", func(attemptCtx context.Context) (openAICodexStateShot, error) {
 			start := time.Now()
 			obs := AstraExperimentShot{Phase: "mint"}
 			if state != "" {
 				obs.Phase = "continue"
 			}
-			shot, err := fireOpenAICodexStateShotRequest(ctx, template.Header, result.Model, state, cookie, func(req *http.Request) (*http.Response, error) {
+			shot, err := fireOpenAICodexStateShotRequest(attemptCtx, template.Header, result.Model, state, cookie, func(req *http.Request) (*http.Response, error) {
 				req = req.WithContext(WithHTTPUpstreamRedirectsDisabled(req.Context()))
 				if balancer != nil {
 					if _, err := req.Cookie("__cflb"); err != nil {

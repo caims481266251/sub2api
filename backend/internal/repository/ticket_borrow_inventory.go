@@ -65,11 +65,25 @@ func borrowInventory(ctx context.Context, db borrowQueryer, id int64, identity s
 		return nil, err
 	}
 	if sourceUntil.Valid && sourceUntil.Time.After(f.Now) {
-		if out.BlockedReason == "" {
-			out.BlockedReason = "source_request_budget"
+		// Source HTTP budget cannot block target verification of an already
+		// acquired shared candidate. Self mode still needs a source HTTP permit.
+		var canConsume bool
+		err = db.QueryRowContext(ctx, `SELECT t.acquisition_identity='source' AND EXISTS(
+ SELECT 1 FROM ticket_borrow_candidate_pool p JOIN ticket_borrow_candidate_environments e ON e.id=p.id
+ WHERE p.state='queued' AND p.settings_revision=cfg.revision AND p.lease_until>clock_timestamp()
+ AND e.released_at IS NULL AND e.lease_until>clock_timestamp()
+ AND LEAST(p.admission_until,e.admission_until)>clock_timestamp()+(45+cfg.continue_timeout_seconds+$2)*INTERVAL '1 second')
+ FROM ticket_borrow_targets t CROSS JOIN ticket_borrow_settings cfg WHERE t.account_id=$1 AND cfg.id=1`, id, int(service.BorrowCandidatePoolPublishReserve/time.Second)).Scan(&canConsume)
+		if err != nil {
+			return nil, err
 		}
-		if sourceUntil.Time.After(out.NextAt) {
-			out.NextAt = sourceUntil.Time
+		if !canConsume {
+			if out.BlockedReason == "" {
+				out.BlockedReason = "source_request_budget"
+			}
+			if sourceUntil.Time.After(out.NextAt) {
+				out.NextAt = sourceUntil.Time
+			}
 		}
 	}
 	if lease.Valid && lease.Time.After(f.Now) {
@@ -111,9 +125,7 @@ func (r *ticketBorrowRepository) NeedsCandidate(ctx context.Context, a service.B
 		// expired or retired row must not make a shorter candidate look useful.
 		return inv.EarliestExpiry == nil || expiry.After(*inv.EarliestExpiry), nil
 	}
-	var state string
-	err = r.db.QueryRowContext(ctx, `SELECT last_inventory_state FROM ticket_borrow_targets WHERE account_id=$1 AND lease_token=$2`, a.TargetID, a.Lease).Scan(&state)
-	return state == "healthy" || state == "renew", err
+	return inv.State == "renew", nil
 }
 
 // Completed verdicts remain deduplicated even when formal publication loses a

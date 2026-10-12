@@ -73,6 +73,9 @@ func TestTicketBorrowStatisticsCountUniqueVerdictsAndAttributedBusiness(t *testi
 	event("mismatch", "cookie-bad", "target_ticket_changed", "degraded")
 	event("timeout", "cookie-timeout", "target_continue_timeout", "")
 	event("cancel", "cookie-cancel", "candidate_unused_after_success", "")
+	event("pending", "cookie-pending", "candidate_gateway_prioritized", "")
+	event("pending", "cookie-pending", "candidate_gateway_recheck", "")
+	event("pending", "cookie-pending", "gateway_feedback_unavailable", "")
 	// Use a real published route and persisted timing schema; physical attempts
 	// and duplicate egress records must not inflate the request count.
 	target, err := r.Target(ctx, id)
@@ -104,6 +107,9 @@ func TestTicketBorrowStatisticsCountUniqueVerdictsAndAttributedBusiness(t *testi
 	require.Equal(t, 1, stats.Cancelled)
 	require.Equal(t, 1, stats.Inflight)
 	require.Zero(t, stats.Other)
+	require.Equal(t, 1, stats.Prioritized)
+	require.Equal(t, 1, stats.Rechecked)
+	require.NotNil(t, stats.LastSuccessAt)
 	require.Len(t, stats.Routes, 1)
 	require.Equal(t, 1, stats.Routes[0].Requests)
 	require.Equal(t, 1, stats.Routes[0].Completed)

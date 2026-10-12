@@ -4,6 +4,11 @@ vi.mock('../../client', () => ({ apiClient: mocks }))
 import { ticketBorrowing, defaultBorrowReplenishment } from '../ticketBorrowing'
 beforeEach(() => { vi.clearAllMocks(); mocks.put.mockResolvedValue({ data: {} }) })
 describe('simplified borrowing API', () => {
+ it('does not resend a retired route threshold from an older server response', async () => {
+  const legacy = { revision: 1, running: true, ttl_seconds: 80, prewarm_seconds: 0, route_429_threshold: 2 }
+  await ticketBorrowing.saveSettings(legacy)
+  expect(mocks.put.mock.calls[0]![1]).not.toHaveProperty('route_429_threshold')
+ })
  it('sends one admission window and the rolling toggle without retired parameters', async () => {
   await ticketBorrowing.saveSettings({ revision: 4, running: true, admission_window_seconds: 80, ttl_seconds: 230, min_route_remaining_seconds: 120, renew_before_seconds: 180, prewarm_seconds: 60, replenishment: { enabled: true, inventory: 4, hold_seconds: 150, interval_seconds: 10 } })
   const payload = mocks.put.mock.calls[0]![1]

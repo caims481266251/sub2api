@@ -31,6 +31,10 @@ Thumbs.db
 dist/
 build/
 
+# Local probe evidence and deployment snapshots. These are runtime artifacts,
+# not image inputs, and can be several gigabytes in a developer checkout.
+.dev/
+
 # Node modules (will be installed in container)
 frontend/node_modules/
 node_modules/

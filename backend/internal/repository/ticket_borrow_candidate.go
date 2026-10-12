@@ -19,8 +19,14 @@ func lockBorrowCandidateAllocator(ctx context.Context, tx *sql.Tx) error {
 
 func (r *ticketBorrowRepository) AllocateCandidateEnvironment(ctx context.Context, id, identity string) (*service.BorrowCandidateEnvironment, error) {
 	a, ok := service.BorrowAcquisitionFromContext(ctx)
-	if !ok || id == "" || identity == "" {
+	p, pooled := service.BorrowPoolAcquisitionFromContext(ctx)
+	if (!ok && !pooled) || id == "" || identity == "" || (pooled && p.ID != id) {
 		return nil, service.ErrBorrowUnavailable
+	}
+	var poolID any
+	if pooled {
+		a = service.BorrowAcquisition{Lease: p.Lease}
+		poolID = p.ID
 	}
 	f, err := service.NewBorrowFingerprint()
 	if err != nil {
@@ -34,7 +40,12 @@ func (r *ticketBorrowRepository) AllocateCandidateEnvironment(ctx context.Contex
 	if err = lockBorrowCandidateAllocator(ctx, tx); err != nil {
 		return nil, err
 	}
-	if err = checkBorrowAcquisition(ctx, tx, a, true); err != nil {
+	if pooled {
+		err = checkBorrowPoolAcquisition(ctx, tx, p)
+	} else {
+		err = checkBorrowAcquisition(ctx, tx, a, true)
+	}
+	if err != nil {
 		return nil, err
 	}
 	// Join new/recovered entries at the current round instead of repeatedly using
@@ -99,8 +110,8 @@ func (r *ticketBorrowRepository) AllocateCandidateEnvironment(ctx context.Contex
 	if err != nil {
 		return nil, err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO ticket_borrow_candidate_environments(id,target_id,batch_id,identity_key,entry_id,entry_identity,allocation_round,fingerprint,proxy_ciphertext,session_randomized)
- VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, id, a.TargetID, a.Lease, identity, env.EntryID, entryIdentity, env.AllocationRound, string(raw), ciphertext, env.SessionRandomized)
+	_, err = tx.ExecContext(ctx, `INSERT INTO ticket_borrow_candidate_environments(id,target_id,batch_id,identity_key,entry_id,entry_identity,allocation_round,fingerprint,proxy_ciphertext,session_randomized,pool_candidate_id)
+ VALUES($1,NULLIF($2,0),$3,$4,$5,$6,$7,$8,$9,$10,$11)`, id, a.TargetID, a.Lease, identity, env.EntryID, entryIdentity, env.AllocationRound, string(raw), ciphertext, env.SessionRandomized, poolID)
 	if err != nil {
 		return nil, err
 	}
@@ -110,17 +121,25 @@ func (r *ticketBorrowRepository) AllocateCandidateEnvironment(ctx context.Contex
 func (r *ticketBorrowRepository) StartCandidateEnvironment(ctx context.Context, id string) (time.Time, time.Time, error) {
 	var start, deadline time.Time
 	a, ok := service.BorrowAcquisitionFromContext(ctx)
-	if !ok {
+	p, pooled := service.BorrowPoolAcquisitionFromContext(ctx)
+	if !ok && !pooled {
 		return start, deadline, service.ErrBorrowUnavailable
 	}
-	if err := r.CheckAcquisition(ctx, a); err != nil {
+	var checkErr error
+	if pooled {
+		a = service.BorrowAcquisition{Lease: p.Lease}
+		checkErr = r.CheckCandidatePoolAcquisition(ctx, p)
+	} else {
+		checkErr = r.CheckAcquisition(ctx, a)
+	}
+	if err := checkErr; err != nil {
 		return start, deadline, err
 	}
 	err := r.db.QueryRowContext(ctx, `UPDATE ticket_borrow_candidate_environments e
  SET started_at=COALESCE(e.started_at,clock_timestamp()),
  admission_until=COALESCE(e.admission_until,clock_timestamp()+cfg.admission_window_seconds*INTERVAL '1 second')
  FROM ticket_borrow_settings cfg,proxy_pool_entries p
- WHERE cfg.id=1 AND e.id=$1 AND e.target_id=$2 AND e.batch_id=$3 AND e.released_at IS NULL AND e.lease_until>clock_timestamp()
+ WHERE cfg.id=1 AND e.id=$1 AND e.target_id IS NOT DISTINCT FROM NULLIF($2,0) AND e.batch_id=$3 AND e.released_at IS NULL AND e.lease_until>clock_timestamp()
  AND p.id=e.entry_id AND p.identity_hash=e.entry_identity AND p.enabled AND p.retired_at IS NULL
  RETURNING e.started_at,e.admission_until`, id, a.TargetID, a.Lease).Scan(&start, &deadline)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -131,17 +150,31 @@ func (r *ticketBorrowRepository) StartCandidateEnvironment(ctx context.Context, 
 
 func (r *ticketBorrowRepository) CheckCandidateEnvironment(ctx context.Context, id string) error {
 	a, ok := service.BorrowAcquisitionFromContext(ctx)
-	if !ok {
+	p, pooled := service.BorrowPoolAcquisitionFromContext(ctx)
+	if !ok && !pooled {
 		return service.ErrBorrowUnavailable
 	}
-	if err := r.CheckAcquisition(ctx, a); err != nil {
+	var checkErr error
+	if pooled {
+		a = service.BorrowAcquisition{Lease: p.Lease}
+		checkErr = r.CheckCandidatePoolAcquisition(ctx, p)
+	} else {
+		// HTTP reservations enforce budget separately. A valid completed probe
+		// must still be publishable when another attempt exhausts the budget.
+		checkErr = checkBorrowAcquisition(ctx, r.db, a, false)
+	}
+	if err := checkErr; err != nil {
 		return err
 	}
 	var eligible bool
 	err := r.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM ticket_borrow_candidate_environments e
  JOIN proxy_pool_entries p ON p.id=e.entry_id CROSS JOIN ticket_borrow_settings cfg
- WHERE cfg.id=1 AND e.id=$1 AND e.target_id=$2 AND e.batch_id=$3 AND e.released_at IS NULL AND e.lease_until>clock_timestamp()
+ WHERE cfg.id=1 AND e.id=$1 AND e.target_id IS NOT DISTINCT FROM NULLIF($2,0) AND e.batch_id=$3 AND e.released_at IS NULL AND e.lease_until>clock_timestamp()
  AND p.enabled AND p.retired_at IS NULL AND p.identity_hash=e.entry_identity
+ AND (e.pool_candidate_id IS NULL OR EXISTS(SELECT 1 FROM ticket_borrow_candidate_pool cp WHERE cp.id=e.pool_candidate_id
+ AND cp.settings_revision=cfg.revision AND cp.lease_until>clock_timestamp()
+ AND ((cp.state='acquiring' AND cp.owner_token=e.batch_id AND e.target_id IS NULL)
+ OR (cp.state='claimed' AND cp.claim_token=e.batch_id AND cp.target_id=e.target_id))))
  AND LEAST(e.admission_until,e.started_at+cfg.admission_window_seconds*INTERVAL '1 second')>clock_timestamp())`, id, a.TargetID, a.Lease).Scan(&eligible)
 	if err != nil {
 		return err
@@ -154,8 +187,12 @@ func (r *ticketBorrowRepository) CheckCandidateEnvironment(ctx context.Context, 
 
 func (r *ticketBorrowRepository) MarkCandidateEnvironmentSent(ctx context.Context, id string) error {
 	a, ok := service.BorrowAcquisitionFromContext(ctx)
-	if !ok {
+	p, pooled := service.BorrowPoolAcquisitionFromContext(ctx)
+	if !ok && !pooled {
 		return service.ErrBorrowUnavailable
+	}
+	if pooled {
+		a = service.BorrowAcquisition{Lease: p.Lease}
 	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -167,7 +204,7 @@ func (r *ticketBorrowRepository) MarkCandidateEnvironmentSent(ctx context.Contex
 	}
 	_, err = tx.ExecContext(ctx, `WITH sent AS (
  UPDATE ticket_borrow_candidate_environments SET sent_at=clock_timestamp()
- WHERE id=$1 AND target_id=$2 AND batch_id=$3 AND sent_at IS NULL
+ WHERE id=$1 AND target_id IS NOT DISTINCT FROM NULLIF($2,0) AND batch_id=$3 AND sent_at IS NULL
  RETURNING identity_key,entry_id,sent_at)
  INSERT INTO ticket_borrow_candidate_proxy_usage(identity_key,entry_id,uses,last_used_at)
  SELECT identity_key,entry_id,1,sent_at FROM sent

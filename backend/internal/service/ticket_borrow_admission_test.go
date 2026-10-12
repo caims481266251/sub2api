@@ -155,45 +155,39 @@ func TestBorrowInvalidRoutePreservesUpstreamErrorBodyAndLease(t *testing.T) {
 			require.Contains(t, string(body), "provider failure")
 			require.NoError(t, resp.Body.Close())
 			require.Zero(t, activeBorrowLeases(repo))
-			require.Equal(t, []string{"route-a"}, repo.revoked)
+			if status == http.StatusUnauthorized {
+				require.Equal(t, []string{"route-a"}, repo.revoked)
+				require.Equal(t, "target_unauthorized", repo.events[0].Reason)
+			} else {
+				require.Empty(t, repo.revoked, "response Cookie changes must not revoke an unexpired route")
+			}
 			require.Equal(t, 1, repo.releases)
 		})
 	}
 }
 
 func TestBorrowRejectionIsNotOverwrittenByResponseHeaderTimeout(t *testing.T) {
-	for _, responseReceived := range []bool{false, true} {
-		t.Run(map[bool]string{false: "local_rejection", true: "response_identity_changed"}[responseReceived], func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				borrow, repo := borrowFixture()
-				upstream := &borrowAdmissionTestUpstream{borrow: borrow, send: func(req *http.Request, _ string, _ int64, _ int, _ *tlsfingerprint.Profile) (*http.Response, error) {
-					<-req.Context().Done()
-					if !responseReceived {
-						return nil, ErrBorrowUnavailable
-					}
-					return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Set-Cookie": {"__oailb=changed; Path=/"}}, Body: http.NoBody}, nil
-				}}
-				gateway := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{
-					OpenAIFirstOutputTimeoutSeconds: 1, MaxLineSize: defaultMaxLineSize,
-				}}, httpUpstream: upstream, borrowRoutes: borrow, accountRepo: borrow.owner.accountRepo}
-				account, err := borrow.owner.accountRepo.GetByID(t.Context(), 11)
-				require.NoError(t, err)
-				body := []byte(`{"model":"gpt-6-astra","stream":true,"input":"hello"}`)
-				rec := httptest.NewRecorder()
-				c, _ := gin.CreateTestContext(rec)
-				c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(body)))
-				_, err = gateway.Forward(t.Context(), c, account, body)
-				if responseReceived {
-					require.ErrorIs(t, err, ErrBorrowResponseRejected)
-				} else {
-					require.ErrorIs(t, err, ErrBorrowUnavailable)
-				}
-				var failover *UpstreamFailoverError
-				require.False(t, errors.As(err, &failover), "header timeout cannot turn an unproven or already-sent request into failover")
-				require.False(t, IsOpenAIInitialAdmissionRejection(err))
-				require.Empty(t, rec.Body.String())
-				require.Zero(t, activeBorrowLeases(repo))
-			})
-		})
-	}
+	synctest.Test(t, func(t *testing.T) {
+		borrow, repo := borrowFixture()
+		upstream := &borrowAdmissionTestUpstream{borrow: borrow, send: func(req *http.Request, _ string, _ int64, _ int, _ *tlsfingerprint.Profile) (*http.Response, error) {
+			<-req.Context().Done()
+			return nil, ErrBorrowUnavailable
+		}}
+		gateway := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{
+			OpenAIFirstOutputTimeoutSeconds: 1, MaxLineSize: defaultMaxLineSize,
+		}}, httpUpstream: upstream, borrowRoutes: borrow, accountRepo: borrow.owner.accountRepo}
+		account, err := borrow.owner.accountRepo.GetByID(t.Context(), 11)
+		require.NoError(t, err)
+		body := []byte(`{"model":"gpt-6-astra","stream":true,"input":"hello"}`)
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(body)))
+		_, err = gateway.Forward(t.Context(), c, account, body)
+		require.ErrorIs(t, err, ErrBorrowUnavailable)
+		var failover *UpstreamFailoverError
+		require.False(t, errors.As(err, &failover), "header timeout cannot turn an unproven request into failover")
+		require.False(t, IsOpenAIInitialAdmissionRejection(err))
+		require.Empty(t, rec.Body.String())
+		require.Zero(t, activeBorrowLeases(repo))
+	})
 }

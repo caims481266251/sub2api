@@ -11,7 +11,7 @@
             <span>{{ t('ticketBorrowing.routes.summary', { count: targets.reduce((n, target) => n + (target.enabled ? target.business_routes?.filter(route => route.usable && route.inventory_eligible && borrowSeconds(route.usable_until, now + offset) > 0).length ?? 0 : 0), 0), inflight: targets.reduce((n, target) => n + (target.business_inflight ?? 0), 0) }) }}</span>
           </div>
         </div>
-        <button class="btn btn-secondary btn-sm relative" :disabled="loading || busy" :title="pollError ? t('ticketBorrowing.management.staleStatus') : undefined" @click="reload">
+        <button class="btn btn-secondary btn-sm relative" :disabled="loading || busy" :title="pollError ? t('ticketBorrowing.management.staleStatus') : undefined" @click="refreshPage">
           {{ t(loading ? 'ticketBorrowing.loading' : 'ticketBorrowing.refresh') }}
           <span v-if="pollError" class="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-amber-500" aria-hidden="true"></span>
           <span v-if="pollError" class="sr-only" role="status">{{ t('ticketBorrowing.management.staleStatus') }}</span>
@@ -26,7 +26,7 @@
         <p v-if="controlsError" role="alert" class="w-full text-sm text-red-600">{{ controlsError }}</p>
       </div>
       <nav class="borrow-tabs" :aria-label="t('ticketBorrowing.title')">
-        <button v-for="item in tabs" :key="item" :aria-current="tab === item ? 'page' : undefined" class="borrow-tab" :class="{ 'borrow-tab-active': tab === item }" :data-tab="item" @click="tab = item">{{ t(`ticketBorrowing.${item}`) }}<span class="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-amber-500" v-if="(item === 'sources' && (selectionDirty || Object.values(modelDrafts).some(Boolean))) || (item === 'targets' && probeDirty)" :aria-label="t('ticketBorrowing.unsaved')"></span></button>
+        <button v-for="item in tabs" :key="item" :aria-current="tab === item ? 'page' : undefined" class="borrow-tab" :class="{ 'borrow-tab-active': tab === item }" :data-tab="item" @click="tab = item">{{ t(`ticketBorrowing.${item}`) }}<span class="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-amber-500" v-if="(item === 'sources' && (selectionDirty || Object.values(modelDrafts).some(Boolean))) || (item === 'targets' && probeDirty) || (item === 'candidates' && poolDirty)" :aria-label="t('ticketBorrowing.unsaved')"></span></button>
       </nav>
 
       <section v-show="tab === 'sources'" class="space-y-4">
@@ -54,6 +54,7 @@
       </section>
 
       <BaseDialog :show="settingsOpen" :title="t('ticketBorrowing.management.parameters')" width="wide" placement="right" @close="settingsOpen = false"><BorrowSettingsPanel v-if="settingsOpen" v-model="settings" :saved="savedSettings" :busy="busy || loading || controlsSaving" :dirty="settingsDirty" :conflict="settingsConflict" :now="now + offset" @save="saveSettings" @revert="revertSettings" @targets="settingsOpen = false; tab = 'targets'" @target="openTarget" :targets="targets" /></BaseDialog>
+      <BorrowCandidatePool v-if="poolVisited" v-show="tab === 'candidates'" ref="poolPanel" :visible="tab === 'candidates'" :sources="sources" :targets="targets" @records="openRecords" @target="openTarget" @dirty="poolDirty = $event" @saving="poolSaving = $event" />
       <BorrowEventList v-if="historyVisited" v-show="tab === 'events'" :visible="tab === 'events'" v-model:query="eventQuery" :new-count="pendingEvents.length" @reading-history="readingHistory = $event" :events="visibleEvents" :sources="sources" :targets="targets" :has-older="hasOlder" :loading="eventsLoading || loading" @refresh="loadEvents(false)" @older="loadEvents(true)" />
       <details class="text-xs text-gray-500 dark:text-gray-400"><summary class="cursor-pointer">{{ t('ticketBorrowing.management.help') }}</summary><p class="mt-2 max-w-3xl leading-5">{{ t('ticketBorrowing.description') }} {{ t('ticketBorrowing.targetScope') }}</p></details>
     </div>
@@ -163,6 +164,7 @@ import { changeSourceScope, includedInScope, scopeWithinLimits } from '@/composa
 import type { BorrowEditorState } from '@/composables/useBorrowEditorState'
 import type { BorrowProbePolicy as ProbePolicy } from '@/api/admin/ticketBorrowing'
 import SmartOpsNav from '@/components/admin/operations/SmartOpsNav.vue'
+import BorrowCandidatePool from '@/components/admin/BorrowCandidatePool.vue'
 import BorrowProbePolicy from '@/components/admin/BorrowProbePolicy.vue'
 import BorrowProbeBatchDialog from '@/components/admin/BorrowProbeBatchDialog.vue'
 import type { BorrowProbeBatchAccount, BorrowProbeBatchInput, BorrowProbeBatchResult } from '@/api/admin/ticketBorrowing'
@@ -232,12 +234,16 @@ async function addTarget() {
  await action(async () => { const current = await api.target(id); await api.setTarget(id, true, current.revision); addTargetOpen.value = false; newTargetId.value = null })
 }
 function acceptProbeTarget(value: BorrowTarget) { targets.value = targets.value.map(target => target.account_id === value.account_id ? value : target) }
-const tabs = ['targets', 'sources', 'events'] as const
+const tabs = ['targets', 'sources', 'candidates', 'events'] as const
 const settingsOpen = ref(false)
 const tab = useBorrowPreference<(typeof tabs)[number]>('tab', 'targets')
 if (tabs.includes(route.query.tab as typeof tabs[number])) tab.value = route.query.tab as typeof tabs[number]
 if (!tabs.includes(tab.value)) tab.value = 'targets'
 const historyVisited = ref(tab.value === 'events')
+const poolVisited = ref(tab.value === 'candidates'), poolDirty = ref(false), poolSaving = ref(false)
+const poolPanel = ref<InstanceType<typeof BorrowCandidatePool>>()
+watch(tab, value => { if (value === 'candidates') poolVisited.value = true })
+function refreshPage() { void reload(); void poolPanel.value?.refresh() }
 watch(tab, value => { if (value === 'events') { historyVisited.value = true; if (!events.value.length) void loadEvents(false); else void checkNewEvents() } })
 watch(sourceEditor, value => { if (value) { settingsOpen.value = false; sourceDetailId.value = null; targetDetailId.value = null } })
 watch(settingsOpen, value => { if (value) { sourceEditor.value = null; sourceDetailId.value = null; targetDetailId.value = null } })
@@ -529,12 +535,12 @@ async function retryBatchProbe() {
  finally { actionBusy.value = false }
 }
 const probeDirty = computed(() => Object.values(probeDrafts.value).some(Boolean))
-const hasUnsavedChanges = computed(() => Object.values(modelDrafts.value).some(Boolean) || selectionDirty.value || settingsDirty.value || probeDirty.value || batchProbeDirty.value)
+const hasUnsavedChanges = computed(() => Object.values(modelDrafts.value).some(Boolean) || selectionDirty.value || settingsDirty.value || probeDirty.value || batchProbeDirty.value || poolDirty.value)
 function beforeUnload(event: BeforeUnloadEvent) {
- if (hasUnsavedChanges.value || probeSaving.value || modelSaving.value || (batchProbeAccounts.value && busy.value)) { event.preventDefault(); event.returnValue = '' }
+ if (hasUnsavedChanges.value || poolSaving.value || probeSaving.value || modelSaving.value || (batchProbeAccounts.value && busy.value)) { event.preventDefault(); event.returnValue = '' }
 }
 onBeforeRouteLeave(() => {
- if (probeSaving.value || modelSaving.value || (batchProbeAccounts.value && busy.value)) return false
+ if (poolSaving.value || probeSaving.value || modelSaving.value || (batchProbeAccounts.value && busy.value)) return false
  return !hasUnsavedChanges.value || window.confirm(t('ticketBorrowing.leaveConfirm'))
 })
 const clock = setInterval(() => { now.value = Date.now() }, 1000)
@@ -566,7 +572,7 @@ onBeforeUnmount(() => { document.removeEventListener('visibilitychange', visibil
 
 .borrow-tabs {
   @apply grid grid-cols-2 gap-1 rounded-xl border border-gray-200 bg-gray-100/80 p-1 dark:border-dark-700 dark:bg-dark-900;
-  @apply min-[380px]:grid-cols-3 sm:inline-flex;
+  @apply sm:inline-flex;
 }
 .borrow-tab {
   @apply relative min-h-10 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium leading-5 text-gray-600 transition-colors;

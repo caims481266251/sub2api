@@ -62,6 +62,7 @@ type TicketBorrowService struct {
 	nextCleanup      time.Time
 	nextEventCleanup time.Time
 	responseBindings sync.Map // pending metadata writes; deltas never wait for these
+	poolSources      atomic.Int32
 }
 
 func NewTicketBorrowService(repo TicketBorrowRepository, owner *AccountTestService, oauth *OpenAIOAuthService) *TicketBorrowService {
@@ -631,34 +632,10 @@ func (s *TicketBorrowService) ForwardHTTP(req *http.Request, proxy string, id in
 	r = r.WithContext(requesttiming.WithBorrowRoute(r.Context(), route.ID))
 	resp, err := send(r, openAIAccountProxyURL(account), id, n, profile)
 	if resp != nil {
-		for _, c := range resp.Cookies() {
-			if c.Name == "__oailb" && c.Value == route.Secret.Cookie.Value && c.MaxAge >= 0 {
-				ttl := time.Until(route.ExpiresAt)
-				if c.MaxAge > 0 {
-					ttl = min(ttl, time.Duration(c.MaxAge)*time.Second)
-				} else if !c.Expires.IsZero() {
-					ttl = min(ttl, time.Until(c.Expires))
-				}
-				_, _ = s.repo.ObserveCookie(req.Context(), route.CookieHash, ttl)
-			}
-		}
-		reason := borrowResponseFailure(r, route, resp)
-		if reason != "" {
-			ctx, cancel := context.WithTimeout(context.WithoutCancel(req.Context()), 3*time.Second)
-			_ = s.repo.Revoke(ctx, target.AccountID, route.ID, reason)
-			_ = s.repo.RefreshTarget(ctx, target.AccountID)
-			_ = s.repo.Event(ctx, BorrowEvent{TargetID: target.AccountID, SourceID: route.SourceID, RouteID: route.ID, Stage: "route", Reason: reason})
-			cancel()
-			// Error responses belong to the ordinary upstream error policy (401,
-			// 429, 5xx, request-scoped vetoes, etc.). Keep their body and headers
-			// readable until the existing forwarding code classifies them.
-			if resp.StatusCode < http.StatusBadRequest {
-				if resp.Body != nil {
-					resp.Body.Close()
-				}
-				return nil, ErrBorrowResponseRejected
-			}
-		}
+		s.observeBorrowBusinessResponse(r, route, resp)
+		// Admission deadlines govern new requests only. Preserve this response
+		// and its lease through normal streaming, error handling and accounting;
+		// never replay a request because its returned routing metadata changed.
 		if err == nil && resp.Body != nil && resp.Body != http.NoBody {
 			observed := &borrowObservedBody{ReadCloser: resp.Body, owner: s, target: target.AccountID, route: route.ID}
 			if choice != nil {
@@ -684,7 +661,25 @@ func replaceBorrowCookie(req *http.Request, c *http.Cookie) {
 	}
 	req.AddCookie(&http.Cookie{Name: "__oailb", Value: c.Value})
 }
-func borrowResponseFailure(req *http.Request, route *BorrowRoute, resp *http.Response) string {
+
+// Routing metadata alone does not revoke a validated route or replace its shared
+// Cookie. Authentication keeps the ordinary policy.
+func (s *TicketBorrowService) observeBorrowBusinessResponse(req *http.Request, route *BorrowRoute, resp *http.Response) {
+	if reason := borrowResponseRoutingChange(req, route, resp); reason != "" && resp.StatusCode != http.StatusUnauthorized {
+		slog.InfoContext(req.Context(), "borrow business response routing metadata changed; preserving current response",
+			"target_id", route.TargetID, "route_id", route.ID, "reason", reason)
+	}
+	if resp.StatusCode == http.StatusUnauthorized {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(req.Context()), 3*time.Second)
+		defer cancel()
+		const reason = "target_unauthorized"
+		_ = s.repo.Revoke(ctx, route.TargetID, route.ID, reason)
+		_ = s.repo.RefreshTarget(ctx, route.TargetID)
+		_ = s.repo.Event(ctx, BorrowEvent{TargetID: route.TargetID, SourceID: route.SourceID, RouteID: route.ID, Stage: "route", Reason: reason})
+	}
+}
+
+func borrowResponseRoutingChange(req *http.Request, route *BorrowRoute, resp *http.Response) string {
 	before := req.Header.Get("X-Codex-Turn-State")
 	after := extractOpenAICodexTurnState(resp.Header)
 	if before != "" && after != "" && after != before {
@@ -694,9 +689,6 @@ func borrowResponseFailure(req *http.Request, route *BorrowRoute, resp *http.Res
 		if c.Name == "__oailb" && (c.Value != route.Secret.Cookie.Value || c.MaxAge < 0 || (!c.Expires.IsZero() && !time.Now().Before(c.Expires))) {
 			return "target_route_changed"
 		}
-	}
-	if resp.StatusCode == 401 {
-		return "target_unauthorized"
 	}
 	return ""
 }
@@ -721,8 +713,8 @@ func borrowGateway(cookie string) string {
 	return c.Host
 }
 func (s *TicketBorrowService) Start() {
-	ctx, cancel := context.WithCancel(context.Background())
-	s.cancel = cancel
+	ctx, cancelCause := context.WithCancelCause(context.Background())
+	s.cancel = func() { cancelCause(borrowCancelServiceShutdown) }
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
@@ -749,10 +741,21 @@ func (s *TicketBorrowService) Stop() {
 		s.cancel()
 	}
 	s.wg.Wait()
+	if pool, ok := s.repo.(BorrowCandidatePoolRepository); ok {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		_ = pool.SweepCandidatePool(ctx)
+		cancel()
+	}
 }
 func (s *TicketBorrowService) processRotations(context.Context) bool { return true }
 func (s *TicketBorrowService) tick(ctx context.Context) {
 	s.cleanupEvents(ctx)
+	if pool, ok := s.repo.(BorrowCandidatePoolRepository); ok {
+		if err := pool.SweepCandidatePool(ctx); err != nil {
+			// Do not add work while ownership/capacity recovery is unavailable.
+			return
+		}
+	}
 	if !s.processRotations(ctx) {
 		return
 	}
@@ -796,28 +799,50 @@ func (s *TicketBorrowService) tick(ctx context.Context) {
 		s.wg.Add(1)
 		go func(t BorrowTarget) { defer s.wg.Done(); s.runTarget(ctx, t, settings, token) }(t)
 	}
+	s.startPoolProducers(ctx)
 }
 func (s *TicketBorrowService) runTarget(parent context.Context, target BorrowTarget, settings BorrowSettings, lease string) {
-	ctx, cancel := context.WithTimeout(context.WithValue(parent, borrowInternalKey{}, true), 150*time.Second)
-	defer cancel()
+	diagnostic := target.ScanOffset < len(target.ScanSources)
+	pool, hasPool := s.repo.(BorrowCandidatePoolRepository)
+	sharedPool := hasPool && target.AcquisitionMode() == BorrowAcquisitionSource && !diagnostic
+	ctx, cancelCause := context.WithCancelCause(context.WithValue(parent, borrowInternalKey{}, true))
 	reason := "no_candidate"
+	cancel := func() {
+		switch reason {
+		case "target_probe_passed":
+			cancelCause(borrowCancelBatchSuccess)
+		case "borrow_acquisition_paused":
+			cancelCause(borrowCancelUserStop)
+		default:
+			cancelCause(context.Canceled)
+		}
+	}
+	defer cancel()
 	delay := time.Duration(0)
 	scanProcessed := 0
-	diagnostic := target.ScanOffset < len(target.ScanSources)
 	defer func() {
 		cleanup, stop := context.WithTimeout(context.WithoutCancel(parent), 3*time.Second)
 		defer stop()
+		if context.Cause(ctx) == borrowCancelTargetLeaseLost {
+			reason = string(borrowCancelTargetLeaseLost)
+		}
 		if diagnostic && scanProcessed > 0 {
 			_ = s.repo.AdvanceScan(cleanup, target.AccountID, lease, scanProcessed)
 		}
 		_ = s.repo.FinishJob(cleanup, "target", target.AccountID, lease, reason, delay)
 	}()
+	stopLease, leaseErr := s.keepTargetLease(ctx, BorrowAcquisition{TargetID: target.AccountID, Revision: target.Revision, Lease: lease}, cancelCause)
+	if leaseErr != nil {
+		reason = borrowAcquisitionReason(leaseErr)
+		return
+	}
+	defer stopLease()
 	var sources []BorrowSource
 	var err error
 	if target.AcquisitionMode() == BorrowAcquisitionSelf {
 		diagnostic = false
 		sources = []BorrowSource{{AccountID: target.AccountID, Model: "gpt-6-luna", Enabled: true, UseProxyPool: true}}
-	} else {
+	} else if !sharedPool {
 		sources, err = s.repo.Sources(ctx)
 		if err != nil {
 			reason = "source_store_unavailable"
@@ -836,7 +861,7 @@ func (s *TicketBorrowService) runTarget(parent context.Context, target BorrowTar
 		}
 		sources = enabled
 	}
-	if len(sources) == 0 {
+	if !sharedPool && len(sources) == 0 {
 		delay = 5 * time.Second
 		return
 	}
@@ -889,13 +914,8 @@ func (s *TicketBorrowService) runTarget(parent context.Context, target BorrowTar
 	}))
 	targetModel := normalizeOpenAIModelForUpstream(account, account.GetMappedModel(OpenAICodexStateProbeDefaultModel))
 	policy := target.ProbePolicy.effective()
-	type candidate struct {
-		source  int64
-		cookie  *http.Cookie
-		expires time.Time
-		details *BorrowCandidateDetails
-		routeID string
-	}
+	ctx = withBorrowProbeSlots(ctx, policy.Concurrency)
+	type candidate = borrowProbeCandidate
 	targetEnvironment := borrowEnvironment(template, proxy, profile)
 	targetEnvironment.BodyHash = borrowHash(string(openAICodexStateProbeBody(targetModel)))
 	emitCandidate := func(c candidate, stage, outcome string) {
@@ -904,10 +924,8 @@ func (s *TicketBorrowService) runTarget(parent context.Context, target BorrowTar
 		c.details.TargetRevision = target.Revision
 		s.candidateEvent(ctx, BorrowEvent{TargetID: target.AccountID, SourceID: c.source, RouteID: c.routeID, Stage: stage, Reason: outcome}, c.details, c.expires)
 	}
-	candidates := make(chan candidate, policy.Concurrency)
 	var acquiredCount int
 	var acquiredMu sync.Mutex
-	var acquiring sync.WaitGroup
 	var allocated sync.Map
 	defer func() {
 		cleanup, stop := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
@@ -944,60 +962,20 @@ func (s *TicketBorrowService) runTarget(parent context.Context, target BorrowTar
 			batch = append(batch, sources[(int(target.Cursor)*policy.Concurrency+offset)%len(sources)])
 		}
 	}
-	// A lease/budget race may defer a source after the snapshot check. Refill
-	// that worker from remaining eligible sources without increasing concurrency.
-	jobs := make(chan BorrowSource, len(batch))
-	for _, source := range batch {
-		jobs <- source
-	}
-	close(jobs)
-	for range min(policy.Concurrency, len(batch)) {
-		workerJobs := jobs
-		acquiring.Add(1)
-		go func() {
-			defer acquiring.Done()
-			for source := range workerJobs {
-				if ctx.Err() != nil {
-					return
-				}
-				details := &BorrowCandidateDetails{CandidateID: uuid.NewString(), BatchID: lease}
-				if r, ok := s.repo.(BorrowInventoryRepository); ok {
-					needed, e := r.NeedsCandidate(ctx, acquisition, nil)
-					if e != nil || !needed {
-						return
-					}
-				}
-				cookie, expires, e := s.acquireSourceObserved(ctx, source, settings, details)
-				if errors.Is(e, errBorrowSourceDeferred) {
-					continue
-				}
-				acquiredMu.Lock()
-				if ctx.Err() == nil {
-					acquiredCount++
-				}
-				acquiredMu.Unlock()
-				if e == nil {
-					allocated.Store(details.Environment.ID, true)
-					candidates <- candidate{source: source.ID, cookie: cookie, expires: expires, details: details}
-				}
-				return
-			}
-		}()
-	}
-
-	type verification struct {
-		candidate candidate
-		result    *OpenAICodexStateProbeResult
-		reason    string
-		terminal  bool
-		scanned   bool
-	}
+	type verification = borrowProbeVerification
 	var seenMu sync.Mutex
-	seen := make(map[string]bool)
+	seen := make(map[string]time.Time)
 	verify := func(c candidate) verification {
+		// Preparation and HTTP validation share one per-candidate budget.
+		ctx, stopVerification := context.WithTimeoutCause(ctx, BorrowCandidateVerificationLimit, borrowCancelValidationDeadline)
+		defer stopVerification()
 		out := verification{candidate: c}
 		latestSettings, e := s.repo.Settings(ctx)
 		if e != nil || !latestSettings.Running {
+			if e == nil {
+				cancelCause(borrowCancelUserStop)
+				c.details.CancellationCause = string(borrowCancelUserStop)
+			}
 			out.reason, out.terminal = "borrow_acquisition_paused", true
 			return out
 		}
@@ -1010,24 +988,31 @@ func (s *TicketBorrowService) runTarget(parent context.Context, target BorrowTar
 			out.reason, out.terminal = borrowAcquisitionReason(e), true
 			return out
 		}
+		now, e := s.repo.Now(ctx)
+		clockReadAt := time.Now()
+		if e != nil || !now.Before(c.expires) {
+			out.reason = "candidate_expired"
+			if e != nil {
+				out.reason = "candidate_store_unavailable"
+			}
+			return out
+		}
 		hash := borrowHash(c.cookie.Value)
 		seenMu.Lock()
-		duplicate := seen[hash]
-		seen[hash] = true
+		// A task can outlive many candidates; do not retain expired Cookies.
+		for key, until := range seen {
+			if !until.After(now) {
+				delete(seen, key)
+			}
+		}
+		_, duplicate := seen[hash]
+		seen[hash] = c.expires
 		seenMu.Unlock()
 		known, e := s.repo.CandidateKnown(ctx, target.AccountID, identity, hash)
 		if e != nil || known || duplicate {
 			out.reason = "candidate_store_unavailable"
 			if known || duplicate {
 				out.reason, out.scanned = "candidate_duplicate", true
-			}
-			return out
-		}
-		now, e := s.repo.Now(ctx)
-		if e != nil || !now.Before(c.expires) {
-			out.reason = "candidate_expired"
-			if e != nil {
-				out.reason = "candidate_store_unavailable"
 			}
 			return out
 		}
@@ -1039,7 +1024,13 @@ func (s *TicketBorrowService) runTarget(parent context.Context, target BorrowTar
 				return out
 			}
 		}
-		if r, ok := s.repo.(BorrowInventoryRepository); ok {
+		if sharedPool && c.expires.Sub(now) < BorrowPoolSettingsBudget(latestSettings, "mint") {
+			out.reason = "candidate_time_budget_insufficient"
+			return out
+		}
+		// Shared claims already passed demand admission. A concurrent success
+		// must not cancel this claimed verification just because inventory filled.
+		if r, ok := s.repo.(BorrowInventoryRepository); ok && !sharedPool {
 			needed, e := r.NeedsCandidate(ctx, acquisition, &c.expires)
 			if e != nil {
 				out.reason = borrowAcquisitionReason(e)
@@ -1053,10 +1044,20 @@ func (s *TicketBorrowService) runTarget(parent context.Context, target BorrowTar
 		// Probe capacity is independent of business admission. The repository also
 		// reserves each HTTP attempt under the target lock across all server instances.
 		_ = s.repo.SetPhase(ctx, target.AccountID, lease, "verifying")
-		probeCtx, stop := context.WithTimeout(ctx, min(90*time.Second, c.expires.Sub(now)))
+		probeCtx, stop := context.WithDeadlineCause(ctx, clockReadAt.Add(c.expires.Sub(now)), borrowCancelCandidateDeadline)
 		defer stop()
+		if sharedPool {
+			probeCtx = context.WithValue(probeCtx, borrowPoolVerificationKey{}, borrowPoolVerificationDeadline{Until: c.expires})
+		}
 		beforeProbe := c.details.snapshot(c.expires, now)
 		c.details.VerificationPreparedAt = &now
+		if c.details.SourceAcquiredAt != nil && !sharedPool {
+			wait := now.Sub(*c.details.SourceAcquiredAt).Milliseconds()
+			if wait < 0 {
+				wait = 0
+			}
+			c.details.ProbeQueueMS = &wait
+		}
 		c.details.CookieAgeAtProbeMS = beforeProbe.CookieAgeMS
 		c.details.RemainingAtProbeMS = beforeProbe.RemainingMS
 		probeCtx = context.WithValue(probeCtx, borrowProbeRequestKey{}, BorrowRequest{Kind: "probe", TargetID: target.AccountID, SourceID: c.source, BatchID: lease, Revision: target.Revision, CandidateID: c.details.CandidateID})
@@ -1091,75 +1092,82 @@ func (s *TicketBorrowService) runTarget(parent context.Context, target BorrowTar
 		c.details.Target.FingerprintGenerator = env.Fingerprint.Generator
 		out.result = ProbeOpenAICodexStateRoute(probeCtx, s.owner.httpUpstream, req, env.Proxy, target.AccountID, policy.Concurrency, env.Fingerprint.Profile, targetModel)
 		result := out.result
+		c.details.TargetBalancerHash = result.RouteBalancerHash
+		c.details.TargetCookiePairHash = result.RouteCookiePairHash
+		c.details.MintTicketHash = result.MintTicketHash
+		c.details.ContinueTicketHash = result.ContinueTicketHash
 		c.details.ProbeVerdict = string(result.Verdict)
 		c.details.ProbeFailure = result.Failure
 		c.details.ProbeRetries = result.RetryCount
+		c.details.Mint, c.details.Continue = result.Mint, result.Continue
+		c.details.CancellationCause = borrowCancellation(probeCtx, nil)
+		for _, phase := range []*BorrowProbePhase{result.Mint, result.Continue} {
+			if phase != nil && len(phase.Attempts) > 0 {
+				last := phase.Attempts[len(phase.Attempts)-1]
+				if last.CancellationCause != "" {
+					c.details.CancellationCause = last.CancellationCause
+				}
+			}
+		}
 		c.details.MintStatus, c.details.ContinueStatus = result.MintStatus, result.ContinueStatus
 		return out
 	}
-	results := make(chan verification, len(batch))
-	var verifying sync.WaitGroup
-	for range min(policy.Concurrency, len(batch)) {
-		verifying.Add(1)
-		go func() {
-			defer verifying.Done()
-			for c := range candidates {
-				results <- verify(c)
-			}
-		}()
+	feedback, _ := s.repo.(BorrowGatewayFeedbackRepository)
+	if s.owner.cfg != nil && s.owner.cfg.Gateway.BorrowAdaptiveProbingDisabled {
+		feedback = nil
 	}
-	go func() { acquiring.Wait(); close(candidates) }()
-	go func() { verifying.Wait(); close(results) }()
-	defer func() {
-		// Release source leases and probe bodies before ending the target lease.
-		cancel()
-		acquiring.Wait()
-		verifying.Wait()
-		cleanup, finish := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-		defer finish()
-		for out := range results {
-			// A concurrent winner must not hide an explicit upstream restriction
-			// already returned by another candidate before cancellation.
-			if out.result != nil {
-				waitReason, wait := borrowProbeUpstreamWait(out.result)
-				if wait > 0 {
-					_ = s.repo.RecordProbeOutcome(cleanup, target.AccountID, lease, waitReason, wait)
-					emitCandidate(out.candidate, "target", waitReason)
-					continue
-				}
-			}
-			outcome := "candidate_unused_after_stop"
-			if reason == "target_probe_passed" {
-				outcome = "candidate_unused_after_success"
-			}
-			emitCandidate(out.candidate, "candidate", outcome)
+	if !sharedPool && len(batch) == 0 {
+		return
+	}
+	capacity := policy.Concurrency
+	if diagnostic {
+		capacity = 1
+	}
+	releaseCandidate := func(c candidate) {
+		if c.details == nil || c.details.Environment == nil {
+			return
 		}
-		if diagnostic && scanProcessed == 0 && reason == "no_candidate" && acquiredCount > 0 {
-			scanProcessed = 1
+		cleanup, stop := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		defer stop()
+		if r, ok := s.repo.(BorrowCandidateEnvironmentRepository); ok {
+			if e := r.ReleaseCandidateEnvironment(cleanup, c.details.Environment.ID); e == nil {
+				allocated.Delete(c.details.Environment.ID)
+			}
 		}
-	}()
-	for out := range results {
+	}
+	processed := false
+	consume := func(out verification) bool {
+		processed = true
+		defer releaseCandidate(out.candidate)
 		c, result := out.candidate, out.result
 		if result == nil {
+			reason = out.reason
 			if diagnostic && out.scanned {
 				scanProcessed = 1
 			}
 			emitCandidate(c, "candidate", out.reason)
 			if out.terminal {
 				reason = out.reason
-				break
+				return false
 			}
-			continue
+			return true
+		}
+		if result.Failure == "candidate_time_budget_insufficient" {
+			reason = result.Failure
+			emitCandidate(c, "candidate", reason)
+			return true
 		}
 		if result.Failure == "probe_busy" || result.Failure == "recovery_waiting" || result.Failure == "request_budget" || result.Failure == "route_ready" {
 			reason = map[string]string{"probe_busy": "borrow_probe_concurrency_full", "recovery_waiting": "target_upstream_waiting", "request_budget": "target_request_budget", "route_ready": "target_route_ready"}[result.Failure]
 			emitCandidate(c, "candidate", reason)
-			continue
+			return true
 		}
 		if result.Failure == "acquisition_paused" {
+			cancelCause(borrowCancelUserStop)
+			c.details.CancellationCause = string(borrowCancelUserStop)
 			reason = "borrow_acquisition_paused"
 			emitCandidate(c, "candidate", reason)
-			break
+			return false
 		}
 		if diagnostic {
 			scanProcessed = 1
@@ -1177,7 +1185,7 @@ func (s *TicketBorrowService) runTarget(parent context.Context, target BorrowTar
 			if e := s.repo.RejectCandidate(ctx, target.AccountID, identity, borrowHash(c.cookie.Value), c.expires); e != nil {
 				reason = "candidate_store_unavailable"
 				emitCandidate(c, "target", reason)
-				return
+				return false
 			}
 		}
 		if result.Verdict == OpenAICodexStateDegraded || result.Failure == "route_changed" {
@@ -1189,7 +1197,7 @@ func (s *TicketBorrowService) runTarget(parent context.Context, target BorrowTar
 				if e != nil {
 					reason = "target_probe_inconclusive"
 					emitCandidate(c, "target", reason)
-					continue
+					return true
 				}
 				c.expires = minBorrowTime(c.expires, deadline)
 			}
@@ -1214,6 +1222,16 @@ func (s *TicketBorrowService) runTarget(parent context.Context, target BorrowTar
 			}
 			if err == nil {
 				err = s.repo.Publish(ctx, route, lease)
+				if err != nil && sharedPool {
+					// A committed transaction can lose its acknowledgement. Query
+					// its stable candidate key; never repeat upstream verification.
+					check, done := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+					published, checkErr := pool.PublishedPoolCandidate(check, acquisition, c.details.CandidateID)
+					done()
+					if checkErr == nil && published != "" {
+						route.ID, err = published, nil
+					}
+				}
 			}
 			c.details.PublicationMS = time.Since(publicationStarted).Milliseconds()
 			if err == nil {
@@ -1233,6 +1251,18 @@ func (s *TicketBorrowService) runTarget(parent context.Context, target BorrowTar
 				}
 			}
 		}
+		if feedback != nil && c.details.AcquisitionStartedAt != nil && BorrowGatewayFeedbackReason(reason) {
+			feedbackCtx, finish := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+			feedbackErr := feedback.RecordBorrowGatewayOutcome(feedbackCtx, acquisition, BorrowGatewayOutcome{
+				CandidateID: c.details.CandidateID, CookieHash: borrowHash(c.cookie.Value), Gateway: c.details.Gateway,
+				StartedAt: *c.details.AcquisitionStartedAt, Reason: reason,
+			})
+			finish()
+			if feedbackErr != nil {
+				slog.Warn("borrow_gateway_feedback_write_failed", "target_id", target.AccountID)
+				emitCandidate(c, "candidate", "gateway_feedback_unavailable")
+			}
+		}
 		if result.Verdict == OpenAICodexStateHealthy || result.Verdict == OpenAICodexStateDegraded || result.Failure == borrowContinueTimeoutReason || result.Failure == "route_changed" {
 			if r, ok := s.repo.(BorrowCandidateRepository); ok {
 				recordCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
@@ -1247,15 +1277,15 @@ func (s *TicketBorrowService) runTarget(parent context.Context, target BorrowTar
 		if recoveryDelay > 0 {
 			reason = waitReason
 		}
-		// The 150-second batch deadline may fire while a probe is reading. Its
-		// outcome still needs to enter recovery under the same fenced lease.
+		// Persist completed outcomes even when the task was cancelled while
+		// reading; cleanup still uses the same fenced lease.
 		outcomeCtx, finishOutcome := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 		outcomeErr := s.repo.RecordProbeOutcome(outcomeCtx, target.AccountID, lease, reason, recoveryDelay)
 		finishOutcome()
 		if outcomeErr != nil {
 			reason = "source_store_unavailable"
 			emitCandidate(c, "target", reason)
-			break
+			return false
 		}
 		emitCandidate(c, "target", reason)
 		if result.Failure == OpenAICodexStateFailureRateLimited {
@@ -1264,34 +1294,130 @@ func (s *TicketBorrowService) runTarget(parent context.Context, target BorrowTar
 				delay = result.RetryAfter
 			}
 			reason = "target_rate_limited"
-			return
+			return false
 		}
 		if result.Failure == OpenAICodexStateFailureAccountError {
 			delay = recoveryDelay
 			reason = "target_credentials_unavailable"
-			return
+			return false
 		}
 		if ctx.Err() != nil {
 			// Cleanup and FinishJob have independent bounded contexts. Do not use
 			// an expired work context for another read and call it a store outage.
-			return
+			return false
 		}
 		if reason != "target_probe_passed" && !settings.Replenishment.Allows(target.AccountID) {
 			if e := s.repo.CheckAcquisition(ctx, acquisition); e != nil {
 				reason = borrowAcquisitionReason(e)
-				return
+				return false
 			}
 		}
 		// Drain acquisitions before ending the leased job; no orphaned source work.
-		if reason == "target_probe_passed" && !settings.Replenishment.Allows(target.AccountID) {
+		if reason == "target_probe_passed" && !settings.Replenishment.Allows(target.AccountID) && !sharedPool {
 			// The route is already published and recovery state persisted. Cancel
 			// speculative source work before draining so a slow exit cannot retain
-			// shared source/target leases until the whole batch deadline.
-			cancel()
-			return
+			// shared source/target leases after demand has closed.
+			cancelCause(borrowCancelBatchSuccess)
+			return false
 		}
+		return true
+	}
+	needed := func() (bool, error) {
+		if e := s.repo.CheckAcquisition(ctx, acquisition); e != nil {
+			return false, e
+		}
+		if r, ok := s.repo.(BorrowInventoryRepository); ok {
+			inv, e := r.Inventory(ctx, acquisition.TargetID, acquisition.Identity)
+			if e != nil {
+				return false, e
+			}
+			// Both modes follow current demand, never the task's initial state.
+			// A leased explicit refresh may take one wave while healthy.
+			return inv.Count < inv.Desired || inv.State == "renew" || !processed, nil
+		}
+		return true, nil
+	}
+	if sharedPool {
+		poolReason := s.consumeCandidatePool(ctx, pool, acquisition, capacity, needed, verify, func(out verification) (bool, string) {
+			keep := consume(out)
+			return keep, reason
+		})
+		if poolReason != "" {
+			reason = poolReason
+		}
+		return
+	}
+	pipeline := borrowCandidatePipeline{
+		capacity: capacity, continuous: feedback != nil && !diagnostic, sources: batch,
+		needed: func() bool {
+			need, e := needed()
+			if e != nil {
+				reason = borrowAcquisitionReason(e)
+			}
+			return e == nil && need
+		},
+		acquire: func(source BorrowSource) (candidate, error) {
+			details := &BorrowCandidateDetails{CandidateID: uuid.NewString(), BatchID: lease}
+			cookie, expires, e := s.acquireSourceObserved(ctx, source, settings, details)
+			acquiredMu.Lock()
+			if !errors.Is(e, errBorrowSourceDeferred) && ctx.Err() == nil {
+				acquiredCount++
+			}
+			acquiredMu.Unlock()
+			if e == nil {
+				allocated.Store(details.Environment.ID, true)
+			}
+			return candidate{source: source.ID, cookie: cookie, expires: expires, details: details}, e
+		},
+		verify: verify, consume: consume,
+		priorities: func() map[string]time.Time {
+			if feedback == nil {
+				return nil
+			}
+			priorities, e := feedback.BorrowGatewayPriorities(ctx, acquisition)
+			if e != nil {
+				slog.Warn("borrow_gateway_feedback_read_failed", "target_id", target.AccountID)
+				_ = s.repo.Event(ctx, BorrowEvent{TargetID: target.AccountID, Stage: "candidate", Reason: "gateway_feedback_unavailable"})
+			}
+			return priorities
+		},
+		selected: func(c candidate, demoted, promoted bool) {
+			c.details.GatewayPriority = "normal"
+			if promoted {
+				c.details.GatewayPriority = "prioritized"
+				emitCandidate(c, "candidate", "candidate_gateway_prioritized")
+			}
+			if demoted {
+				c.details.GatewayPriority = "recheck"
+				emitCandidate(c, "candidate", "candidate_gateway_recheck")
+			}
+		},
+		discard: func(out verification) {
+			defer releaseCandidate(out.candidate)
+			cleanup, finish := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+			defer finish()
+			if out.result != nil {
+				waitReason, wait := borrowProbeUpstreamWait(out.result)
+				if wait > 0 {
+					_ = s.repo.RecordProbeOutcome(cleanup, target.AccountID, lease, waitReason, wait)
+					emitCandidate(out.candidate, "target", waitReason)
+					return
+				}
+			}
+			out.candidate.details.CancellationCause = borrowCancellation(ctx, nil)
+			outcome := "candidate_unused_after_stop"
+			if reason == "target_probe_passed" {
+				outcome = "candidate_unused_after_success"
+			}
+			emitCandidate(out.candidate, "candidate", outcome)
+		},
+	}
+	pipeline.run(ctx, cancel)
+	if diagnostic && scanProcessed == 0 && reason == "no_candidate" && acquiredCount > 0 {
+		scanProcessed = 1
 	}
 }
+
 func (s *TicketBorrowService) acquireSource(ctx context.Context, source BorrowSource, settings BorrowSettings) (cookie *http.Cookie, expires time.Time, err error) {
 	return s.acquireSourceObserved(ctx, source, settings, &BorrowCandidateDetails{CandidateID: uuid.NewString()})
 }
@@ -1302,12 +1428,22 @@ func (s *TicketBorrowService) acquireSourceObserved(ctx context.Context, source 
 	}
 	ctx = WithHTTPUpstreamRedirectsDisabled(context.WithValue(ctx, borrowInternalKey{}, true))
 	acquisition, ok := BorrowAcquisitionFromContext(ctx)
+	poolAcquisition, pooled := BorrowPoolAcquisitionFromContext(ctx)
 	environments, hasEnvironments := s.repo.(BorrowCandidateEnvironmentRepository)
 	permits, hasPermits := s.repo.(BorrowSourcePermitRepository)
-	if !ok || !hasEnvironments || !hasPermits {
+	if (!ok && !pooled) || !hasEnvironments || !hasPermits {
 		return nil, expires, ErrBorrowUnavailable
 	}
-	if err = s.repo.CheckAcquisition(ctx, acquisition); err != nil {
+	if pooled {
+		pool, available := s.repo.(BorrowCandidatePoolRepository)
+		if !available || poolAcquisition.ID != details.CandidateID || poolAcquisition.SourceID != source.ID {
+			return nil, expires, ErrBorrowUnavailable
+		}
+		err = pool.CheckCandidatePoolAcquisition(ctx, poolAcquisition)
+	} else {
+		err = s.repo.CheckAcquisition(ctx, acquisition)
+	}
+	if err != nil {
 		return nil, expires, errBorrowSourceDeferred
 	}
 	lease := uuid.NewString()
@@ -1318,9 +1454,18 @@ func (s *TicketBorrowService) acquireSourceObserved(ctx context.Context, source 
 		details.AcquisitionIdentity = BorrowAcquisitionSelf
 	}
 	details.SourceAccountID = source.AccountID
+	var releaseSlot func()
+	defer func() {
+		if releaseSlot != nil {
+			releaseSlot()
+		}
+	}()
 	defer func() {
 		cleanup, stop := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 		defer stop()
+		if details.CancellationCause == "" {
+			details.CancellationCause = borrowCancellation(ctx, err)
+		}
 		_ = permits.CancelSourceAttempt(cleanup, lease)
 		_ = permits.SourceAttemptCompleted(cleanup, lease)
 		if source.ID > 0 {
@@ -1336,6 +1481,12 @@ func (s *TicketBorrowService) acquireSourceObserved(ctx context.Context, source 
 		return nil, expires, err
 	}
 	for {
+		if source.ID == 0 {
+			releaseSlot, err = acquireBorrowProbeSlot(ctx, 0)
+			if err != nil {
+				return nil, expires, err
+			}
+		}
 		var granted bool
 		granted, err = permits.GrantSourceAttempt(ctx, source.ID, lease)
 		if err != nil {
@@ -1351,6 +1502,10 @@ func (s *TicketBorrowService) acquireSourceObserved(ctx context.Context, source 
 		}
 		if granted {
 			break
+		}
+		if releaseSlot != nil {
+			releaseSlot()
+			releaseSlot = nil
 		}
 		timer := time.NewTimer(250 * time.Millisecond)
 		select {
@@ -1390,12 +1545,17 @@ func (s *TicketBorrowService) acquireSourceObserved(ctx context.Context, source 
 		reason = "source_account_unavailable"
 		return nil, expires, err
 	}
-	// Key allocation by the target's upstream identity, including duplicate rows.
-	targetAccount, err := s.owner.accountRepo.GetByID(ctx, acquisition.TargetID)
-	if err != nil || targetAccount == nil {
-		return nil, expires, ErrBorrowUnavailable
+	// Shared source acquisition owns a neutral environment. Ordinary/self
+	// acquisition keeps allocation keyed to the existing target identity.
+	allocationIdentity := "shared-candidate-pool"
+	if !pooled {
+		targetAccount, e := s.owner.accountRepo.GetByID(ctx, acquisition.TargetID)
+		if e != nil || targetAccount == nil {
+			return nil, expires, ErrBorrowUnavailable
+		}
+		allocationIdentity = borrowProxyIdentity(targetAccount)
 	}
-	env, err := environments.AllocateCandidateEnvironment(ctx, details.CandidateID, borrowProxyIdentity(targetAccount))
+	env, err := environments.AllocateCandidateEnvironment(ctx, details.CandidateID, allocationIdentity)
 	if err != nil {
 		reason = "source_proxy_pool_unavailable"
 		return nil, expires, err
@@ -1457,10 +1617,20 @@ func (s *TicketBorrowService) acquireSourceObserved(ctx context.Context, source 
 		}
 		resp, e := s.owner.httpUpstream.DoWithTLS(req, env.Proxy, account.ID, 1, env.Fingerprint.Profile)
 		if resp != nil {
+			balancerHash, routeHash, pairHash := borrowCookieResponseHashes(resp.Cookies())
+			if balancerHash != "" {
+				details.SourceBalancerHash = balancerHash
+			}
+			if pairHash != "" {
+				details.SourceCookiePairHash = pairHash
+			}
 			for _, c := range resp.Cookies() {
 				if c.Name == "__oailb" {
 					copy := *c
 					cookie = &copy
+					if routeHash != "" {
+						details.CookieHash = routeHash
+					}
 					observed = time.Now()
 				}
 			}
@@ -1468,8 +1638,15 @@ func (s *TicketBorrowService) acquireSourceObserved(ctx context.Context, source 
 		return resp, e
 	})
 	details.SourceNetworkMS = time.Since(networkStarted).Milliseconds()
+	details.SourceHTTP = shot.diagnostic
+	if shot.diagnostic != nil {
+		details.CancellationCause = shot.diagnostic.CancellationCause
+	}
 	if sendErr == nil && shot.status == 200 && shot.streamErr == nil && shot.failure == "" && cookie != nil && cookie.Value != "" && cookie.MaxAge >= 0 && borrowGateway(cookie.Value) != "" {
-		details.CookieHash, details.Gateway = borrowHash(cookie.Value), borrowGateway(cookie.Value)
+		if details.CookieHash == "" {
+			details.CookieHash = borrowHash(cookie.Value)
+		}
+		details.Gateway = borrowGateway(cookie.Value)
 		details.CookieObservedAt = &observed
 		// Persist the actual Cookie deadline independently from the local cutoff.
 		seconds := settings.AdmissionSeconds()
@@ -1501,6 +1678,8 @@ func (s *TicketBorrowService) acquireSourceObserved(ctx context.Context, source 
 			return nil, expires, ErrBorrowCandidateExpiry
 		}
 		reason = "source_cookie_acquired"
+		acquired := time.Now()
+		details.SourceAcquiredAt = &acquired
 		return cookie, expires, nil
 	}
 	switch {
@@ -1512,6 +1691,19 @@ func (s *TicketBorrowService) acquireSourceObserved(ctx context.Context, source 
 		reason = "source_credentials_unavailable"
 	case ctx.Err() != nil:
 		reason = "source_acquisition_cancelled"
+	}
+	if details.SourceHTTP != nil && details.SourceHTTP.ErrorClass == "" {
+		switch {
+		case shot.status != 200:
+			details.SourceHTTP.ErrorClass = "upstream_http_error"
+		case shot.failure != "":
+			details.SourceHTTP.ErrorClass = "upstream_stream_error"
+		case shot.streamErr != nil:
+			details.SourceHTTP.ErrorClass = "incomplete_stream"
+		default:
+			details.SourceHTTP.ErrorClass = "missing_route_cookie"
+		}
+		details.SourceHTTP.FailureStage = "response_validation"
 	}
 	// A retry starts a new candidate, consumes a new permit and gets a fresh environment.
 	return nil, expires, ErrBorrowUnavailable

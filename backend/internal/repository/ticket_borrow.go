@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -247,8 +248,8 @@ func (r *ticketBorrowRepository) SaveSettings(ctx context.Context, s service.Bor
 	return tx.Commit()
 }
 
-const borrowTargetSelect = `SELECT a.id,a.name,COALESCE(t.enabled,false),COALESCE(t.revision,0),COALESCE(t.cursor,0),COALESCE(t.refresh_requested,false),COALESCE(t.scan_sources,'[]'::jsonb),COALESCE(t.scan_offset,0),COALESCE(t.phase,'waiting'),COALESCE(t.last_reason,''),COALESCE(t.next_attempt_at,NOW()),clock_timestamp(),t.upstream_wait_until,COALESCE(t.cooldown_seconds,0),COALESCE(t.recovery_level,0),COALESCE(t.consecutive_failures,0),COALESCE(t.recovery_epoch,0),t.last_request_started_at,t.last_request_finished_at,
- (SELECT count(*) FROM ticket_borrow_requests x WHERE x.target_id=a.id AND x.kind='probe' AND x.finished_at IS NULL AND x.lease_until>clock_timestamp()),
+var borrowTargetSelect = `SELECT a.id,a.name,COALESCE(t.enabled,false),COALESCE(t.revision,0),COALESCE(t.cursor,0),COALESCE(t.refresh_requested,false),COALESCE(t.scan_sources,'[]'::jsonb),COALESCE(t.scan_offset,0),COALESCE(t.phase,'waiting'),COALESCE(t.last_reason,''),COALESCE(t.next_attempt_at,NOW()),clock_timestamp(),t.upstream_wait_until,COALESCE(t.cooldown_seconds,0),COALESCE(t.recovery_level,0),COALESCE(t.consecutive_failures,0),COALESCE(t.recovery_epoch,0),t.last_request_started_at,t.last_request_finished_at,
+ (` + strings.ReplaceAll(borrowBackgroundInflight, "$1", "a.id") + `),
  (SELECT count(*) FROM ticket_borrow_requests x WHERE x.target_id=a.id AND x.kind='probe' AND x.reserved_at>clock_timestamp()-INTERVAL '60 seconds'),t.upstream_wait_until,COALESCE(t.upstream_wait_reason,''),t.budget_wait_until,COALESCE(t.probe_policy_revision,0),CASE WHEN t.probe_policy_override THEN t.probe_concurrency ELSE s.probe_concurrency END,` + borrowRenewalLead + `,NOT COALESCE(t.probe_policy_override,false),s.probe_concurrency,` + borrowRenewalLead + `,COALESCE(t.acquisition_identity,'self'),COALESCE(t.acquisition_revision,0) FROM accounts a LEFT JOIN ticket_borrow_targets t ON t.account_id=a.id JOIN ticket_borrow_settings s ON s.id=1 `
 
 func scanBorrowTarget(row interface{ Scan(...any) error }) (service.BorrowTarget, error) {
@@ -381,9 +382,11 @@ func (r *ticketBorrowRepository) AcquireJob(ctx context.Context, kind string, id
 	}
 	defer tx.Rollback()
 	extra := ""
+	leaseDuration := 180 * time.Second // Source HTTP ownership, separate from target tasks.
 	var inventory *service.BorrowInventory
 	var acquisition service.BorrowAcquisition
 	if kind == "target" {
+		leaseDuration = service.BorrowTargetLeaseTTL
 		// Lock/reap before eligibility so orphaned requests conservatively extend silence.
 		if _, err = tx.ExecContext(ctx, `SELECT account_id FROM ticket_borrow_targets WHERE account_id=$1 FOR UPDATE`, id); err != nil {
 			return false, err
@@ -411,12 +414,12 @@ func (r *ticketBorrowRepository) AcquireJob(ctx context.Context, kind string, id
 	}
 	suffix := " AND (SELECT running FROM ticket_borrow_settings WHERE id=1)"
 	if kind == "target" {
-		suffix += " AND COALESCE(upstream_wait_until<=clock_timestamp(),true) AND COALESCE(budget_wait_until<=clock_timestamp(),true) AND NOT EXISTS(SELECT 1 FROM ticket_borrow_requests x WHERE x.target_id=$1 AND x.kind='probe' AND x.finished_at IS NULL AND x.lease_until>clock_timestamp())"
+		suffix += " AND COALESCE(upstream_wait_until<=clock_timestamp(),true) AND COALESCE(budget_wait_until<=clock_timestamp(),true) AND (" + borrowBackgroundInflight + ")=0"
 	}
 	if kind == "source" {
 		suffix += " AND next_attempt_at<=NOW() AND deleted_at IS NULL"
 	}
-	res, err := tx.ExecContext(ctx, `UPDATE `+table+` SET lease_token=$2,lease_until=NOW()+INTERVAL '180 seconds',cursor=cursor+1`+extra+` WHERE `+key+`=$1 AND enabled AND (lease_until IS NULL OR lease_until<=NOW())`+suffix, id, token)
+	res, err := tx.ExecContext(ctx, `UPDATE `+table+` SET lease_token=$2,lease_until=clock_timestamp()+$3*INTERVAL '1 millisecond',cursor=cursor+1`+extra+` WHERE `+key+`=$1 AND enabled AND (lease_until IS NULL OR lease_until<=clock_timestamp())`+suffix, id, token, leaseDuration.Milliseconds())
 	if err != nil {
 		return false, err
 	}
@@ -522,6 +525,31 @@ func (r *ticketBorrowRepository) Publish(ctx context.Context, route *service.Bor
 	}
 	if err = checkBorrowAcquisition(ctx, tx, service.BorrowAcquisition{TargetID: route.TargetID, Revision: route.TargetRevision, Lease: lease, Identity: route.IdentityHash}, false); err != nil {
 		return service.ErrBorrowConflict
+	}
+	if route.CandidateID != "" {
+		var pooled bool
+		if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM ticket_borrow_candidate_pool WHERE id=$1)`, route.CandidateID).Scan(&pooled); err != nil {
+			return err
+		}
+		if pooled {
+			// Target -> pool is also the claim lock order. Keep the ownership
+			// fence through commit so a late result cannot publish after cleanup.
+			if err = lockBorrowCandidatePool(ctx, tx); err != nil {
+				return err
+			}
+			var valid bool
+			if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM ticket_borrow_candidate_pool p
+ JOIN ticket_borrow_candidate_environments e ON e.id=p.id CROSS JOIN ticket_borrow_settings cfg
+ WHERE cfg.id=1 AND p.settings_revision=cfg.revision AND p.id=$1 AND p.state='claimed'
+ AND p.target_id=$2 AND p.target_revision=$3 AND p.identity_hash=$4 AND p.claim_token=$5
+ AND p.cookie_hash=$6 AND p.lease_until>clock_timestamp() AND e.released_at IS NULL
+ AND p.admission_until>clock_timestamp() AND e.admission_until>clock_timestamp())`, route.CandidateID, route.TargetID, route.TargetRevision, route.IdentityHash, lease, route.CookieHash).Scan(&valid); err != nil {
+				return err
+			}
+			if !valid {
+				return service.ErrBorrowConflict
+			}
+		}
 	}
 	if route.AcquisitionStartedAt == nil || route.AcquisitionStartedAt.IsZero() || route.AdmissionUntil.IsZero() {
 		return service.ErrBorrowCandidateExpiry
@@ -674,10 +702,20 @@ func (r *ticketBorrowRepository) Cleanup(ctx context.Context) error {
 		return err
 	}
 	// Keep other diagnostic history and continuation tombstones as before.
-	for _, query := range []string{`DELETE FROM ticket_borrow_candidate_environments WHERE lease_until<clock_timestamp()-INTERVAL '7 days'`, `DELETE FROM ticket_borrow_source_intents WHERE expires_at<=clock_timestamp()`, `DELETE FROM ticket_borrow_candidate_results WHERE expires_at<clock_timestamp()-INTERVAL '7 days'`, `DELETE FROM ticket_borrow_route_leases WHERE lease_until<=clock_timestamp()`, `DELETE FROM ticket_borrow_rotation_jobs WHERE finished_at<clock_timestamp()-INTERVAL '7 days' AND NOT EXISTS(SELECT 1 FROM ticket_borrow_rotation_accounts x WHERE x.active_job=ticket_borrow_rotation_jobs.id)`, `DELETE FROM ticket_borrow_requests WHERE finished_at<clock_timestamp()-INTERVAL '7 days'`, `DELETE FROM ticket_borrow_routes WHERE expires_at<NOW()-INTERVAL '1 day'`, `DELETE FROM ticket_borrow_rejections WHERE expires_at<NOW()`, `DELETE FROM ticket_borrow_cookie_deadlines WHERE observed_at<NOW()-INTERVAL '30 days'`} {
+	for _, query := range []string{`DELETE FROM ticket_borrow_gateway_outcomes WHERE created_at<clock_timestamp()-INTERVAL '7 days'`, `DELETE FROM ticket_borrow_gateway_feedback WHERE updated_at<clock_timestamp()-INTERVAL '7 days'`, `DELETE FROM ticket_borrow_candidate_environments WHERE lease_until<clock_timestamp()-INTERVAL '7 days'`, `DELETE FROM ticket_borrow_source_intents WHERE expires_at<=clock_timestamp()`, `DELETE FROM ticket_borrow_candidate_results WHERE expires_at<clock_timestamp()-INTERVAL '7 days'`, `DELETE FROM ticket_borrow_route_leases WHERE lease_until<=clock_timestamp()`, `DELETE FROM ticket_borrow_rotation_jobs WHERE finished_at<clock_timestamp()-INTERVAL '7 days' AND NOT EXISTS(SELECT 1 FROM ticket_borrow_rotation_accounts x WHERE x.active_job=ticket_borrow_rotation_jobs.id)`, `DELETE FROM ticket_borrow_requests WHERE finished_at<clock_timestamp()-INTERVAL '7 days'`, `DELETE FROM ticket_borrow_routes WHERE expires_at<NOW()-INTERVAL '1 day'`, `DELETE FROM ticket_borrow_rejections WHERE expires_at<NOW()`, `DELETE FROM ticket_borrow_cookie_deadlines WHERE observed_at<NOW()-INTERVAL '30 days'`, `DELETE FROM ticket_borrow_compatibility WHERE updated_at<clock_timestamp()-INTERVAL '7 days'`} {
 		if _, err := r.db.ExecContext(ctx, query); err != nil {
 			return err
 		}
+	}
+	// Pool payloads are cleared at completion. Keep the ordinary seven-day
+	// audit horizon and wait until older referenced HTTP/environment rows are gone.
+	_, err := r.db.ExecContext(ctx, `DELETE FROM ticket_borrow_candidate_pool p
+ WHERE p.finished_at<clock_timestamp()-INTERVAL '7 days'
+ AND NOT EXISTS(SELECT 1 FROM ticket_borrow_candidate_environments e WHERE e.pool_candidate_id=p.id)
+ AND NOT EXISTS(SELECT 1 FROM ticket_borrow_source_attempts q WHERE q.pool_candidate_id=p.id)
+ AND NOT EXISTS(SELECT 1 FROM ticket_borrow_source_intents i WHERE i.pool_candidate_id=p.id)`)
+	if err != nil {
+		return err
 	}
 	return nil
 }

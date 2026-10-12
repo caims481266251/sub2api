@@ -265,7 +265,7 @@ func TestTicketBorrowConcurrentConversationsShareRouteNotTickets(t *testing.T) {
 	wg.Wait()
 	require.EqualValues(t, 10, calls.Load())
 }
-func TestTicketBorrowBusinessFailureRevokesOnlyItsBinding(t *testing.T) {
+func TestTicketBorrowBusinessRoutingChangePreservesPublishedRoutes(t *testing.T) {
 	s, r := borrowFixture()
 	_, e := s.ForwardHTTP(borrowRequest(t), "", 11, 1, nil, func(*http.Request, string, int64, int, *tlsfingerprint.Profile) (*http.Response, error) {
 		copy := *r.route
@@ -273,9 +273,8 @@ func TestTicketBorrowBusinessFailureRevokesOnlyItsBinding(t *testing.T) {
 		r.route = &copy
 		return &http.Response{StatusCode: 200, Header: http.Header{"X-Codex-Turn-State": []string{"changed"}}, Body: http.NoBody}, nil
 	})
-	require.ErrorIs(t, e, ErrBorrowResponseRejected)
-	require.False(t, IsBorrowRouteUnavailable(e), "a response identity change is not a pre-send route rejection")
-	require.Equal(t, []string{"route-a"}, r.revoked)
+	require.NoError(t, e, "a changed response must finish through normal business forwarding")
+	require.Empty(t, r.revoked)
 	require.NotNil(t, r.route)
 	require.Equal(t, "route-b", r.route.ID)
 }
@@ -502,5 +501,8 @@ func (r *borrowTestRepo) CheckAcquisition(ctx context.Context, a BorrowAcquisiti
 		return ErrBorrowRouteReady
 	}
 	return nil
+}
+func (r *borrowTestRepo) RenewTargetLease(ctx context.Context, a BorrowAcquisition) error {
+	return r.CheckAcquisition(ctx, a)
 }
 func (r *borrowTestRepo) ReserveSourceAttempt(context.Context, int64, string) error { return nil }
