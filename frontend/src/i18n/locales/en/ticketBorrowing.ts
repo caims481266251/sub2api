@@ -1,9 +1,11 @@
 export default {
   candidates: 'Candidate pool',
   candidatePool: {
+    production: { filling: 'Replenishing available capacity within source concurrency and budgets', paused: 'Probing paused; no new acquisitions', full: 'Pool full; replenishment resumes after consumption', no_targets: 'No enabled source-mode targets; production paused' },
+    cookieRemaining: 'Cookie declares {seconds}s remaining', expiryUnknown: 'Cookie expiry is unknown', retainedRemaining: 'Local retention: {seconds}s remaining', queueAge: 'Queued for {seconds}s', cookieExpiresAt: 'Declared Cookie expiry',
     title: 'Candidate pool', occupancy: 'Occupied / Capacity', waitingTargets: 'Targets awaiting candidates', demandSlots: 'Open demand slots: {count}',
-    hint: 'Sources acquire candidates on demand. Acquisition, queued candidates and verification all occupy capacity until published or finished. Capacity is a ceiling, not a fill target. Self acquisition bypasses this pool.',
-    capacity: 'Pool capacity', capacityHint: 'Default: 64, shared globally. Reductions drain existing work naturally; increases allow new acquisitions on demand.',
+    hint: 'Sources replenish available pool capacity and pause when full. Acquiring, queued and verifying candidates share the limit. Targets can claim immediately; self acquisition bypasses the shared pool.',
+    capacity: 'Pool capacity', capacityHint: 'Default 64, shared globally. A smaller limit pauses production until capacity is freed. Source concurrency and request budgets still apply.',
     capacityInvalid: 'Enter a whole number from 1 to 1024.', useSaved: 'Use saved value', saved: 'Capacity saved and applied.',
     conflict: 'Another operation changed the capacity. Your input has been kept. Review the latest configuration before saving.', saveFailed: 'Could not save capacity. Refresh and retry.',
     draining: 'Occupancy exceeds the new limit. New acquisitions are paused until existing work finishes.',
@@ -18,7 +20,7 @@ export default {
   },
   simplified: {
     "admissionWindow": "Route admission window",
-    "admissionHint": "Starts when acquisition begins, including acquisition and verification time. New requests stop at the cutoff; admitted requests can finish.",
+    "admissionHint": "Starts at the route’s first successful publication, bounded by Cookie and credential expiry. New admission stops at the cutoff; sent requests finish normally.",
     "admissionError": "Enter a whole number from 1 to 240 seconds.",
     "automaticRefill": "The scheduler calculates renewal timing. Rolling replenishment is off by default; enabling it maintains spare routes with a fresh environment for each acquisition.",
     "identity": "Acquisition identity",
@@ -33,6 +35,8 @@ export default {
     "run": "Start acquisition"
 },
   tags: {
+    candidateEnvironmentInvalid: "Candidate environment or credentials are invalid",
+    candidatePoolUpgraded: "Inventory replaced after lifecycle upgrade",
     gatewayNormal: "Normal verification order",
     gatewayPrioritized: "Prioritized by gateway feedback",
     gatewayRecheck: "Deprioritized gateway scheduled for recheck",
@@ -692,7 +696,7 @@ export default {
 
     acquisitionIdentity: "Acquisition identity",
     acquisitionStarted: "Acquisition started",
-    admissionUntil: "Admission cutoff",
+    admissionUntil: "Candidate retention cutoff",
     upstreamExpires: "Upstream Cookie expiry",
     poolEntry: "Proxy pool entry",
     allocationRound: "Allocation round",

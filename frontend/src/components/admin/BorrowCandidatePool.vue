@@ -22,6 +22,7 @@
         </button>
         <div class="rounded-lg bg-gray-50 p-3 dark:bg-dark-900"><div class="text-xs text-gray-500">{{ t('ticketBorrowing.candidatePool.waitingTargets') }}</div><div class="mt-1 text-xl font-semibold tabular-nums">{{ snapshot?.summary.waiting_targets ?? '—' }}</div><p v-if="snapshot" class="mt-1 text-xs text-gray-500">{{ t('ticketBorrowing.candidatePool.demandSlots', { count: snapshot.summary.demand_slots }) }}</p></div>
       </div>
+      <p v-if="snapshot?.summary.production_state" class="text-xs text-gray-600 dark:text-gray-300" data-testid="pool-production">{{ t(`ticketBorrowing.candidatePool.production.${snapshot.summary.production_state}`) }}</p>
       <p class="text-xs leading-5 text-gray-500 dark:text-gray-400">{{ t('ticketBorrowing.candidatePool.hint') }}</p>
       <p v-if="snapshot && snapshot.summary.occupied > snapshot.summary.capacity" class="rounded-lg bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-900/20 dark:text-amber-300" data-testid="pool-over-capacity">{{ t('ticketBorrowing.candidatePool.draining') }}</p>
       <form class="flex flex-wrap items-end gap-3 border-t border-gray-100 pt-3 dark:border-dark-700" @submit.prevent="saveCapacity">
@@ -51,10 +52,10 @@
           <tbody>
             <tr v-for="item in snapshot?.items ?? []" :key="item.id" :data-pool-candidate="item.id" class="border-t border-gray-100 dark:border-dark-700">
               <td><button class="break-all text-left font-mono text-primary-600" :title="item.id" @click="openDetail(item.id)">{{ item.id.slice(0, 12) }}</button><div class="mt-1 break-all text-gray-500">{{ item.gateway || '—' }}</div></td>
-              <td :data-label="t('ticketBorrowing.candidatePool.state')"><BorrowTag kind="pool" :value="item.state" /></td>
+              <td :data-label="t('ticketBorrowing.candidatePool.state')"><BorrowTag kind="pool" :value="item.state" /><div v-if="item.gateway_priority" class="mt-1"><BorrowTag kind="state" :value="item.gateway_priority === 'recheck' ? 'gatewayRecheck' : item.gateway_priority === 'prioritized' ? 'gatewayPrioritized' : 'gatewayNormal'" /></div></td>
               <td :data-label="t('ticketBorrowing.candidatePool.sourceTarget')"><div>{{ item.source_name || '—' }} <span class="text-gray-400">#{{ item.source_account_id || item.source_id }}</span></div><div class="mt-1 text-gray-500">→ {{ item.target_id ? `${item.target_name} #${item.target_id}` : t('ticketBorrowing.candidatePool.unclaimed') }}</div></td>
-              <td :data-label="t('ticketBorrowing.candidatePool.timing')" class="tabular-nums"><div>{{ date(item.created_at) }}</div><div class="mt-1 text-gray-500">{{ t('ticketBorrowing.candidatePool.stageElapsed', { seconds: elapsed(item) }) }}</div></td>
-              <td :data-label="t('ticketBorrowing.candidatePool.remaining')" class="tabular-nums"><template v-if="item.state !== 'finished'"><div>{{ item.admission_until ? t('ticketBorrowing.seconds', { count: remaining(item.admission_until) }) : '—' }}</div><div v-if="item.queue_until" class="mt-1 text-gray-500">{{ t('ticketBorrowing.candidatePool.queueRemaining', { seconds: remaining(item.queue_until) }) }}</div></template><span v-else>—</span></td>
+              <td :data-label="t('ticketBorrowing.candidatePool.timing')" class="tabular-nums"><div>{{ date(item.created_at) }}</div><div class="mt-1 text-gray-500">{{ t('ticketBorrowing.candidatePool.stageElapsed', { seconds: elapsed(item) }) }}</div><div v-if="item.enqueued_at" class="mt-1 text-gray-500">{{ t('ticketBorrowing.candidatePool.queueAge', { seconds: queueAge(item) }) }}</div></td>
+              <td :data-label="t('ticketBorrowing.candidatePool.remaining')" class="tabular-nums"><template v-if="item.state !== 'finished'"><div>{{ item.cookie_expires_at ? t('ticketBorrowing.candidatePool.cookieRemaining', { seconds: remaining(item.cookie_expires_at) }) : t('ticketBorrowing.candidatePool.expiryUnknown') }}</div><div v-if="item.admission_until" class="mt-1 text-gray-500">{{ t('ticketBorrowing.candidatePool.retainedRemaining', { seconds: remaining(item.admission_until) }) }}</div></template><span v-else>—</span></td>
               <td :data-label="t('ticketBorrowing.candidatePool.result')"><BorrowTag v-if="item.route_id" kind="state" value="published" /><BorrowTag v-else :value="item.reason" /></td>
               <td><div class="flex flex-wrap gap-2"><button class="text-primary-600" :data-pool-detail="item.id" @click="openDetail(item.id)">{{ t('ticketBorrowing.candidatePool.details') }}</button><button class="text-primary-600" @click="records(item)">{{ t('ticketBorrowing.management.relatedRecords') }}</button><button v-if="item.route_id && item.target_id" class="text-primary-600" @click="openTarget(item.target_id)">{{ t('ticketBorrowing.candidatePool.targetRoutes') }}</button></div></td>
             </tr>
@@ -155,12 +156,17 @@ function elapsed(item: BorrowCandidatePoolItem) {
   const start = item.claimed_at || item.enqueued_at || item.created_at
   return Math.max(0, ((item.finished_at ? Date.parse(item.finished_at) : now.value + offset.value) - Date.parse(start)) / 1000).toFixed(1)
 }
+function queueAge(item: BorrowCandidatePoolItem) {
+  if (!item.enqueued_at) return '0.0'
+  const end = item.claimed_at || item.finished_at
+  return Math.max(0, ((end ? Date.parse(end) : now.value + offset.value) - Date.parse(item.enqueued_at)) / 1000).toFixed(1)
+}
 const detailID = ref(''), detail = ref<BorrowCandidatePoolDetail>(), detailLoading = ref(false), detailError = ref('')
 let detailGeneration = 0
 const detailTimes = computed(() => [
   { key: 'createdAt', value: detail.value?.created_at }, { key: 'enqueuedAt', value: detail.value?.enqueued_at },
   { key: 'claimedAt', value: detail.value?.claimed_at }, { key: 'finishedAt', value: detail.value?.finished_at },
-  { key: 'admissionUntil', value: detail.value?.admission_until }
+  { key: 'admissionUntil', value: detail.value?.admission_until }, { key: 'cookieExpiresAt', value: detail.value?.cookie_expires_at }
 ])
 function closeDetail() { detailGeneration++; detailID.value = ''; detail.value = undefined; detailLoading.value = false; detailError.value = '' }
 function openDetail(id: string) { closeDetail(); detailID.value = id; void loadDetail() }

@@ -92,7 +92,7 @@ const base = '/admin/accounts/ticket-borrowing'
 
 export interface BorrowCandidatePoolConfig { capacity: number; revision: number }
 export interface BorrowCandidatePoolSummary extends BorrowCandidatePoolConfig {
-  running: boolean; occupied: number; acquiring: number; queued: number; claimed: number; waiting_targets: number; demand_slots: number
+  running: boolean; occupied: number; acquiring: number; queued: number; claimed: number; waiting_targets: number; demand_slots: number; production_state?: 'filling' | 'paused' | 'full' | 'no_targets'
 }
 export type BorrowCandidatePoolState = 'acquiring' | 'queued' | 'claimed' | 'finished'
 export interface BorrowCandidatePoolQuery {
@@ -101,7 +101,7 @@ export interface BorrowCandidatePoolQuery {
 export interface BorrowCandidatePoolItem {
   id: string; state: BorrowCandidatePoolState; source_id: number; source_account_id: number; source_name: string
   target_id: number; target_name: string; gateway: string; created_at: string; enqueued_at?: string; claimed_at?: string
-  finished_at?: string; admission_until?: string; queue_until?: string; reason: string; route_id?: string
+  finished_at?: string; admission_until?: string; cookie_expires_at?: string; gateway_priority?: string; reason: string; route_id?: string
 }
 export interface BorrowCandidatePoolPage {
   summary: BorrowCandidatePoolSummary; items: BorrowCandidatePoolItem[]; total: number; page: number; page_size: number; server_now: string

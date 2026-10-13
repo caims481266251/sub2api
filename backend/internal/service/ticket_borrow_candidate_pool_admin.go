@@ -29,13 +29,14 @@ func (c BorrowCandidatePoolConfig) Validate() error {
 
 type BorrowCandidatePoolSummary struct {
 	BorrowCandidatePoolConfig
-	Running        bool `json:"running"`
-	Acquiring      int  `json:"acquiring"`
-	Queued         int  `json:"queued"`
-	Claimed        int  `json:"claimed"`
-	Occupied       int  `json:"occupied"`
-	WaitingTargets int  `json:"waiting_targets"`
-	DemandSlots    int  `json:"demand_slots"`
+	ProductionState string `json:"production_state"`
+	Running         bool   `json:"running"`
+	Acquiring       int    `json:"acquiring"`
+	Queued          int    `json:"queued"`
+	Claimed         int    `json:"claimed"`
+	Occupied        int    `json:"occupied"`
+	WaitingTargets  int    `json:"waiting_targets"`
+	DemandSlots     int    `json:"demand_slots"`
 }
 
 type BorrowCandidatePoolQuery struct {
@@ -84,7 +85,8 @@ type BorrowCandidatePoolItem struct {
 	ClaimedAt       *time.Time `json:"claimed_at,omitempty"`
 	FinishedAt      *time.Time `json:"finished_at,omitempty"`
 	AdmissionUntil  *time.Time `json:"admission_until,omitempty"`
-	QueueUntil      *time.Time `json:"queue_until,omitempty"`
+	CookieExpiresAt *time.Time `json:"cookie_expires_at,omitempty"`
+	GatewayPriority string     `json:"gateway_priority,omitempty"`
 	Reason          string     `json:"reason"`
 	RouteID         string     `json:"route_id,omitempty"`
 }

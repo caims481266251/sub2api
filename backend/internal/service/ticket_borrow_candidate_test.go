@@ -39,6 +39,12 @@ func (r *borrowWorkerRepo) StartCandidateEnvironment(_ context.Context, id strin
 	e.AdmissionUntil = r.now.Add(230 * time.Second)
 	return e.StartedAt, e.AdmissionUntil, nil
 }
+func (r *borrowWorkerRepo) SetCandidateEnvironmentDeadline(_ context.Context, id, _ string, until time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.environments[id].AdmissionUntil = until
+	return nil
+}
 func (r *borrowWorkerRepo) CheckCandidateEnvironment(ctx context.Context, _ string) error {
 	if r.environmentCheck != nil {
 		return r.environmentCheck()

@@ -16,17 +16,18 @@ import (
 
 type targetLeaseFlowRepo struct {
 	*poolFlowRepo
-	leaseMu       sync.Mutex
-	token         string
-	until         time.Time
-	renewals      int
-	finished      bool
-	finishReason  string
-	renewAfterEnd bool
-	failAt        time.Time
-	blockRenewal  bool
-	readyAt       time.Time
-	produce       func()
+	leaseMu           sync.Mutex
+	token             string
+	until             time.Time
+	renewals          int
+	finished          bool
+	finishReason      string
+	renewAfterEnd     bool
+	failAt            time.Time
+	blockRenewal      bool
+	transientFailures int
+	readyAt           time.Time
+	produce           func()
 }
 
 func targetLeaseFixture() (*TicketBorrowService, *targetLeaseFlowRepo) {
@@ -41,6 +42,11 @@ func targetLeaseFixture() (*TicketBorrowService, *targetLeaseFlowRepo) {
 
 func (r *targetLeaseFlowRepo) RenewTargetLease(ctx context.Context, a BorrowAcquisition) error {
 	r.leaseMu.Lock()
+	if r.renewals > 0 && r.transientFailures > 0 {
+		r.transientFailures--
+		r.leaseMu.Unlock()
+		return context.DeadlineExceeded
+	}
 	if r.finished {
 		r.renewAfterEnd = true
 	}
@@ -59,6 +65,58 @@ func (r *targetLeaseFlowRepo) RenewTargetLease(ctx context.Context, a BorrowAcqu
 	r.until = time.Now().Add(BorrowTargetLeaseTTL)
 	r.renewals++
 	return nil
+}
+
+func (r *targetLeaseFlowRepo) renewalCount() int {
+	r.leaseMu.Lock()
+	defer r.leaseMu.Unlock()
+	return r.renewals
+}
+
+func TestBorrowTargetLeaseTransientFailurePausesThenResumes(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s, r := targetLeaseFixture()
+		r.transientFailures = 1
+		state := &borrowTargetLeaseState{}
+		ctx, cancel := context.WithCancelCause(context.WithValue(t.Context(), borrowTargetLeaseKey{}, state))
+		defer cancel(nil)
+		stop, err := s.keepTargetLease(ctx, BorrowAcquisition{Lease: r.token}, cancel)
+		require.NoError(t, err)
+		defer stop()
+		time.Sleep(10 * time.Second)
+		synctest.Wait()
+		state.mu.Lock()
+		paused := state.paused
+		state.mu.Unlock()
+		require.True(t, paused)
+		require.NoError(t, ctx.Err(), "a single database timeout must not cancel sent work")
+		ready := make(chan error, 1)
+		go func() { ready <- waitBorrowTargetLease(ctx) }()
+		synctest.Wait()
+		require.Empty(t, ready, "new work waits while renewal is uncertain")
+		time.Sleep(time.Second)
+		synctest.Wait()
+		require.NoError(t, <-ready)
+		require.NoError(t, ctx.Err())
+		require.Equal(t, 2, r.renewalCount())
+	})
+}
+
+func TestBorrowTargetLeaseWrongOwnerStopsImmediately(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s, r := targetLeaseFixture()
+		ctx, cancel := context.WithCancelCause(t.Context())
+		defer cancel(nil)
+		stop, err := s.keepTargetLease(ctx, BorrowAcquisition{Lease: r.token}, cancel)
+		require.NoError(t, err)
+		defer stop()
+		r.leaseMu.Lock()
+		r.token = "new-owner"
+		r.leaseMu.Unlock()
+		time.Sleep(borrowTargetLeaseRenewInterval)
+		synctest.Wait()
+		require.ErrorIs(t, context.Cause(ctx), borrowCancelTargetLeaseLost)
+	})
 }
 
 func (r *targetLeaseFlowRepo) CheckAcquisition(ctx context.Context, a BorrowAcquisition) error {
@@ -173,7 +231,7 @@ func TestBorrowTargetLeaseLateCandidatesCompleteWithoutBatchDeadline(t *testing.
 					require.NotNil(t, r.route)
 					require.WithinDuration(t, start.Add(arrival+40*time.Second), time.Now(), time.Second)
 					require.Equal(t, "target_probe_passed", r.finishReason)
-					require.GreaterOrEqual(t, r.renewals, 19, "ownership must be renewed during the wait and slow validation")
+					require.GreaterOrEqual(t, r.renewalCount(), 19, "ownership must be renewed during the wait and slow validation")
 					require.Equal(t, r.route.AcquisitionStartedAt.Add(230*time.Second), r.route.AdmissionUntil, "renewal must not stretch the original candidate cutoff")
 					require.True(t, r.finished)
 					require.True(t, r.until.IsZero(), "normal completion releases immediately")
@@ -181,9 +239,9 @@ func TestBorrowTargetLeaseLateCandidatesCompleteWithoutBatchDeadline(t *testing.
 						require.True(t, r.removed)
 						require.Equal(t, map[string]string{"late-candidate": "target_probe_passed"}, r.ended)
 					}
-					count := r.renewals
+					count := r.renewalCount()
 					time.Sleep(time.Minute)
-					require.Equal(t, count, r.renewals)
+					require.Equal(t, count, r.renewalCount())
 					require.False(t, r.renewAfterEnd, "renewal must be joined before FinishJob")
 				})
 			})
@@ -200,7 +258,7 @@ func TestBorrowTargetLeaseFailureStopsWaitingConsumer(t *testing.T) {
 				r.failAt, r.blockRenewal = start.Add(time.Second), blocked
 				s.runTarget(t.Context(), BorrowTarget{AccountID: 11, Revision: 2, AcquisitionIdentity: BorrowAcquisitionSource}, BorrowSettings{Running: true}, r.token)
 				require.Equal(t, "target_lease_lost", r.finishReason)
-				require.LessOrEqual(t, time.Since(start), 13*time.Second)
+				require.WithinDuration(t, start.Add(BorrowTargetLeaseTTL), time.Now(), time.Millisecond)
 				require.Nil(t, r.route)
 				require.Zero(t, r.claims)
 				require.True(t, r.removed)
@@ -242,15 +300,15 @@ func TestBorrowTargetLeaseContinuesWhileDemandDrains(t *testing.T) {
 		// Parent cancellation also leaves the owner alive during cleanup.
 		cancel(borrowCancelServiceShutdown)
 		synctest.Wait()
-		count := r.renewals
+		count := r.renewalCount()
 		time.Sleep(15 * time.Second)
 		synctest.Wait()
-		require.Greater(t, r.renewals, count)
+		require.Greater(t, r.renewalCount(), count)
 		stop()
 		require.NoError(t, r.FinishJob(t.Context(), "target", a.TargetID, a.Lease, "done", 0))
-		count = r.renewals
+		count = r.renewalCount()
 		time.Sleep(time.Minute)
-		require.Equal(t, count, r.renewals)
+		require.Equal(t, count, r.renewalCount())
 		require.False(t, r.renewAfterEnd)
 	})
 }

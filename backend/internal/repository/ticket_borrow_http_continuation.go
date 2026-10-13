@@ -23,7 +23,7 @@ func (r *ticketBorrowRepository) latestBusinessRoute(ctx context.Context, db bor
  WHERE b.target_id=$1 AND b.session_hash=$2 AND NOT r.validation_only`, id, key).Scan(&bound, &effective)
 		if errors.Is(err, sql.ErrNoRows) {
 			if response != "" {
-				return nil, service.ErrBorrowUnavailable
+				return nil, service.ErrBorrowContinuationBindingMissing
 			}
 		} else if err != nil {
 			return nil, err
@@ -42,7 +42,7 @@ func (r *ticketBorrowRepository) latestBusinessRoute(ctx context.Context, db bor
 
 func (r *ticketBorrowRepository) CheckHTTPContinuation(ctx context.Context, id int64, identity, response, session string) error {
 	if response == "" {
-		return service.ErrBorrowUnavailable
+		return service.ErrBorrowContinuationBindingMissing
 	}
 	_, err := r.latestBusinessRoute(ctx, r.db, id, identity, response, session, "")
 	return err
@@ -55,7 +55,7 @@ func (r *ticketBorrowRepository) CheckLatestRoute(ctx context.Context, id int64,
 
 func (r *ticketBorrowRepository) ReserveHTTPContinuation(ctx context.Context, id int64, identity, response, session, fresh, lease string) (*service.BorrowContinuationRoute, error) {
 	if response == "" {
-		return nil, service.ErrBorrowUnavailable
+		return nil, service.ErrBorrowContinuationBindingMissing
 	}
 	return r.reserveLatestBusinessRoute(ctx, id, identity, response, session, fresh, lease)
 }

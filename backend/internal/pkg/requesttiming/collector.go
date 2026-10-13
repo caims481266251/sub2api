@@ -18,28 +18,32 @@ type Span struct {
 	Attempt int     `json:"attempt,omitempty"`
 }
 type Attempt struct {
-	Model           string             `json:"model,omitempty"`
-	ReasoningEffort string             `json:"reasoning_effort,omitempty"`
-	RetryAfterMS    int64              `json:"retry_after_ms,omitempty"`
-	ReasoningEvents int                `json:"reasoning_events,omitempty"`
-	NoTextLongTail  bool               `json:"no_text_long_tail,omitempty"`
-	BorrowRouteID   string             `json:"borrow_route_id,omitempty"`
-	Terminal        string             `json:"terminal,omitempty"`
-	CleanupCanceled bool               `json:"cleanup_canceled,omitempty"`
-	Kind            string             `json:"kind"`
-	Parent          int                `json:"parent,omitempty"`
-	Number          int                `json:"number"`
-	AccountID       int64              `json:"account_id"`
-	ProxyID         int64              `json:"proxy_id"`
-	StartMS         float64            `json:"start_ms"`
-	EndMS           *float64           `json:"end_ms"`
-	Status          int                `json:"status"`
-	Error           string             `json:"error,omitempty"`
-	Reused          *bool              `json:"reused"`
-	RequestBytes    int64              `json:"request_bytes"`
-	ResponseBytes   int64              `json:"response_bytes"`
-	BodyEOF         bool               `json:"body_eof"`
-	Events          map[string]float64 `json:"events"`
+	BorrowLeaseHash            string             `json:"borrow_lease_hash,omitempty"`
+	BorrowLeaseState           string             `json:"borrow_lease_state,omitempty"`
+	BorrowLeaseEnd             string             `json:"borrow_lease_end,omitempty"`
+	BorrowLeaseReleaseAttempts int                `json:"borrow_lease_release_attempts,omitempty"`
+	Model                      string             `json:"model,omitempty"`
+	ReasoningEffort            string             `json:"reasoning_effort,omitempty"`
+	RetryAfterMS               int64              `json:"retry_after_ms,omitempty"`
+	ReasoningEvents            int                `json:"reasoning_events,omitempty"`
+	NoTextLongTail             bool               `json:"no_text_long_tail,omitempty"`
+	BorrowRouteID              string             `json:"borrow_route_id,omitempty"`
+	Terminal                   string             `json:"terminal,omitempty"`
+	CleanupCanceled            bool               `json:"cleanup_canceled,omitempty"`
+	Kind                       string             `json:"kind"`
+	Parent                     int                `json:"parent,omitempty"`
+	Number                     int                `json:"number"`
+	AccountID                  int64              `json:"account_id"`
+	ProxyID                    int64              `json:"proxy_id"`
+	StartMS                    float64            `json:"start_ms"`
+	EndMS                      *float64           `json:"end_ms"`
+	Status                     int                `json:"status"`
+	Error                      string             `json:"error,omitempty"`
+	Reused                     *bool              `json:"reused"`
+	RequestBytes               int64              `json:"request_bytes"`
+	ResponseBytes              int64              `json:"response_bytes"`
+	BodyEOF                    bool               `json:"body_eof"`
+	Events                     map[string]float64 `json:"events"`
 }
 type BorrowRecoverySnapshot struct {
 	TransportAttempts int    `json:"transport_attempts"`
@@ -108,6 +112,14 @@ func From(ctx context.Context) *Collector {
 	}
 	c, _ := ctx.Value(key{}).(*Collector)
 	return c
+}
+
+// TraceID is safe to include in lifecycle logs, including after HTTP completion.
+func TraceID(ctx context.Context) string {
+	if c := From(ctx); c != nil {
+		return c.data.TraceID // Immutable after New.
+	}
+	return ""
 }
 func (c *Collector) offset(t time.Time) float64 {
 	return float64(t.Sub(c.start)) / float64(time.Millisecond)
@@ -275,6 +287,22 @@ func Outcome(ctx context.Context, result string, disconnected bool) {
 		c.data.Outcome = result
 		c.data.ClientDisconnect = disconnected
 	}
+}
+
+// AttemptByNumber refreshes exactly one retained error's lifecycle observations.
+func AttemptByNumber(ctx context.Context, number int) *Attempt {
+	c := From(ctx)
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if number <= 0 || number > len(c.data.Attempts) {
+		return nil
+	}
+	a := c.data.Attempts[number-1]
+	a.Events = cloneEvents(a.Events)
+	return &a
 }
 
 // LatestAttempt is a detached, credential-free copy, safe to retain in error logs.

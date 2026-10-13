@@ -2426,6 +2426,9 @@ func (s *OpenAIGatewayService) selectAccountWithScheduler(
 		for {
 			published := s.borrowRoutes.routePublished()
 			selection, decision, err = s.selectAccountWithSchedulerNoWait(ctx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, requiredImageCapability, requireCompact, platform, previousResponseCanMove, useUpstreamTokenCost)
+			if IsBorrowRouteUnavailable(err) && s.borrowHTTPContinuationCanFallback(ctx, groupID) {
+				return
+			}
 			if err == nil || !IsBorrowRouteUnavailable(err) || !r.waitForRoute(ctx, published) {
 				return
 			}

@@ -28,15 +28,17 @@ func TestTicketBorrowAdmissionWindowCompatibilityAndLiveSettings(t *testing.T) {
 	require.NoError(t, err)
 	start := now.Add(-12 * time.Second)
 	route := &service.BorrowRoute{ID: uuid.NewString(), TargetID: id, TargetRevision: q.Revision,
-		AcquisitionIdentity: service.BorrowAcquisitionSelf, AcquisitionAccountID: id, AcquisitionStartedAt: &start, AdmissionUntil: start.Add(80 * time.Second),
+		AcquisitionIdentity: service.BorrowAcquisitionSelf, AcquisitionAccountID: id, AcquisitionStartedAt: &start, AdmissionUntil: now.Add(time.Hour),
 		IdentityHash: "identity", CookieHash: uuid.NewString(), ExpiresAt: now.Add(time.Hour)}
 	require.NoError(t, r.Publish(ctx, route, q.BatchID))
 	for _, preferred := range []string{"", route.ID} {
 		got, e := r.Route(ctx, id, "identity", preferred)
 		require.NoError(t, e)
-		require.WithinDuration(t, now.Add(68*time.Second), got.UsableUntil, time.Millisecond, "acquisition and verification consume the same window")
+		require.WithinDuration(t, now.Add(80*time.Second), got.UsableUntil, time.Second, "acquisition and verification do not consume the business admission window")
 	}
 	settings, err = r.Settings(ctx)
+	require.NoError(t, err)
+	_, err = integrationDB.Exec(`UPDATE ticket_borrow_routes SET admission_started_at=clock_timestamp()-interval '12 seconds' WHERE id=$1`, route.ID)
 	require.NoError(t, err)
 	settings.AdmissionWindowSeconds, settings.TTLSeconds, settings.MinRouteRemainingSeconds = new(10), 0, nil
 	require.NoError(t, r.SaveSettings(ctx, settings))

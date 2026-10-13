@@ -174,7 +174,7 @@ func TestBorrowHTTPContinuationFinalTransportAndBinding(t *testing.T) {
 	}
 }
 
-func TestBorrowHTTPContinuationCannotEscapeTarget(t *testing.T) {
+func TestBorrowHTTPContinuationWithoutReplayProofCannotEscapeTarget(t *testing.T) {
 	for _, mode := range []string{"legacy", "load_batch", "advanced"} {
 		t.Run(mode, func(t *testing.T) {
 			resetOpenAIAdvancedSchedulerSettingCacheForTest()

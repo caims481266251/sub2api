@@ -68,10 +68,18 @@ func (r *ticketBorrowRepository) CheckAcquisition(ctx context.Context, a service
 // Renewal holds ownership through verification/publication and draining. It
 // does not grant a new HTTP request or bypass inventory, cooldowns or budgets.
 func (r *ticketBorrowRepository) RenewTargetLease(ctx context.Context, a service.BorrowAcquisition) error {
+	_, err := r.RenewTargetLeaseUntil(ctx, a)
+	return err
+}
+
+// Return a conservative local deadline derived from the database's confirmed
+// remaining ownership, not from receipt time or an unacknowledged UPDATE.
+func (r *ticketBorrowRepository) RenewTargetLeaseUntil(ctx context.Context, a service.BorrowAcquisition) (time.Time, error) {
+	started := time.Now()
 	if a.Lease == "" {
-		return service.ErrBorrowUnavailable
+		return time.Time{}, service.ErrBorrowUnavailable
 	}
-	var renewed int
+	var until, now time.Time
 	err := r.db.QueryRowContext(ctx, `WITH renewed AS (
  UPDATE ticket_borrow_targets t SET lease_until=clock_timestamp()+$5*INTERVAL '1 millisecond'
  FROM ticket_borrow_settings s,accounts a
@@ -81,14 +89,14 @@ func (r *ticketBorrowRepository) RenewTargetLease(ctx context.Context, a service
  UPDATE ticket_borrow_source_intents i SET expires_at=r.lease_until FROM renewed r
  WHERE i.target_id=r.account_id AND i.batch_id=r.lease_token AND i.pool_candidate_id IS NULL
  AND i.expires_at>clock_timestamp()
- ) SELECT count(*) FROM renewed`, a.TargetID, a.Revision, a.Lease, a.Identity, service.BorrowTargetLeaseTTL.Milliseconds()).Scan(&renewed)
+ ) SELECT lease_until,clock_timestamp() FROM renewed`, a.TargetID, a.Revision, a.Lease, a.Identity, service.BorrowTargetLeaseTTL.Milliseconds()).Scan(&until, &now)
+	if err == sql.ErrNoRows {
+		return time.Time{}, service.ErrBorrowUnavailable
+	}
 	if err != nil {
-		return err
+		return time.Time{}, err
 	}
-	if renewed != 1 {
-		return service.ErrBorrowUnavailable
-	}
-	return nil
+	return started.Add(until.Sub(now)), nil
 }
 
 // Every actual source attempt, including retries, consumes the global budget.

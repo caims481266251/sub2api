@@ -223,13 +223,12 @@ func (r *ticketBorrowRepository) SaveSettings(ctx context.Context, s service.Bor
 	if n != 1 {
 		return service.ErrBorrowConflict
 	}
-	// Shrinks are permanent for existing candidates and routes; later increases
-	// apply only to new candidates. Unknown legacy starts retain their old cutoff.
-	if _, err = tx.ExecContext(ctx, `UPDATE ticket_borrow_candidate_environments SET admission_until=LEAST(admission_until,started_at+$1*INTERVAL '1 second') WHERE started_at IS NOT NULL`, *s.AdmissionWindowSeconds); err != nil {
-		return err
-	}
-	if _, err = tx.ExecContext(ctx, `UPDATE ticket_borrow_routes SET admission_until=LEAST(admission_until,acquisition_started_at+$1*INTERVAL '1 second') WHERE acquisition_started_at IS NOT NULL`, *s.AdmissionWindowSeconds); err != nil {
-		return err
+	// Only an actual shrink changes existing admission. Inventory deadlines are
+	// Cookie deadlines and are unrelated to business settings or run/stop edits.
+	if s.AdmissionSeconds() < previous.AdmissionSeconds() {
+		if _, err = tx.ExecContext(ctx, `UPDATE ticket_borrow_routes SET admission_until=LEAST(admission_until,admission_started_at+$1*INTERVAL '1 second') WHERE admission_started_at IS NOT NULL`, s.AdmissionSeconds()); err != nil {
+			return err
+		}
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE ticket_borrow_targets SET budget_wait_until=NULL,refresh_generation=refresh_generation+1,next_probe_at=clock_timestamp(),next_attempt_at=clock_timestamp()`); err != nil {
 		return err
@@ -577,9 +576,9 @@ func (r *ticketBorrowRepository) Publish(ctx context.Context, route *service.Bor
 	}
 	var now time.Time
 	if err = tx.QueryRowContext(ctx, `SELECT clock_timestamp(),LEAST($1::timestamptz,$2::timestamptz,
- $3::timestamptz+admission_window_seconds*INTERVAL '1 second',
- COALESCE((SELECT expires_at FROM ticket_borrow_cookie_deadlines WHERE cookie_hash=$4),$1::timestamptz))
- FROM ticket_borrow_settings WHERE id=1`, route.ExpiresAt, route.AdmissionUntil, route.AcquisitionStartedAt, route.CookieHash).Scan(&now, &route.AdmissionUntil); err != nil {
+ statement_timestamp()+admission_window_seconds*INTERVAL '1 second',
+ COALESCE((SELECT expires_at FROM ticket_borrow_cookie_deadlines WHERE cookie_hash=$3),$1::timestamptz))
+ FROM ticket_borrow_settings WHERE id=1`, route.ExpiresAt, route.AdmissionUntil, route.CookieHash).Scan(&now, &route.AdmissionUntil); err != nil {
 		return err
 	}
 	if !now.Before(route.AdmissionUntil) {
@@ -594,10 +593,10 @@ func (r *ticketBorrowRepository) Publish(ctx context.Context, route *service.Bor
 		return err
 	}
 	res, err := tx.ExecContext(ctx, `INSERT INTO ticket_borrow_routes(id,target_id,target_revision,source_id,identity_hash,cookie_hash,gateway,secret,expires_at,inventory_eligible,validation_only,checked_at,
- acquisition_identity,acquisition_account_id,acquisition_started_at,admission_until,candidate_id)
- VALUES($1,$2,$3,NULLIF($4,0),$5,$6,$7,$8,$9,true,false,clock_timestamp(),$10,$11,$12,$13,$14)
+ acquisition_identity,acquisition_account_id,acquisition_started_at,admission_until,candidate_id,admission_started_at)
+ VALUES($1,$2,$3,NULLIF($4,0),$5,$6,$7,$8,$9,true,false,clock_timestamp(),$10,$11,$12,$13,$14,$15)
  ON CONFLICT(target_id,target_revision,identity_hash,cookie_hash) DO NOTHING`, route.ID, route.TargetID, route.TargetRevision, route.SourceID, route.IdentityHash, route.CookieHash, route.Gateway, secret, route.ExpiresAt,
-		route.AcquisitionIdentity, route.AcquisitionAccountID, route.AcquisitionStartedAt, route.AdmissionUntil, route.CandidateID)
+		route.AcquisitionIdentity, route.AcquisitionAccountID, route.AcquisitionStartedAt, route.AdmissionUntil, route.CandidateID, now)
 	if err != nil {
 		return err
 	}

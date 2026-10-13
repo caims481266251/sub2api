@@ -137,7 +137,7 @@ func (r *ticketBorrowRepository) StartCandidateEnvironment(ctx context.Context, 
 	}
 	err := r.db.QueryRowContext(ctx, `UPDATE ticket_borrow_candidate_environments e
  SET started_at=COALESCE(e.started_at,clock_timestamp()),
- admission_until=COALESCE(e.admission_until,clock_timestamp()+cfg.admission_window_seconds*INTERVAL '1 second')
+ admission_until=COALESCE(e.admission_until,e.lease_until)
  FROM ticket_borrow_settings cfg,proxy_pool_entries p
  WHERE cfg.id=1 AND e.id=$1 AND e.target_id IS NOT DISTINCT FROM NULLIF($2,0) AND e.batch_id=$3 AND e.released_at IS NULL AND e.lease_until>clock_timestamp()
  AND p.id=e.entry_id AND p.identity_hash=e.entry_identity AND p.enabled AND p.retired_at IS NULL
@@ -175,7 +175,7 @@ func (r *ticketBorrowRepository) CheckCandidateEnvironment(ctx context.Context, 
  AND cp.settings_revision=cfg.revision AND cp.lease_until>clock_timestamp()
  AND ((cp.state='acquiring' AND cp.owner_token=e.batch_id AND e.target_id IS NULL)
  OR (cp.state='claimed' AND cp.claim_token=e.batch_id AND cp.target_id=e.target_id))))
- AND LEAST(e.admission_until,e.started_at+cfg.admission_window_seconds*INTERVAL '1 second')>clock_timestamp())`, id, a.TargetID, a.Lease).Scan(&eligible)
+ AND LEAST(e.admission_until,COALESCE((SELECT expires_at FROM ticket_borrow_cookie_deadlines WHERE cookie_hash=e.cookie_hash),e.admission_until))>clock_timestamp())`, id, a.TargetID, a.Lease).Scan(&eligible)
 	if err != nil {
 		return err
 	}
@@ -183,6 +183,33 @@ func (r *ticketBorrowRepository) CheckCandidateEnvironment(ctx context.Context, 
 		return service.ErrBorrowCandidateExpiry
 	}
 	return nil
+}
+
+// Transfer the provisional acquisition environment to Cookie-backed inventory.
+// Re-observing the same Cookie may tighten its deadline, never extend it.
+func (r *ticketBorrowRepository) SetCandidateEnvironmentDeadline(ctx context.Context, id, hash string, until time.Time) error {
+	a, ok := service.BorrowAcquisitionFromContext(ctx)
+	p, pooled := service.BorrowPoolAcquisitionFromContext(ctx)
+	if pooled {
+		a = service.BorrowAcquisition{Lease: p.Lease}
+	}
+	if (!ok && !pooled) || hash == "" || until.IsZero() {
+		return service.ErrBorrowUnavailable
+	}
+	res, err := r.db.ExecContext(ctx, `UPDATE ticket_borrow_candidate_environments
+ SET cookie_hash=$4,admission_until=CASE WHEN cookie_hash IS NULL THEN $5 ELSE LEAST(admission_until,$5) END,
+ lease_until=CASE WHEN cookie_hash IS NULL THEN $5 ELSE LEAST(admission_until,$5) END
+ WHERE id=$1 AND target_id IS NOT DISTINCT FROM NULLIF($2,0) AND batch_id=$3
+ AND released_at IS NULL AND lease_until>clock_timestamp() AND $5>clock_timestamp()
+ AND (cookie_hash IS NULL OR cookie_hash=$4)`, id, a.TargetID, a.Lease, hash, until)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err == nil && n != 1 {
+		return service.ErrBorrowCandidateExpiry
+	}
+	return err
 }
 
 func (r *ticketBorrowRepository) MarkCandidateEnvironmentSent(ctx context.Context, id string) error {
@@ -216,7 +243,7 @@ func (r *ticketBorrowRepository) MarkCandidateEnvironmentSent(ctx context.Contex
 }
 
 func (r *ticketBorrowRepository) ReleaseCandidateEnvironment(ctx context.Context, id string) error {
-	_, err := r.db.ExecContext(ctx, `UPDATE ticket_borrow_candidate_environments SET released_at=COALESCE(released_at,clock_timestamp()) WHERE id=$1`, id)
+	_, err := r.db.ExecContext(ctx, `UPDATE ticket_borrow_candidate_environments e SET released_at=COALESCE(released_at,clock_timestamp()) WHERE id=$1 AND NOT EXISTS(SELECT 1 FROM ticket_borrow_routes r WHERE r.candidate_id=e.id AND (LEAST(r.admission_until,r.expires_at)>clock_timestamp() OR EXISTS(SELECT 1 FROM ticket_borrow_route_leases l WHERE l.route_id=r.id AND l.lease_until>clock_timestamp())))`, id)
 	return err
 }
 

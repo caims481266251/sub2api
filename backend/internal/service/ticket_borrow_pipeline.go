@@ -162,6 +162,19 @@ func (p borrowCandidatePipeline) run(ctx context.Context, cancel context.CancelF
 			for len(queue) > 0 && verifying < c {
 				index, demoted := selectBorrowCandidate(queue, priorities, time.Now(), &streak)
 				item := queue[index]
+				audit := &BorrowGatewaySelection{Eligible: len(queue)}
+				gateways := make(map[string]struct{})
+				for _, candidate := range queue {
+					gateway := candidate.details.Gateway
+					if gateway != "" {
+						gateways[gateway] = struct{}{}
+					}
+					if priorities[gateway].After(time.Now()) {
+						audit.Deprioritized++
+					}
+				}
+				audit.Gateways = len(gateways)
+				item.details.GatewaySelection = audit
 				queue = append(queue[:index], queue[index+1:]...)
 				p.selected(item, demoted, index > 0 && !demoted)
 				verifying++

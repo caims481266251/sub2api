@@ -1,9 +1,11 @@
 export default {
   candidates: '候选路由池',
   candidatePool: {
+    production: { filling: '按库存空位补货，遵守来源并发和预算', paused: '探测已暂停，停止新增获取', full: '候选池已满，等待消费后补货', no_targets: '暂无启用的来源模式目标，暂停补货' },
+    cookieRemaining: 'Cookie 声明剩余 {seconds} 秒', expiryUnknown: 'Cookie 声明有效期未知', retainedRemaining: '本地保留剩余 {seconds} 秒', queueAge: '排队 {seconds} 秒', cookieExpiresAt: 'Cookie 声明截止',
     title: '候选路由池', occupancy: '当前占用 / 容量上限', waitingTargets: '等待候选的目标', demandSlots: '待满足空位：{count}',
-    hint: '来源帐号按目标需求获取候选。获取中、待领取、探测中共同占用容量；发布或结束后释放。容量是上限，不会持续补满；自身取票不经过共享池。',
-    capacity: '路由池容量', capacityHint: '默认 64 条，全局共享。调小后等待已有任务自然释放，调大后按需获取。',
+    hint: '来源帐号按容量补充候选，池满暂停、释放后补货。获取中、待领取、探测中共同占用容量；目标无需等池满即可领取，自身取票不经过共享池。',
+    capacity: '路由池容量', capacityHint: '默认 64 条，全局共享。调小后暂停补货等待释放，实际获取受来源并发与预算限制。',
     capacityInvalid: '请输入 1–1024 的整数条数。', useSaved: '使用已保存值', saved: '容量已保存并生效。',
     conflict: '容量已被其他操作修改。当前输入已保留，请核对最新配置后再保存。', saveFailed: '容量保存失败，请刷新后重试。',
     draining: '当前占用超过新上限，暂停新增获取，等待已有任务自然释放。',
@@ -18,7 +20,7 @@ export default {
   },
   simplified: {
     "admissionWindow": "路由接单时限",
-    "admissionHint": "从取票开始计时，取票与验证耗时包含在内。截止后停止接新请求，已发请求继续完成。",
+    "admissionHint": "从本条路由首次验票成功发布开始计时，并受 Cookie 和凭证有效期限制。截止后停止接新请求，已发请求继续完成。",
     "admissionError": "请输入 1–240 的整数秒。",
     "automaticRefill": "续补时机由后台自动计算。滚动补充默认关闭；开启后维护备用路由，每次补票重新随机环境。",
     "identity": "取票身份",
@@ -33,6 +35,8 @@ export default {
     "run": "启动后台取票"
 },
   tags: {
+    candidateEnvironmentInvalid: "候选环境或凭证已失效",
+    candidatePoolUpgraded: "候选规则升级后重新补货",
     gatewayNormal: "普通验证顺序",
     gatewayPrioritized: "网关反馈优先验证",
     gatewayRecheck: "降优先级网关安排重试",
@@ -692,7 +696,7 @@ export default {
 
     acquisitionIdentity: "取票身份",
     acquisitionStarted: "取票开始",
-    admissionUntil: "接单截止",
+    admissionUntil: "候选保留截止",
     upstreamExpires: "上游 Cookie 到期",
     poolEntry: "代理池条目",
     allocationRound: "分配轮次",

@@ -43,12 +43,12 @@ const borrowPoolAdminMetadataJoins = `
 const borrowPoolAdminColumns = `p.id,p.state,p.source_id,COALESCE(s.account_id,0),COALESCE(sa.name,s.name,''),
  COALESCE(p.target_id,0),COALESCE(ta.name,''),COALESCE(p.details->>'gateway',''),
  p.created_at,p.enqueued_at,p.claimed_at,p.finished_at,
- LEAST(p.admission_until,env.admission_until,env.started_at+cfg.admission_window_seconds*INTERVAL '1 second',cd.expires_at),
- CASE WHEN p.state='queued' THEN p.lease_until END,p.reason,COALESCE(route.id,'')`
+ LEAST(p.admission_until,env.admission_until,cd.expires_at),
+ NULLIF(p.details->>'upstream_expires_at','')::timestamptz,COALESCE(p.details->>'gateway_priority',''),p.reason,COALESCE(route.id,'')`
 
 func borrowPoolItemDest(v *service.BorrowCandidatePoolItem) []any {
 	return []any{&v.ID, &v.State, &v.SourceID, &v.SourceAccountID, &v.SourceName, &v.TargetID, &v.TargetName, &v.Gateway,
-		&v.CreatedAt, &v.EnqueuedAt, &v.ClaimedAt, &v.FinishedAt, &v.AdmissionUntil, &v.QueueUntil, &v.Reason, &v.RouteID}
+		&v.CreatedAt, &v.EnqueuedAt, &v.ClaimedAt, &v.FinishedAt, &v.AdmissionUntil, &v.CookieExpiresAt, &v.GatewayPriority, &v.Reason, &v.RouteID}
 }
 
 func (r *ticketBorrowRepository) CandidatePoolPage(ctx context.Context, q service.BorrowCandidatePoolQuery) (*service.BorrowCandidatePoolPage, error) {
@@ -74,6 +74,19 @@ func (r *ticketBorrowRepository) CandidatePoolPage(ctx context.Context, q servic
 	}
 	if err = tx.QueryRowContext(ctx, `SELECT count(*) FILTER(WHERE slots>0),COALESCE(sum(slots),0) FROM (SELECT `+borrowPoolOpenDemandSlots+` AS slots`+borrowPoolDemandFrom+`) demand`).Scan(&summary.WaitingTargets, &summary.DemandSlots); err != nil {
 		return nil, err
+	}
+	var consumers bool
+	if err = tx.QueryRowContext(ctx, `SELECT `+borrowPoolEnabledConsumers).Scan(&consumers); err != nil {
+		return nil, err
+	}
+	summary.ProductionState = "filling"
+	switch {
+	case !summary.Running:
+		summary.ProductionState = "paused"
+	case !consumers:
+		summary.ProductionState = "no_targets"
+	case summary.Occupied >= summary.Capacity:
+		summary.ProductionState = "full"
 	}
 	clauses, args := []string{"true"}, []any{}
 	add := func(clause string, value any) {

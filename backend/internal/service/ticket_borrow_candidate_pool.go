@@ -10,19 +10,14 @@ import (
 const (
 	DefaultBorrowCandidatePoolCapacity   = 64
 	BorrowCandidatePoolSourceConcurrency = 4
-	BorrowCandidatePoolStandby           = 2
-	// One short wave of prefetch, never an 80-second FIFO backlog. This is a
-	// conservative policy bound, not an empirically optimal success threshold.
-	BorrowCandidatePoolQueueLifetime  = 15 * time.Second
-	BorrowCandidatePoolPublishReserve = 7 * time.Second
-	BorrowCandidateVerificationLimit  = 90 * time.Second
+	BorrowCandidatePoolPublishReserve    = 7 * time.Second
+	BorrowCandidateVerificationLimit     = 90 * time.Second
 	// A candidate claim covers bounded verification and publication/cleanup;
 	// it never extends the target task lease or the candidate's admission cutoff.
 	BorrowCandidatePoolClaimLease = BorrowCandidateVerificationLimit + 10*time.Second
 )
 
 var ErrBorrowCandidateTimeBudget = errors.New("candidate_time_budget_insufficient")
-var ErrBorrowCandidatePoolWindow = errors.New("candidate_pool_window_too_short")
 
 // The source task is independent of every target lease. ID is immutable and
 // Lease fences a late source result after this task has finished or expired.

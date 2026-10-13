@@ -3,8 +3,11 @@ package service
 import (
 	"context"
 	"io"
+	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
 )
 
 // A reservation spans connection waiting and the entire response body, not
@@ -21,15 +24,17 @@ type borrowRouteUse struct {
 }
 
 func newBorrowRouteUse(ctx context.Context, repo BorrowRouteLeaseRepository, id string, renewEvery time.Duration) *borrowRouteUse {
+	ctx = requesttiming.WithBorrowLease(ctx, borrowHash(id))
 	ctx, cancel := context.WithCancel(ctx)
 	u := &borrowRouteUse{repo: repo, id: id, ctx: ctx, cancel: cancel, done: make(chan struct{})}
+	requesttiming.BorrowLeaseEvent(ctx, "reserved", 0)
 	go func() {
 		ticker := time.NewTicker(renewEvery)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ctx.Done():
-				u.finish()
+				u.finishReason("context_done")
 				return
 			case <-u.done:
 				return
@@ -38,8 +43,12 @@ func newBorrowRouteUse(ctx context.Context, repo BorrowRouteLeaseRepository, id 
 				err := repo.RenewRoute(check, id)
 				stop()
 				if err != nil {
+					if ctx.Err() != nil {
+						u.finishReason("context_done")
+						return
+					}
 					// Never keep sending after losing the occupancy reservation.
-					u.finish()
+					u.finishReason("renew_failed")
 					return
 				}
 			}
@@ -61,7 +70,15 @@ func (u *borrowRouteUse) attach(body io.Closer) {
 }
 
 func (u *borrowRouteUse) finish() {
+	u.finishReason("closed")
+}
+
+func (u *borrowRouteUse) finishReason(reason string) {
 	u.once.Do(func() {
+		requesttiming.BorrowLeaseEvent(u.ctx, reason, 0)
+		if reason == "renew_failed" {
+			slog.WarnContext(u.ctx, "borrow_route_lease_renew_failed", "lease_hash", borrowHash(u.id), "trace_id", requesttiming.TraceID(u.ctx))
+		}
 		close(u.done)
 		u.cancel()
 		u.bodyMu.Lock()
@@ -71,10 +88,23 @@ func (u *borrowRouteUse) finish() {
 		if body != nil {
 			_ = body.Close()
 		}
-		cleanup, stop := context.WithTimeout(context.Background(), 3*time.Second)
+		cleanup, stop := context.WithTimeout(context.WithoutCancel(u.ctx), 3*time.Second)
 		defer stop()
-		// An unavailable database leaves a bounded lease, never a permanent count.
-		_ = u.repo.ReleaseRoute(cleanup, u.id)
+		// DELETE is idempotent: one short retry repairs a transient failure (or
+		// lost acknowledgement) without renewing a finished request's occupancy.
+		// Keep the original total cleanup budget; persistent failure uses the TTL.
+		for attempt := 1; attempt <= 2 && cleanup.Err() == nil; attempt++ {
+			try, cancel := context.WithTimeout(cleanup, 1500*time.Millisecond)
+			err := u.repo.ReleaseRoute(try, u.id)
+			cancel()
+			if err == nil {
+				requesttiming.BorrowLeaseEvent(u.ctx, "released", attempt)
+				slog.InfoContext(cleanup, "borrow_route_lease_released", "lease_hash", borrowHash(u.id), "trace_id", requesttiming.TraceID(u.ctx), "reason", reason, "attempts", attempt)
+				return
+			}
+			requesttiming.BorrowLeaseEvent(u.ctx, "release_failed", attempt)
+		}
+		slog.WarnContext(cleanup, "borrow_route_lease_release_failed", "lease_hash", borrowHash(u.id), "trace_id", requesttiming.TraceID(u.ctx), "reason", reason)
 	})
 }
 
@@ -86,7 +116,11 @@ type borrowLeasedBody struct {
 func (b *borrowLeasedBody) Read(p []byte) (int, error) {
 	n, err := b.ReadCloser.Read(p)
 	if err != nil {
-		b.use.finish()
+		reason := "read_error"
+		if err == io.EOF {
+			reason = "eof"
+		}
+		b.use.finishReason(reason)
 	}
 	return n, err
 }

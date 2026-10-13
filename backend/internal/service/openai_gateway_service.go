@@ -456,6 +456,7 @@ var ErrNoAvailableCompactAccounts = errors.New("no available accounts support /r
 type OpenAIGatewayService struct {
 	stopAstraSetup          func()
 	borrowRoutes            *TicketBorrowService
+	borrowHTTPReplay        borrowHTTPReplayStore
 	codexWSAnchors          codexWSAnchorStore
 	priorityScheduling      prioritySchedulingState
 	excelBPSRecoveryMu      sync.Mutex

@@ -5,6 +5,7 @@ package repository
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"sync"
 	"testing"
@@ -93,6 +94,10 @@ func (f *candidatePoolFixture) reserve(t *testing.T) service.BorrowPoolAcquisiti
 }
 
 func (f *candidatePoolFixture) enqueue(t *testing.T, a service.BorrowPoolAcquisition) *service.BorrowPoolCandidate {
+	return f.enqueueGateway(t, a, "")
+}
+
+func (f *candidatePoolFixture) enqueueGateway(t *testing.T, a service.BorrowPoolAcquisition, gateway string) *service.BorrowPoolCandidate {
 	t.Helper()
 	ctx := service.WithBorrowPoolAcquisition(t.Context(), a)
 	env, err := f.r.AllocateCandidateEnvironment(ctx, a.ID, "shared-candidate-pool")
@@ -106,10 +111,11 @@ func (f *candidatePoolFixture) enqueue(t *testing.T, a service.BorrowPoolAcquisi
 	h := sha256.Sum256([]byte(value))
 	c := &service.BorrowPoolCandidate{ID: a.ID, SourceID: a.SourceID,
 		Cookie: http.Cookie{Name: "__oailb", Value: value}, Expires: env.AdmissionUntil, Environment: env,
-		Details: &service.BorrowCandidateDetails{CandidateID: a.ID, BatchID: a.Lease, AcquisitionIdentity: service.BorrowAcquisitionSource,
+		Details: &service.BorrowCandidateDetails{CandidateID: a.ID, BatchID: a.Lease, AcquisitionIdentity: service.BorrowAcquisitionSource, Gateway: gateway,
 			SourceAccountID: source.AccountID, SourceRevision: source.Revision, SourceModel: source.Model,
 			AcquisitionStartedAt: &env.StartedAt, AdmissionUntil: &env.AdmissionUntil, CookieHash: hex.EncodeToString(h[:])}}
 	require.NoError(t, integrationDB.QueryRow(`SELECT encode(sha256(convert_to(credentials->>'access_token','UTF8')),'hex'),encode(sha256(convert_to(COALESCE(credentials->>'chatgpt_account_id','')||':'||COALESCE(credentials->>'chatgpt_user_id',''),'UTF8')),'hex') FROM accounts WHERE id=$1`, source.AccountID).Scan(&c.SourceCredentialHash, &c.SourceSubjectHash))
+	require.NoError(t, f.r.SetCandidateEnvironmentDeadline(ctx, c.ID, c.Details.CookieHash, c.Expires))
 	require.NoError(t, f.r.EnqueueCandidatePool(ctx, a, c))
 	return c
 }
@@ -148,6 +154,29 @@ func TestBorrowSharedPoolNeutralSourceSurvivesTargetFailure(t *testing.T) {
 	require.Equal(t, c.Environment, got.Environment, "source and target use the same frozen environment")
 	require.Equal(t, c.Cookie, got.Cookie)
 	require.Equal(t, c.Expires.UnixMicro(), got.Expires.UnixMicro(), "claim never renews the original cutoff")
+}
+
+func TestBorrowSharedPoolGatewaySelectionEvidence(t *testing.T) {
+	f := newCandidatePoolFixture(t, 1, 2)
+	a := f.targets[0]
+	for i := 0; i < 2; i++ {
+		p := f.reserve(t)
+		f.enqueueGateway(t, p, fmt.Sprintf("chat.gateway.unified-%d.api.openai.com", i+1))
+	}
+	for range 3 {
+		require.NoError(t, f.r.RecordBorrowGatewayOutcome(t.Context(), a, gatewayOutcome("target_ticket_changed", time.Now())))
+	}
+	c, err := f.r.ClaimCandidatePool(t.Context(), a)
+	require.NoError(t, err)
+	require.NotNil(t, c)
+	require.Equal(t, &service.BorrowGatewaySelection{Eligible: 2, Gateways: 2, Deprioritized: 1}, c.Details.GatewaySelection)
+	require.Equal(t, "chat.gateway.unified-2.api.openai.com", c.Details.Gateway)
+	f.heartbeat(t)
+	c, err = f.r.ClaimCandidatePool(t.Context(), a)
+	require.NoError(t, err)
+	require.NotNil(t, c, "the remaining downgraded gateway must still be usable for a recheck")
+	require.Equal(t, &service.BorrowGatewaySelection{Eligible: 1, Gateways: 1, Deprioritized: 1}, c.Details.GatewaySelection)
+	require.Equal(t, "recheck", c.Details.GatewayPriority)
 }
 
 func TestBorrowSharedPoolUniqueClaimPublicationAndOwnerFence(t *testing.T) {
@@ -201,10 +230,10 @@ func TestBorrowSharedPoolUniqueClaimPublicationAndOwnerFence(t *testing.T) {
 	require.Equal(t, original.Details.CookieHash, c.Details.CookieHash)
 }
 
-func TestBorrowSharedPoolFreshestAndExpiredQueueRecovery(t *testing.T) {
+func TestBorrowSharedPoolInsufficientBudgetAndExpiredQueueRecovery(t *testing.T) {
 	f := newCandidatePoolFixture(t, 1, 3)
 	old := f.enqueue(t, f.reserve(t))
-	_, err := integrationDB.Exec(`UPDATE ticket_borrow_candidate_pool SET admission_until=clock_timestamp()+INTERVAL '65 seconds' WHERE id=$1`, old.ID)
+	_, err := integrationDB.Exec(`UPDATE ticket_borrow_candidate_pool SET admission_until=clock_timestamp()+INTERVAL '50 seconds' WHERE id=$1`, old.ID)
 	require.NoError(t, err)
 	fresh := f.enqueue(t, f.reserve(t))
 	got, err := f.r.ClaimCandidatePool(t.Context(), f.targets[0])
@@ -232,7 +261,9 @@ func TestBorrowSharedPoolBackpressureCooldownAndSourceBudget(t *testing.T) {
 		require.NoError(t, e)
 		return p
 	}
-	require.Nil(t, reserve(), "queued work satisfies the only available verification slot")
+	extra := reserve()
+	require.NotNil(t, extra, "queued work does not cap production at target concurrency")
+	require.NoError(t, f.r.FinishCandidatePool(t.Context(), extra.ID, extra.Lease, "test_cleanup"))
 	c, err := f.r.ClaimCandidatePool(t.Context(), f.targets[0])
 	require.NoError(t, err)
 	standby := reserve()
@@ -241,7 +272,9 @@ func TestBorrowSharedPoolBackpressureCooldownAndSourceBudget(t *testing.T) {
 	require.NoError(t, f.r.FinishCandidatePool(t.Context(), c.ID, f.targets[0].Lease, "target_ticket_changed"))
 	_, err = integrationDB.Exec(`UPDATE accounts SET rate_limit_reset_at=clock_timestamp()+INTERVAL '60 seconds' WHERE id=$1`, f.targets[0].TargetID)
 	require.NoError(t, err)
-	require.Nil(t, reserve())
+	extra = reserve()
+	require.NotNil(t, extra, "temporary target cooldown does not destroy inventory supply")
+	require.NoError(t, f.r.FinishCandidatePool(t.Context(), extra.ID, extra.Lease, "test_cleanup"))
 	_, err = integrationDB.Exec(`UPDATE accounts SET rate_limit_reset_at=clock_timestamp()-INTERVAL '1 second' WHERE id=$1`, f.targets[0].TargetID)
 	require.NoError(t, err)
 	p = f.reserve(t)
@@ -417,7 +450,7 @@ func TestBorrowSharedPoolPauseConfigurationFenceAndWindowFloor(t *testing.T) {
 	settings.AdmissionWindowSeconds, settings.TTLSeconds, settings.MinRouteRemainingSeconds = &short, 0, nil
 	require.NoError(t, f.r.SaveSettings(t.Context(), settings))
 	a := inventoryRestart(t, f.r, f.targets[0])
-	require.ErrorIs(t, f.r.RegisterCandidatePoolDemand(t.Context(), a, 2), service.ErrBorrowCandidatePoolWindow)
+	require.NoError(t, f.r.RegisterCandidatePoolDemand(t.Context(), a, 2), "business window no longer limits candidate validation")
 	_, err = f.r.ClaimCandidatePool(t.Context(), f.targets[0])
 	require.Error(t, err, "the prior target lease cannot claim after configuration change")
 }
@@ -431,7 +464,6 @@ func TestBorrowSharedPoolLastConsumerGonePreventsUnsentSource(t *testing.T) {
 	_, _, err = f.r.StartCandidateEnvironment(ctx, env.ID)
 	require.NoError(t, err)
 	require.NoError(t, f.r.RemoveCandidatePoolDemand(t.Context(), f.targets[0]))
-	require.ErrorIs(t, f.r.CheckCandidateEnvironment(ctx, env.ID), service.ErrBorrowUnavailable,
-		"a source waiting for a connection cannot send after the final consumer leaves")
+	require.NoError(t, f.r.CheckCandidateEnvironment(ctx, env.ID), "transient demand loss does not discard source work")
 	require.NoError(t, f.r.FinishCandidatePool(ctx, p.ID, p.Lease, "candidate_pool_no_consumers"))
 }

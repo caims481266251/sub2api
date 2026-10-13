@@ -16,6 +16,32 @@ import (
 
 type attemptKey struct{}
 type borrowRouteKey struct{}
+type borrowLeaseKey struct{}
+
+func WithBorrowLease(ctx context.Context, hash string) context.Context {
+	if tr, ok := ctx.Value(attemptKey{}).(*Trace); ok {
+		tr.update(func(a *Attempt) { a.BorrowLeaseHash = hash })
+	}
+	return context.WithValue(ctx, borrowLeaseKey{}, hash)
+}
+
+// Lease lifecycle belongs to the egress reservation, not to a model verdict.
+func BorrowLeaseEvent(ctx context.Context, state string, attempts int) {
+	if tr, ok := ctx.Value(attemptKey{}).(*Trace); ok {
+		tr.update(func(a *Attempt) {
+			a.Events["borrow_lease_"+state] = tr.c.offset(time.Now())
+			switch state {
+			case "reserved", "released", "release_failed":
+				a.BorrowLeaseState = state
+			default:
+				a.BorrowLeaseEnd = state
+			}
+			if attempts > 0 {
+				a.BorrowLeaseReleaseAttempts = attempts
+			}
+		})
+	}
+}
 
 // WithBorrowRoute adds a non-secret routing ID to timing only. Updating the
 // enclosing egress attempt also covers transports that began tracing earlier.
@@ -76,6 +102,7 @@ func startAttempt(req *http.Request, accountID, proxyID int64, kind string, pare
 	idx := len(c.data.Attempts)
 	c.data.Attempts = append(c.data.Attempts, Attempt{Kind: kind, Parent: parent, Number: idx + 1, AccountID: accountID, ProxyID: proxyID, StartMS: c.offset(time.Now()), RequestBytes: req.ContentLength, Events: map[string]float64{}})
 	c.data.Attempts[idx].BorrowRouteID, _ = req.Context().Value(borrowRouteKey{}).(string)
+	c.data.Attempts[idx].BorrowLeaseHash, _ = req.Context().Value(borrowLeaseKey{}).(string)
 	if info, ok := req.Context().Value(borrowRequestKey{}).(borrowRequestInfo); ok {
 		c.data.Attempts[idx].Model = info.model
 		c.data.Attempts[idx].ReasoningEffort = info.effort

@@ -70,8 +70,8 @@ func borrowInventory(ctx context.Context, db borrowQueryer, id int64, identity s
 		var canConsume bool
 		err = db.QueryRowContext(ctx, `SELECT t.acquisition_identity='source' AND EXISTS(
  SELECT 1 FROM ticket_borrow_candidate_pool p JOIN ticket_borrow_candidate_environments e ON e.id=p.id
- WHERE p.state='queued' AND p.settings_revision=cfg.revision AND p.lease_until>clock_timestamp()
- AND e.released_at IS NULL AND e.lease_until>clock_timestamp()
+ WHERE p.state='queued' AND p.lease_until>clock_timestamp()
+ AND `+borrowPoolCandidateValid+` AND `+borrowPoolSourceReady+`
  AND LEAST(p.admission_until,e.admission_until)>clock_timestamp()+(45+cfg.continue_timeout_seconds+$2)*INTERVAL '1 second')
  FROM ticket_borrow_targets t CROSS JOIN ticket_borrow_settings cfg WHERE t.account_id=$1 AND cfg.id=1`, id, int(service.BorrowCandidatePoolPublishReserve/time.Second)).Scan(&canConsume)
 		if err != nil {

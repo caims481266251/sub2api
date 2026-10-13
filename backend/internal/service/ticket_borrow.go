@@ -46,6 +46,9 @@ func BorrowBeforeSend(req *http.Request) error {
 	if req == nil {
 		return nil
 	}
+	if err := waitBorrowTargetLease(req.Context()); err != nil {
+		return err
+	}
 	check, _ := req.Context().Value(borrowBeforeSendKey{}).(func(context.Context) error)
 	if check != nil {
 		return check(req.Context())
@@ -593,6 +596,10 @@ func (s *TicketBorrowService) ForwardHTTP(req *http.Request, proxy string, id in
 	if err != nil {
 		return nil, borrowPreSendRejection(err)
 	}
+	// Bind observations at reservation so pre-send rejections and all terminal
+	// paths retain the same actual route and lease identity.
+	req = req.WithContext(requesttiming.WithBorrowRoute(req.Context(), route.ID))
+	req = req.WithContext(requesttiming.WithBorrowRequest(req.Context(), payload.Model, payload.Reasoning.Effort))
 	use := newBorrowRouteUse(req.Context(), allocator, leaseID, 15*time.Second)
 	bodyOwnsLease := false
 	defer func() {
@@ -637,8 +644,6 @@ func (s *TicketBorrowService) ForwardHTTP(req *http.Request, proxy string, id in
 	replaceBorrowCookie(r, &route.Secret.Cookie)
 	r = r.WithContext(WithHTTPUpstreamRedirectsDisabled(r.Context()))
 	// Business always uses the target account exit; a borrowed route only supplies routing data.
-	r = r.WithContext(requesttiming.WithBorrowRoute(r.Context(), route.ID))
-	r = r.WithContext(requesttiming.WithBorrowRequest(r.Context(), payload.Model, payload.Reasoning.Effort))
 	resp, err := send(r, openAIAccountProxyURL(account), id, n, profile)
 	if resp != nil {
 		s.observeBorrowBusinessResponse(r, route, resp)
@@ -815,6 +820,7 @@ func (s *TicketBorrowService) runTarget(parent context.Context, target BorrowTar
 	pool, hasPool := s.repo.(BorrowCandidatePoolRepository)
 	sharedPool := hasPool && target.AcquisitionMode() == BorrowAcquisitionSource && !diagnostic
 	ctx, cancelCause := context.WithCancelCause(context.WithValue(parent, borrowInternalKey{}, true))
+	ctx = context.WithValue(ctx, borrowTargetLeaseKey{}, &borrowTargetLeaseState{})
 	reason := "no_candidate"
 	cancel := func() {
 		switch reason {
@@ -838,7 +844,11 @@ func (s *TicketBorrowService) runTarget(parent context.Context, target BorrowTar
 		if diagnostic && scanProcessed > 0 {
 			_ = s.repo.AdvanceScan(cleanup, target.AccountID, lease, scanProcessed)
 		}
-		_ = s.repo.FinishJob(cleanup, "target", target.AccountID, lease, reason, delay)
+		if err := borrowCleanup(parent, func(end context.Context) error {
+			return s.repo.FinishJob(end, "target", target.AccountID, lease, reason, delay)
+		}); err != nil {
+			slog.Warn("borrow_target_cleanup_failed", "target_id", target.AccountID, "storage_error", borrowStorageErrorClass(err))
+		}
 	}()
 	stopLease, leaseErr := s.keepTargetLease(ctx, BorrowAcquisition{TargetID: target.AccountID, Revision: target.Revision, Lease: lease}, cancelCause)
 	if leaseErr != nil {
@@ -1025,15 +1035,7 @@ func (s *TicketBorrowService) runTarget(parent context.Context, target BorrowTar
 			}
 			return out
 		}
-		if c.details.AcquisitionStartedAt != nil {
-			c.expires = borrowAdmissionDeadline(*c.details.AcquisitionStartedAt, latestSettings.AdmissionSeconds(), c.expires)
-			out.candidate.expires = c.expires
-			if !now.Before(c.expires) {
-				out.reason = "candidate_publish_expired"
-				return out
-			}
-		}
-		if sharedPool && c.expires.Sub(now) < BorrowPoolSettingsBudget(latestSettings, "mint") {
+		if c.expires.Sub(now) < BorrowPoolSettingsBudget(latestSettings, "mint") {
 			out.reason = "candidate_time_budget_insufficient"
 			return out
 		}
@@ -1053,11 +1055,13 @@ func (s *TicketBorrowService) runTarget(parent context.Context, target BorrowTar
 		// Probe capacity is independent of business admission. The repository also
 		// reserves each HTTP attempt under the target lock across all server instances.
 		_ = s.repo.SetPhase(ctx, target.AccountID, lease, "verifying")
-		probeCtx, stop := context.WithDeadlineCause(ctx, clockReadAt.Add(c.expires.Sub(now)), borrowCancelCandidateDeadline)
-		defer stop()
-		if sharedPool {
-			probeCtx = context.WithValue(probeCtx, borrowPoolVerificationKey{}, borrowPoolVerificationDeadline{Until: c.expires})
+		verificationUntil := c.expires
+		if limit, ok := ctx.Deadline(); ok {
+			verificationUntil = minBorrowTime(verificationUntil, now.Add(limit.Sub(clockReadAt)))
 		}
+		probeCtx, stop := context.WithDeadlineCause(ctx, clockReadAt.Add(verificationUntil.Sub(now)), borrowCancelCandidateDeadline)
+		defer stop()
+		probeCtx = context.WithValue(probeCtx, borrowPoolVerificationKey{}, borrowPoolVerificationDeadline{Until: verificationUntil})
 		beforeProbe := c.details.snapshot(c.expires, now)
 		c.details.VerificationPreparedAt = &now
 		if c.details.SourceAcquiredAt != nil && !sharedPool {
@@ -1213,14 +1217,18 @@ func (s *TicketBorrowService) runTarget(parent context.Context, target BorrowTar
 			if expiry := account.GetOpenAITokenExpiresAt(); expiry != nil && expiry.Before(c.expires) {
 				c.expires = *expiry
 			}
-			route := &BorrowRoute{AcquisitionIdentity: target.AcquisitionMode(), AcquisitionAccountID: c.details.SourceAccountID, AcquisitionStartedAt: c.details.AcquisitionStartedAt, AdmissionUntil: c.expires, CandidateID: c.details.CandidateID, SourceSubjectHash: c.details.SourceSubjectHash, SourceCredentialHash: c.details.SourceCredentialHash, TargetSubjectHash: borrowSubjectHash(account), SourceRevision: c.details.SourceRevision, SourceEnvironmentVersion: c.details.SourceEnvironmentVersion, SourceRotationRevision: c.details.SourceRotationRevision, ID: uuid.NewString(), TargetID: target.AccountID, TargetRevision: target.Revision, SourceID: c.source, IdentityHash: identity, CookieHash: borrowHash(c.cookie.Value), Gateway: borrowGateway(c.cookie.Value), ExpiresAt: c.expires, Secret: BorrowRouteSecret{Endpoint: template.URL.Scheme + "://" + template.URL.Host + template.URL.EscapedPath(), Cookie: *c.cookie, Headers: template.Header.Clone(), Proxy: proxy, Profile: profile}}
-			if c.details.UpstreamExpiresAt != nil {
-				route.ExpiresAt = *c.details.UpstreamExpiresAt
+			publicationNow, clockErr := s.repo.Now(ctx)
+			if clockErr != nil {
+				reason = "candidate_store_unavailable"
+				emitCandidate(c, "candidate", reason)
+				return false
 			}
+			admission := borrowAdmissionDeadline(publicationNow, settings.AdmissionSeconds(), c.expires)
+			route := &BorrowRoute{AcquisitionIdentity: target.AcquisitionMode(), AcquisitionAccountID: c.details.SourceAccountID, AcquisitionStartedAt: c.details.AcquisitionStartedAt, AdmissionUntil: admission, CandidateID: c.details.CandidateID, SourceSubjectHash: c.details.SourceSubjectHash, SourceCredentialHash: c.details.SourceCredentialHash, TargetSubjectHash: borrowSubjectHash(account), SourceRevision: c.details.SourceRevision, SourceEnvironmentVersion: c.details.SourceEnvironmentVersion, SourceRotationRevision: c.details.SourceRotationRevision, ID: uuid.NewString(), TargetID: target.AccountID, TargetRevision: target.Revision, SourceID: c.source, IdentityHash: identity, CookieHash: borrowHash(c.cookie.Value), Gateway: borrowGateway(c.cookie.Value), ExpiresAt: c.expires, Secret: BorrowRouteSecret{Endpoint: template.URL.Scheme + "://" + template.URL.Host + template.URL.EscapedPath(), Cookie: *c.cookie, Headers: template.Header.Clone(), Proxy: proxy, Profile: profile}}
 			route.Secret.Headers.Set("Cookie", result.RouteCookie)
 			publicationStarted := time.Now()
-			err = nil
-			if before, ok := template.Context().Value(borrowBeforeSendKey{}).(func(context.Context) error); ok {
+			err = waitBorrowTargetLease(ctx)
+			if before, ok := template.Context().Value(borrowBeforeSendKey{}).(func(context.Context) error); ok && err == nil {
 				err = before(ctx)
 			}
 			if err == nil {
@@ -1333,6 +1341,9 @@ func (s *TicketBorrowService) runTarget(parent context.Context, target BorrowTar
 		return true
 	}
 	needed := func() (bool, error) {
+		if err := waitBorrowTargetLease(ctx); err != nil {
+			return false, err
+		}
 		if e := s.repo.CheckAcquisition(ctx, acquisition); e != nil {
 			return false, e
 		}
@@ -1472,19 +1483,30 @@ func (s *TicketBorrowService) acquireSourceObserved(ctx context.Context, source 
 		}
 	}()
 	defer func() {
-		cleanup, stop := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-		defer stop()
 		if details.CancellationCause == "" {
 			details.CancellationCause = borrowCancellation(ctx, err)
 		}
-		_ = permits.CancelSourceAttempt(cleanup, lease)
-		_ = permits.SourceAttemptCompleted(cleanup, lease)
-		if source.ID > 0 {
-			_ = s.repo.FinishJob(cleanup, "source", source.ID, lease, reason, delay)
+		if cleanupErr := borrowCleanup(ctx, func(end context.Context) error {
+			if e := permits.CancelSourceAttempt(end, lease); e != nil {
+				return e
+			}
+			if e := permits.SourceAttemptCompleted(end, lease); e != nil {
+				return e
+			}
+			if source.ID > 0 {
+				if e := s.repo.FinishJob(end, "source", source.ID, lease, reason, delay); e != nil {
+					return e
+				}
+			}
+			if err != nil && details.Environment != nil {
+				return environments.ReleaseCandidateEnvironment(end, details.Environment.ID)
+			}
+			return nil
+		}); cleanupErr != nil {
+			slog.Warn("borrow_source_cleanup_failed", "candidate_id", details.CandidateID, "source_id", source.ID, "storage_error", borrowStorageErrorClass(cleanupErr))
 		}
-		if err != nil && details.Environment != nil {
-			_ = environments.ReleaseCandidateEnvironment(cleanup, details.Environment.ID)
-		}
+		cleanup, stop := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		defer stop()
 		s.candidateEvent(cleanup, BorrowEvent{TargetID: acquisition.TargetID, SourceID: source.ID, Stage: "source", Reason: reason}, details, expires)
 	}()
 	queued := time.Now()
@@ -1677,7 +1699,7 @@ func (s *TicketBorrowService) acquireSourceObserved(ctx context.Context, source 
 		if cookie.MaxAge > 0 || !cookie.Expires.IsZero() {
 			details.UpstreamExpiresAt = &upstream
 		}
-		expires = minBorrowTime(env.AdmissionUntil, upstream)
+		expires = upstream
 		if expiry := account.GetOpenAITokenExpiresAt(); expiry != nil {
 			expires = minBorrowTime(expires, *expiry)
 		}
@@ -1688,6 +1710,11 @@ func (s *TicketBorrowService) acquireSourceObserved(ctx context.Context, source 
 		if !now.Before(expires) {
 			return nil, expires, ErrBorrowCandidateExpiry
 		}
+		if e := environments.SetCandidateEnvironmentDeadline(ctx, env.ID, details.CookieHash, expires); e != nil {
+			return nil, expires, e
+		}
+		env.AdmissionUntil = expires
+		details.AdmissionUntil = &env.AdmissionUntil
 		reason = "source_cookie_acquired"
 		acquired := time.Now()
 		details.SourceAcquiredAt = &acquired

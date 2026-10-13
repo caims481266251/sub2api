@@ -45,9 +45,7 @@ func (s *TicketBorrowService) producePoolCandidate(parent context.Context, pool 
 		if queued {
 			return
 		}
-		cleanup, stop := context.WithTimeout(context.WithoutCancel(parent), 3*time.Second)
-		defer stop()
-		if err := pool.FinishCandidatePool(cleanup, a.ID, a.Lease, reason); err != nil {
+		if err := borrowCleanup(parent, func(cleanup context.Context) error { return pool.FinishCandidatePool(cleanup, a.ID, a.Lease, reason) }); err != nil {
 			slog.Warn("borrow_pool_source_cleanup_failed", "candidate_id", a.ID)
 		}
 	}()
@@ -131,11 +129,11 @@ func (s *TicketBorrowService) consumeCandidatePool(ctx context.Context, pool Bor
 	handle := func(out borrowProbeVerification) {
 		active--
 		keep, reason := consume(out)
-		cleanup, stop := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-		if err := pool.FinishCandidatePool(cleanup, out.candidate.details.CandidateID, a.Lease, reason); err != nil {
+		if err := borrowCleanup(ctx, func(cleanup context.Context) error {
+			return pool.FinishCandidatePool(cleanup, out.candidate.details.CandidateID, a.Lease, reason)
+		}); err != nil {
 			slog.Warn("borrow_pool_claim_cleanup_failed", "candidate_id", out.candidate.details.CandidateID, "target_id", a.TargetID)
 		}
-		stop()
 		if !keep {
 			closeDemand()
 		}
@@ -150,6 +148,9 @@ func (s *TicketBorrowService) consumeCandidatePool(ctx context.Context, pool Bor
 	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()
 	for {
+		if err := waitBorrowTargetLease(ctx); err != nil {
+			return borrowAcquisitionReason(err)
+		}
 		if ctx.Err() != nil {
 			return ""
 		}
@@ -168,6 +169,9 @@ func (s *TicketBorrowService) consumeCandidatePool(ctx context.Context, pool Bor
 			}
 		}
 		for !closed && active < capacity {
+			if err := waitBorrowTargetLease(ctx); err != nil {
+				return borrowAcquisitionReason(err)
+			}
 			c, err := pool.ClaimCandidatePool(ctx, a)
 			if err != nil {
 				return borrowAcquisitionReason(err)

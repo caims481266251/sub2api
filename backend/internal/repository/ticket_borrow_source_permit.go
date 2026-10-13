@@ -151,7 +151,7 @@ func (r *ticketBorrowRepository) GrantSourceAttempt(ctx context.Context, source 
  AND COALESCE(a.temp_unschedulable_until<=clock_timestamp(),true) AND ` + borrowNormalScope + `
  AND NOT EXISTS(SELECT 1 FROM ticket_borrow_targets st WHERE st.account_id=a.id AND st.enabled)
  AND EXISTS(SELECT 1 FROM proxy_pool_entries WHERE enabled AND retired_at IS NULL)
- AND EXISTS(SELECT 1` + borrowPoolDemandFrom + `)
+ AND ` + borrowPoolEnabledConsumers + `
  AND (SELECT count(*) FROM ticket_borrow_source_attempts q WHERE q.pool_candidate_id IS NOT NULL AND q.completed_at IS NULL AND q.lease_until>clock_timestamp())<4`
 	eligible = ` FROM (SELECT i.id,i.target_id,i.batch_id,COALESCE(i.source_id,0) source_id,i.category,i.queued_at,g.granted_at` + eligible + `
  UNION ALL SELECT i.id,0::bigint,i.batch_id,i.source_id,i.category,i.queued_at,

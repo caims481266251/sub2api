@@ -860,10 +860,14 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	// Scheduling uses no native HTTP previous; route lookup retains it internally.
 	originalPreviousResponseID := previousResponseID
 	if !legacyCompact && !nativeV2 && openAICompatibleRequestPlatform(c.Request.Context(), apiKey) == service.PlatformOpenAI {
+		c.Request = c.Request.WithContext(h.gatewayService.PrepareBorrowHTTPReplay(c.Request.Context(), apiKey.GroupID, subject.UserID, apiKey.ID, previousResponseID, body))
 		ctx, effective, converted, err := h.gatewayService.PrepareBorrowHTTPContinuation(c.Request.Context(), apiKey.GroupID, previousResponseID, forwardModel, c.Request.Header, forwardBody)
 		if err != nil {
 			if service.IsBorrowRouteUnavailable(err) {
 				h.errorResponse(c, http.StatusServiceUnavailable, "service_unavailable", "borrowed continuation is temporarily unavailable")
+			} else if service.IsOpenAITurnAdmissionError(err) {
+				reqLog.Warn("openai.borrow_http_continuation_lookup_failed", zap.Error(err))
+				h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Continuation state is temporarily unavailable")
 			} else {
 				h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 			}
@@ -939,6 +943,8 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	var rpmAdmission openAIRPMAdmission
 	var oauth429FailoverState service.OpenAIOAuth429FailoverState
 	var passthroughFailoverState openAIPassthroughFailoverState
+	borrowContinuationUnsent := true
+	defer logBorrowHTTPContinuationOutcome(c, &switchCount)
 
 	// 生图意图的 /v1/responses 请求必须调度到确实支持 Responses API 的账号，否则
 	// 会在 forward 阶段被静默降级为无法生图的 Chat Completions 直转（#4417）。
@@ -988,6 +994,12 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			requestPlatform,
 		)
 		if err != nil {
+			if h.retryBorrowHTTPContinuation(c, err, apiKey.GroupID, &forwardBody, &sessionHash, failedAccountIDs, &switchCount, maxAccountSwitches, borrowContinuationUnsent) {
+				continue
+			}
+			if borrowContinuationUnsent && h.finishBorrowHTTPContinuationFailure(c, err, streamStarted) {
+				return
+			}
 			if borrowBusinessSelectionFallback(c, err, failedAccountIDs) {
 				continue
 			}
@@ -1012,7 +1024,8 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				zap.Error(openAICompatibleSelectionErrorForLog(err, requestPlatform)),
 				zap.Int("excluded_account_count", len(failedAccountIDs)),
 			)
-			if len(failedAccountIDs) == 0 || service.IsBorrowRouteUnavailable(err) {
+			if len(failedAccountIDs) == 0 || service.IsBorrowRouteUnavailable(err) ||
+				(borrowContinuationUnsent && c.GetInt64(borrowHTTPFallbackOriginalAccountKey) > 0) {
 				if legacyCompact && errors.Is(err, service.ErrNoAvailableCompactAccounts) {
 					markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
 					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "compact_not_supported", "No available accounts support /responses/compact", streamStarted)
@@ -1126,6 +1139,15 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			}()
 			return h.gatewayService.Forward(rpmAdmission.forwardContext(c.Request.Context(), account), c, account, attemptBody)
 		}()
+		initialBorrowRejection := result == nil && service.IsOpenAIInitialAdmissionRejection(err)
+		borrowContinuationUnsent = borrowContinuationUnsent && initialBorrowRejection
+		if initialBorrowRejection && h.retryBorrowHTTPContinuation(c, err, apiKey.GroupID, &forwardBody, &sessionHash, failedAccountIDs, &switchCount, maxAccountSwitches, borrowContinuationUnsent) {
+			lastAdmissionErr = err
+			continue
+		}
+		if borrowContinuationUnsent && initialBorrowRejection && h.finishBorrowHTTPContinuationFailure(c, err, streamStarted) {
+			return
+		}
 		if retryOpenAIInitialAdmission(c, err, result, forwardBody, account.ID, failedAccountIDs, &switchCount, maxAccountSwitches) {
 			lastAdmissionErr = err
 			reqLog.Info("openai.admission_reselecting", zap.Int64("account_id", account.ID), zap.Int("switch_count", switchCount))

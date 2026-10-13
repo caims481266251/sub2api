@@ -310,6 +310,8 @@ func snapshotOpsStreamErrorContext(c *gin.Context, streamErr *OpsStreamError) {
 	}
 	if c.Request != nil {
 		if a := requesttiming.LatestAttempt(c.Request.Context()); a != nil && a.Status >= 200 && a.Status < 300 && a.Terminal != "completed" && a.BorrowRouteID != "" && (streamErr.AccountID == 0 || a.AccountID == streamErr.AccountID) {
+			// A stream failure's semantic 502/503 is not its wire HTTP status.
+			streamErr.UpstreamStatus = a.Status
 			found := false
 			if value, ok := c.Get(OpsUpstreamErrorsKey); ok {
 				if events, ok := value.([]*OpsUpstreamErrorEvent); ok && len(events) > 0 {
@@ -384,6 +386,22 @@ func GetOpsStreamErrors(c *gin.Context) []OpsStreamError {
 		}
 	}
 	if streamErr, ok := GetOpsStreamError(c); ok {
+		// The error can be marked by the parser before its deferred body/lease
+		// cleanup runs. Refresh only the recorded attempt, never a later route.
+		if c.Request != nil && GetOpenAIClientTransport(c) != OpenAIClientTransportWS {
+			streamErr.UpstreamErrors = append([]*OpsUpstreamErrorEvent(nil), streamErr.UpstreamErrors...)
+			for i, ev := range streamErr.UpstreamErrors {
+				if ev == nil || ev.Attempt == nil {
+					continue
+				}
+				a := requesttiming.AttemptByNumber(c.Request.Context(), ev.Attempt.Number)
+				if a != nil && a.AccountID == ev.Attempt.AccountID && a.BorrowRouteID == ev.Attempt.BorrowRouteID {
+					copy := *ev
+					copy.Attempt = a
+					streamErr.UpstreamErrors[i] = &copy
+				}
+			}
+		}
 		return []OpsStreamError{streamErr}
 	}
 	return nil

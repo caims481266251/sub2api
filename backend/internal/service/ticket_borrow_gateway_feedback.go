@@ -15,6 +15,14 @@ type BorrowGatewayOutcome struct {
 	Reason      string
 }
 
+// Counts describe the candidates actually available at selection time. An
+// unchanged choice with no alternative must not be reported as failed ranking.
+type BorrowGatewaySelection struct {
+	Eligible      int `json:"eligible"`
+	Gateways      int `json:"gateways"`
+	Deprioritized int `json:"deprioritized"`
+}
+
 type BorrowGatewayFeedbackRepository interface {
 	BorrowGatewayPriorities(context.Context, BorrowAcquisition) (map[string]time.Time, error)
 	RecordBorrowGatewayOutcome(context.Context, BorrowAcquisition, BorrowGatewayOutcome) error

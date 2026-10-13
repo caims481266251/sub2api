@@ -190,6 +190,7 @@ type BorrowCandidateDetails struct {
 	SourceAcquiredAt       *time.Time                  `json:"source_acquired_at,omitempty"`
 	ProbeQueueMS           *int64                      `json:"probe_queue_ms,omitempty"`
 	GatewayPriority        string                      `json:"gateway_priority,omitempty"`
+	GatewaySelection       *BorrowGatewaySelection     `json:"gateway_selection,omitempty"`
 	AcquisitionIdentity    string                      `json:"acquisition_identity,omitempty"`
 	AcquisitionStartedAt   *time.Time                  `json:"acquisition_started_at,omitempty"`
 	UpstreamExpiresAt      *time.Time                  `json:"upstream_expires_at,omitempty"`

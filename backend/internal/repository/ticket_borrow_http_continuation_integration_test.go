@@ -95,6 +95,14 @@ func TestBorrowHTTPContinuationNoGenericFallback(t *testing.T) {
 			choice, err := r.ReserveHTTPContinuation(ctx, id, "identity", response, "session", "fresh", uuid.NewString())
 			require.Error(t, err)
 			require.Nil(t, choice)
+			require.ErrorIs(t, err, service.ErrBorrowUnavailable)
+			if block == "unknown" || block == "validation_only" {
+				require.ErrorIs(t, err, service.ErrBorrowContinuationBindingMissing)
+				// Fresh inventory cannot prove the ownership of an unknown response.
+				require.NoError(t, r.CheckLatestRoute(ctx, id, "identity", ""))
+			} else {
+				require.ErrorIs(t, err, service.ErrBorrowNoEligibleRoute)
+			}
 			var count int
 			require.NoError(t, integrationDB.QueryRow(`SELECT count(*) FROM ticket_borrow_route_leases WHERE target_id=$1`, id).Scan(&count))
 			require.Zero(t, count)

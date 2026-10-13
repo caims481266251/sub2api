@@ -3,14 +3,17 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/stretchr/testify/require"
 )
@@ -19,6 +22,71 @@ func activeBorrowLeases(r *borrowTestRepo) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return len(r.leases)
+}
+
+type borrowReleaseFailureRepo struct {
+	*borrowTestRepo
+	attempts int
+	failures int
+	block    bool
+}
+
+func (r *borrowReleaseFailureRepo) ReleaseRoute(ctx context.Context, id string) error {
+	r.attempts++
+	if r.block {
+		<-ctx.Done()
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if r.attempts <= r.failures {
+		return errors.New("temporary database failure")
+	}
+	return r.borrowTestRepo.ReleaseRoute(ctx, id)
+}
+
+func TestBorrowLeaseReleaseRetriesWithinCleanupAndRecordsOutcome(t *testing.T) {
+	for _, failures := range []int{0, 1, 2} {
+		t.Run(fmt.Sprint(failures), func(t *testing.T) {
+			_, base := borrowFixture()
+			base.leases = map[string]string{"lease": "route-a"}
+			repo := &borrowReleaseFailureRepo{borrowTestRepo: base, failures: failures}
+			collector := requesttiming.New(time.Now(), 0)
+			req, _ := requesttiming.StartAttempt(borrowRequest(t).WithContext(requesttiming.With(t.Context(), collector)), 11, 0)
+			use := newBorrowRouteUse(req.Context(), repo, "lease", time.Hour)
+			use.finishReason("read_error")
+			use.finish()
+			a := requesttiming.LatestAttempt(req.Context())
+			require.Equal(t, min(failures+1, 2), repo.attempts)
+			require.Equal(t, repo.attempts, a.BorrowLeaseReleaseAttempts)
+			require.Equal(t, "read_error", a.BorrowLeaseEnd)
+			require.Equal(t, borrowHash("lease"), a.BorrowLeaseHash)
+			if failures < 2 {
+				require.Zero(t, activeBorrowLeases(base))
+				require.Equal(t, "released", a.BorrowLeaseState)
+			} else {
+				require.Equal(t, 1, activeBorrowLeases(base), "persistent DB failure stays visible until TTL")
+				require.Equal(t, "release_failed", a.BorrowLeaseState)
+			}
+		})
+	}
+}
+
+func TestBorrowLeaseReleaseFailureKeepsOriginalTotalBudget(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		_, base := borrowFixture()
+		base.leases = map[string]string{"lease": "route-a"}
+		repo := &borrowReleaseFailureRepo{borrowTestRepo: base, block: true}
+		ctx, cancel := context.WithCancel(t.Context())
+		// Test the cleanup deadline in isolation: synctest cannot advance its
+		// clock while a concurrent sync.Once caller waits on its internal mutex.
+		use := &borrowRouteUse{repo: repo, id: "lease", ctx: ctx, cancel: cancel, done: make(chan struct{})}
+		started := time.Now()
+		use.finish()
+		require.Equal(t, 3*time.Second, time.Since(started))
+		require.Equal(t, 2, repo.attempts)
+		require.Equal(t, 1, activeBorrowLeases(base))
+	})
 }
 
 func TestTicketBorrowRouteLeaseSpansStreamAndReleasesOnce(t *testing.T) {

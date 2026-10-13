@@ -18,6 +18,8 @@ import (
 type borrowHTTPContinuation struct {
 	TargetID                        int64
 	Response, Session, FreshSession string
+	ReplayReady                     bool
+	ReplayRefusal                   string
 }
 type borrowHTTPContinuationKey struct{}
 
@@ -60,21 +62,21 @@ func (s *OpenAIGatewayService) PrepareBorrowHTTPContinuation(ctx context.Context
 	}
 	id, err := s.getOpenAIWSStateStore().GetResponseAccount(ctx, derefGroupID(groupID), previous)
 	if err != nil {
-		return ctx, body, false, ErrBorrowUnavailable
+		return ctx, body, false, borrowAdmissionError(err)
 	}
 	if id <= 0 {
 		return ctx, body, false, nil
 	}
 	a, err := s.accountRepo.GetByID(ctx, id)
 	if err != nil {
-		return ctx, body, false, ErrBorrowUnavailable
+		return ctx, body, false, borrowAdmissionError(err)
 	}
 	if a == nil || !a.IsOpenAI() || !a.UsesOpenAICodexProtocol() {
 		return ctx, body, false, nil
 	}
 	enabled, err := s.borrowRoutes.Enabled(ctx, id)
 	if err != nil {
-		return ctx, body, false, ErrBorrowUnavailable
+		return ctx, body, false, borrowAdmissionError(err)
 	}
 	if !enabled {
 		return ctx, body, false, nil
@@ -87,6 +89,14 @@ func (s *OpenAIGatewayService) PrepareBorrowHTTPContinuation(ctx context.Context
 		return ctx, body, false, err
 	}
 	hint := &borrowHTTPContinuation{TargetID: id, Response: borrowResponseKey(previous), Session: borrowSessionKey(headers), FreshSession: uuid.NewString()}
+	hint.ReplayRefusal = "replay_evidence_missing"
+	if replay := borrowHTTPReplayFromContext(ctx); replay != nil {
+		hint.ReplayRefusal = replay.reason
+		if hint.ReplayRefusal == "" && replay.previousAccount != id {
+			hint.ReplayRefusal = "replay_account_mismatch"
+		}
+		hint.ReplayReady = hint.ReplayRefusal == ""
+	}
 	return context.WithValue(ctx, borrowHTTPContinuationKey{}, hint), effective, true, nil
 }
 

@@ -14,7 +14,7 @@ function snapshot(overrides: Partial<BorrowCandidatePoolPage> = {}): BorrowCandi
   return {
     summary: { capacity: 64, revision: 1, running: true, occupied: 3, acquiring: 1, queued: 1, claimed: 1, waiting_targets: 1, demand_slots: 2 },
     total: 3, page: 1, page_size: 25, server_now: time,
-    items: [{ id: 'candidate-queued', state: 'queued', source_id: 1, source_account_id: 13, source_name: 'Source 13', target_id: 0, target_name: '', gateway: 'gateway-a', created_at: time, enqueued_at: time, admission_until: '2026-10-12T15:02:00Z', queue_until: '2026-10-12T15:00:15Z', reason: '' }],
+    items: [{ id: 'candidate-queued', state: 'queued', source_id: 1, source_account_id: 13, source_name: 'Source 13', target_id: 0, target_name: '', gateway: 'gateway-a', created_at: time, enqueued_at: time, admission_until: '2026-10-12T15:02:00Z', cookie_expires_at: '2026-10-12T16:00:00Z', reason: '' }],
     ...overrides
   }
 }
@@ -28,13 +28,13 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers())
 
 describe('candidate pool management', () => {
-  it('shows global occupancy, separate queue expiry, and linked candidate details', async () => {
+  it('shows global occupancy, declared Cookie expiry and queue age, and linked candidate details', async () => {
     const w = render()
     try {
       await flushPromises()
       expect(w.get('[data-testid="pool-occupancy"]').text()).toBe('3 / 64')
       expect(api.candidatePool).toHaveBeenCalledWith(expect.objectContaining({ state: 'active', page: 1 }))
-      expect(w.get('[data-pool-candidate="candidate-queued"]').text()).toContain('queueRemaining{"seconds":15}')
+      expect(w.get('[data-pool-candidate="candidate-queued"]').text()).toContain('cookieRemaining{"seconds":3600}')
       api.candidatePoolDetail.mockResolvedValue({ ...snapshot().items[0], state: 'finished', reason: 'target_probe_passed', target_id: 63, route_id: 'route-a', details: { candidate_id: 'candidate-queued', batch_id: '', source: {}, target: {} }, server_now: time })
       await w.get('[data-pool-detail="candidate-queued"]').trigger('click'); await flushPromises()
       expect(api.candidatePoolDetail).toHaveBeenCalledWith('candidate-queued')

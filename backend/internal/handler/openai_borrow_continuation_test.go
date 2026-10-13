@@ -21,21 +21,31 @@ import (
 
 type borrowHTTPHandlerRepo struct {
 	service.TicketBorrowRepository
-	bindings    map[string]string
-	sessions    map[string]string
-	route       *service.BorrowRoute
-	restart     bool
-	leases      int
-	unavailable bool
+	bindings       map[string]string
+	sessions       map[string]string
+	route          *service.BorrowRoute
+	restart        bool
+	leases         int
+	unavailable    bool
+	checkErr       error
+	reserveErr     error
+	beforeSendErr  error
+	secondBorrowed bool
 }
 
 func (r *borrowHTTPHandlerRepo) Target(_ context.Context, id int64) (service.BorrowTarget, error) {
-	return service.BorrowTarget{AccountID: id, Enabled: id == 11}, nil
+	return service.BorrowTarget{AccountID: id, Enabled: id == 11 || (id == 12 && r.secondBorrowed)}, nil
 }
 func (r *borrowHTTPHandlerRepo) Targets(context.Context) ([]service.BorrowTarget, error) {
+	if r.secondBorrowed {
+		return []service.BorrowTarget{{AccountID: 11, Enabled: true}, {AccountID: 12, Enabled: true}}, nil
+	}
 	return []service.BorrowTarget{{AccountID: 11, Enabled: true}}, nil
 }
 func (r *borrowHTTPHandlerRepo) Route(context.Context, int64, string, string) (*service.BorrowRoute, error) {
+	if r.beforeSendErr != nil {
+		return nil, r.beforeSendErr
+	}
 	return r.route, nil
 }
 func (r *borrowHTTPHandlerRepo) LookupSession(_ context.Context, _ int64, key string) (string, bool, error) {
@@ -55,13 +65,13 @@ func (r *borrowHTTPHandlerRepo) ReleaseRoute(context.Context, string) error { r.
 func (r *borrowHTTPHandlerRepo) RouteStatuses(context.Context, int64, string) ([]service.BorrowRouteStatus, error) {
 	return nil, nil
 }
-func (r *borrowHTTPHandlerRepo) CheckLatestRoute(context.Context, int64, string, string) error {
-	if r.unavailable {
-		return service.ErrBorrowUnavailable
+func (r *borrowHTTPHandlerRepo) CheckLatestRoute(_ context.Context, id int64, _, _ string) error {
+	if r.unavailable && id == 11 {
+		return service.ErrBorrowNoEligibleRoute
 	}
 	return nil
 }
-func (r *borrowHTTPHandlerRepo) ReserveLatestRoute(_ context.Context, _ int64, _, session, fresh, _ string) (*service.BorrowContinuationRoute, error) {
+func (r *borrowHTTPHandlerRepo) ReserveLatestRoute(_ context.Context, id int64, _, session, fresh, _ string) (*service.BorrowContinuationRoute, error) {
 	effective := r.sessions[session]
 	bound := r.bindings[session]
 	restarted := bound != "" && bound != r.route.ID
@@ -73,15 +83,26 @@ func (r *borrowHTTPHandlerRepo) ReserveLatestRoute(_ context.Context, _ int64, _
 		r.sessions[session] = effective
 	}
 	r.leases++
-	return &service.BorrowContinuationRoute{Route: r.route, SessionID: effective, Restarted: restarted}, nil
+	route := *r.route
+	route.TargetID = id
+	return &service.BorrowContinuationRoute{Route: &route, SessionID: effective, Restarted: restarted}, nil
 }
 func (r *borrowHTTPHandlerRepo) CheckHTTPContinuation(_ context.Context, _ int64, _ string, response, _ string) error {
+	if r.checkErr != nil {
+		return r.checkErr
+	}
 	if r.bindings[response] == "" {
-		return service.ErrBorrowUnavailable
+		return service.ErrBorrowContinuationBindingMissing
+	}
+	if r.unavailable {
+		return service.ErrBorrowNoEligibleRoute
 	}
 	return nil
 }
 func (r *borrowHTTPHandlerRepo) ReserveHTTPContinuation(ctx context.Context, id int64, identity, response, session, fresh, lease string) (*service.BorrowContinuationRoute, error) {
+	if r.reserveErr != nil {
+		return nil, r.reserveErr
+	}
 	if err := r.CheckHTTPContinuation(ctx, id, identity, response, session); err != nil {
 		return nil, err
 	}
@@ -99,10 +120,11 @@ func (r *borrowHTTPHandlerRepo) BindHTTPContinuationResponse(_ context.Context, 
 }
 
 type borrowHTTPHandlerUpstream struct {
-	borrow     *service.TicketBorrowService
-	bodies     [][]byte
-	headers    []http.Header
-	accountIDs []int64
+	borrow        *service.TicketBorrowService
+	bodies        [][]byte
+	headers       []http.Header
+	accountIDs    []int64
+	failureStatus int
 }
 
 func (u *borrowHTTPHandlerUpstream) SetTicketBorrowService(s *service.TicketBorrowService) {
@@ -113,9 +135,17 @@ func (u *borrowHTTPHandlerUpstream) Do(req *http.Request, proxy string, id int64
 }
 func (u *borrowHTTPHandlerUpstream) DoWithTLS(req *http.Request, proxy string, id int64, n int, p *tlsfingerprint.Profile) (*http.Response, error) {
 	return u.borrow.ForwardHTTP(req, proxy, id, n, p, func(r *http.Request, _ string, accountID int64, _ int, _ *tlsfingerprint.Profile) (*http.Response, error) {
-		if err := service.BorrowBeforeSend(r); err != nil {
+		if err := service.BorrowBeforeTransport(r); err != nil {
 			return nil, err
 		}
+		recovery := service.BorrowBusinessRecoveryFromContext(r.Context())
+		if err := recovery.BeginTransport(r.Context()); err != nil {
+			return nil, err
+		}
+		if err := recovery.WritePossible(); err != nil {
+			return nil, err
+		}
+		recovery.WroteHeaders(r.Context())
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			return nil, err
@@ -123,6 +153,9 @@ func (u *borrowHTTPHandlerUpstream) DoWithTLS(req *http.Request, proxy string, i
 		u.bodies = append(u.bodies, body)
 		u.accountIDs = append(u.accountIDs, accountID)
 		u.headers = append(u.headers, r.Header.Clone())
+		if u.failureStatus != 0 && accountID == 11 {
+			return &http.Response{StatusCode: u.failureStatus, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"error":{"type":"server_error","message":"upstream unavailable"}}`))}, nil
+		}
 		responseID := fmt.Sprintf("resp_borrow_%d", len(u.bodies))
 		sse := fmt.Sprintf("data: {\"type\":\"response.created\",\"response\":{\"id\":%q}}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":%q,\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"OK\"}]}],\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n", responseID, responseID)
 		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(sse))}, nil

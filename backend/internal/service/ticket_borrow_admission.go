@@ -5,12 +5,31 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 	"sync/atomic"
 )
 
 // ErrBorrowResponseRejected marks a non-error response whose borrowed routing
 // identity changed. It is terminal: the business request may already have executed.
 var ErrBorrowResponseRejected = errors.New("borrow_response_rejected")
+
+// Keep errors.Is(ErrBorrowUnavailable) and the existing admission/retry policy,
+// while retaining the actual veto through all scheduler implementations.
+var ErrBorrowContinuationBindingMissing = fmt.Errorf("borrow response binding missing: %w", ErrBorrowUnavailable)
+var ErrBorrowNoEligibleRoute = fmt.Errorf("no eligible borrow route: %w", ErrBorrowUnavailable)
+
+func BorrowAdmissionReason(err error) string {
+	switch {
+	case errors.Is(err, ErrBorrowContinuationBindingMissing):
+		return "response_binding_missing"
+	case errors.Is(err, ErrBorrowNoEligibleRoute):
+		return "no_eligible_route"
+	case IsBorrowRouteUnavailable(err):
+		return "borrow_route_unavailable"
+	default:
+		return "latest_state_unavailable"
+	}
+}
 
 type borrowPreSendError struct{ error }
 
@@ -61,21 +80,34 @@ func IsBorrowRouteUnavailable(err error) bool {
 
 type borrowSelectionFailureKey struct{}
 
+type borrowSelectionFailure struct {
+	mu  sync.Mutex
+	err error
+}
+
 // Preserve a borrow veto when legacy or advanced selection reduces candidates
 // to ErrNoAvailableAccounts. This only annotates a failed selection; account
 // ordering, successful selections and the existing retry policy are unchanged.
 func withBorrowSelectionFailure(ctx context.Context) (context.Context, func(error) error) {
-	unavailable := &atomic.Bool{}
-	return context.WithValue(ctx, borrowSelectionFailureKey{}, unavailable), func(err error) error {
-		if unavailable.Load() && errors.Is(err, ErrNoAvailableAccounts) {
-			return fmt.Errorf("%w: %w", err, ErrBorrowUnavailable)
+	failure := &borrowSelectionFailure{}
+	return context.WithValue(ctx, borrowSelectionFailureKey{}, failure), func(err error) error {
+		failure.mu.Lock()
+		defer failure.mu.Unlock()
+		if failure.err != nil && errors.Is(err, ErrNoAvailableAccounts) {
+			return fmt.Errorf("%w: %w", err, failure.err)
 		}
 		return err
 	}
 }
 
 func observeBorrowSelectionFailure(ctx context.Context, err error) {
-	if unavailable, ok := ctx.Value(borrowSelectionFailureKey{}).(*atomic.Bool); ok && IsBorrowRouteUnavailable(err) {
-		unavailable.Store(true)
+	if failure, ok := ctx.Value(borrowSelectionFailureKey{}).(*borrowSelectionFailure); ok && err != nil {
+		failure.mu.Lock()
+		defer failure.mu.Unlock()
+		// A control-plane failure must not acquire the migration permission of
+		// another candidate's capacity veto.
+		if failure.err == nil || !IsBorrowRouteUnavailable(err) {
+			failure.err = borrowAdmissionError(err)
+		}
 	}
 }

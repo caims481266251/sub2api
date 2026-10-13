@@ -23,7 +23,7 @@ func (r *ticketBorrowRepository) readRoute(ctx context.Context, db borrowQueryer
 	var secret string
 	err := db.QueryRowContext(ctx, borrowRouteSelect+" ORDER BY "+order+" LIMIT 1", id, identity, preferred).Scan(&route.ID, &route.TargetID, &route.TargetRevision, &route.SourceID, &route.IdentityHash, &route.CookieHash, &route.Gateway, &route.ExpiresAt, &secret, &route.UsableUntil)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, service.ErrBorrowUnavailable
+		return nil, service.ErrBorrowNoEligibleRoute
 	}
 	if err != nil {
 		return nil, err

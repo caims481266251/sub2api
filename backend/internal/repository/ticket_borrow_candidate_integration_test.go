@@ -96,7 +96,7 @@ func TestBorrowCandidateConcurrentFairnessCancellationAndRestart(t *testing.T) {
 		devices[env.Fingerprint.DeviceID] = true
 		start, until, err := r.StartCandidateEnvironment(ctx, env.ID)
 		require.NoError(t, err)
-		require.WithinDuration(t, start.Add(80*time.Second), until, time.Millisecond)
+		require.WithinDuration(t, start.Add(180*time.Second), until, time.Second, "provisional acquisition lease is replaced by the observed Cookie deadline")
 		require.NoError(t, r.MarkCandidateEnvironmentSent(ctx, env.ID))
 		require.NoError(t, r.MarkCandidateEnvironmentSent(ctx, env.ID))
 		require.NoError(t, r.ReleaseCandidateEnvironment(ctx, env.ID))
@@ -142,6 +142,8 @@ func TestBorrowCandidateAdmissionModeFencesAndInflightCompletion(t *testing.T) {
 	require.NoError(t, err, "published route survives acquisition mode change")
 	require.ErrorIs(t, r.SetTargetIdentity(ctx, a.TargetID, true, target.Revision, target.AcquisitionRevision, service.BorrowAcquisitionSelf), service.ErrBorrowConflict)
 	settings, err := r.Settings(ctx)
+	require.NoError(t, err)
+	_, err = integrationDB.Exec(`UPDATE ticket_borrow_routes SET admission_started_at=clock_timestamp()-interval '5 seconds' WHERE id=$1`, route.ID)
 	require.NoError(t, err)
 	w := 1
 	settings.AdmissionWindowSeconds = &w

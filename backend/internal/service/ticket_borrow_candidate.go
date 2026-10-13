@@ -118,6 +118,7 @@ func RandomizeBorrowProxySession(raw string) (string, bool, error) {
 type BorrowCandidateEnvironmentRepository interface {
 	AllocateCandidateEnvironment(context.Context, string, string) (*BorrowCandidateEnvironment, error)
 	StartCandidateEnvironment(context.Context, string) (time.Time, time.Time, error)
+	SetCandidateEnvironmentDeadline(context.Context, string, string, time.Time) error
 	MarkCandidateEnvironmentSent(context.Context, string) error
 	CheckCandidateEnvironment(context.Context, string) error
 	ReleaseCandidateEnvironment(context.Context, string) error

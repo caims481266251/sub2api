@@ -26,14 +26,14 @@ func TestBorrowPoolStandbyWhileConsumersBusy(t *testing.T) {
 	}
 	p, e := f.r.ReserveCandidatePoolFetch(t.Context(), uuid.NewString(), uuid.NewString())
 	require.NoError(t, e)
-	require.Nil(t, p, "two standby candidates must cap the backlog")
+	require.NotNil(t, p, "free pool capacity is independent of occupied target slots")
 	c, e := f.r.ClaimCandidatePool(t.Context(), a)
 	require.NoError(t, e)
 	require.Nil(t, c, "standby never increases target concurrency")
 	require.NoError(t, f.r.RemoveCandidatePoolDemand(t.Context(), a))
 	p, e = f.r.ReserveCandidatePoolFetch(t.Context(), uuid.NewString(), uuid.NewString())
 	require.NoError(t, e)
-	require.Nil(t, p, "no production without live demand")
+	require.NotNil(t, p, "enabled consumers still need inventory between target tasks")
 }
 
 func TestBorrowPoolFeedbackChangesSelectionAndAllowsFallback(t *testing.T) {
@@ -50,7 +50,7 @@ func TestBorrowPoolFeedbackChangesSelectionAndAllowsFallback(t *testing.T) {
 	c, e := f.r.ClaimCandidatePool(t.Context(), a)
 	require.NoError(t, e)
 	require.Equal(t, old.ID, c.ID, "a newer demoted gateway cannot win merely on freshness")
-	require.Equal(t, "prioritized", c.Details.GatewayPriority)
+	require.Equal(t, "normal", c.Details.GatewayPriority, "the oldest ordinary candidate already wins FIFO")
 	c, e = f.r.ClaimCandidatePool(t.Context(), a)
 	require.NoError(t, e)
 	require.Equal(t, fresh.ID, c.ID, "all-demoted fallback must remain available")
@@ -95,5 +95,5 @@ func TestBorrowPoolStandbyReservesTargetBudgetForClaimedWork(t *testing.T) {
 	require.NoError(t, e)
 	p, e := f.r.ReserveCandidatePoolFetch(t.Context(), uuid.NewString(), uuid.NewString())
 	require.NoError(t, e)
-	require.Nil(t, p, "remaining two HTTP permits belong to the already claimed candidate")
+	require.NotNil(t, p, "source inventory is independent of the target HTTP budget")
 }

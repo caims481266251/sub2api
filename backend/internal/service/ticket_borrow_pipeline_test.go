@@ -55,7 +55,12 @@ func TestBorrowPipelineRefillsWithoutWaitingForSlowAcquisition(t *testing.T) {
 		},
 		verify:     func(c borrowProbeCandidate) borrowProbeVerification { return borrowProbeVerification{candidate: c} },
 		consume:    func(borrowProbeVerification) bool { verified++; return verified < 5 },
-		priorities: func() map[string]time.Time { return nil }, selected: func(borrowProbeCandidate, bool, bool) {},
+		priorities: func() map[string]time.Time { return nil }, selected: func(c borrowProbeCandidate, _, _ bool) {
+			require.NotNil(t, c.details.GatewaySelection)
+			require.Equal(t, 1, c.details.GatewaySelection.Gateways)
+			require.Zero(t, c.details.GatewaySelection.Deprioritized)
+			require.GreaterOrEqual(t, c.details.GatewaySelection.Eligible, 1)
+		},
 		discard: func(borrowProbeVerification) { discarded.Add(1) },
 	}
 	done := make(chan struct{})

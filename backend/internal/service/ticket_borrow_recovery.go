@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -90,6 +91,10 @@ func (s *TicketBorrowService) trackTargetRequest(req *http.Request, q BorrowRequ
 		releaseSlot()
 		return nil, err
 	}
+	if err := waitBorrowTargetLease(req.Context()); err != nil {
+		releaseSlot()
+		return nil, err
+	}
 	if err := s.repo.BeginTargetRequest(req.Context(), q); err != nil {
 		diagnostic.finish(req.Context(), err)
 		releaseSlot()
@@ -127,6 +132,9 @@ func (s *TicketBorrowService) trackTargetRequest(req *http.Request, q BorrowRequ
 		return s.repo.CheckTargetRequest(ctx, q)
 	})
 	ctx = context.WithValue(ctx, borrowConnectedKey{}, func(connected *http.Request) error {
+		if err := waitBorrowTargetLease(connected.Context()); err != nil {
+			return err
+		}
 		if err := s.checkPoolVerificationTime(connected.Context(), q.Phase); err != nil {
 			return err
 		}
@@ -150,10 +158,8 @@ func (s *TicketBorrowService) trackTargetRequest(req *http.Request, q BorrowRequ
 			ended := q
 			ended.Diagnostic = diagnostic.snapshot()
 			cancel()
-			cleanup, stop := context.WithTimeout(context.WithoutCancel(req.Context()), 3*time.Second)
-			defer stop()
-			if err := s.repo.EndTargetRequest(cleanup, ended, status, outcome); err != nil {
-				slog.Warn("borrow_probe_request_cleanup_failed", "request_id", q.ID, "target_id", q.TargetID, "phase", q.Phase)
+			if err := borrowCleanup(req.Context(), func(cleanup context.Context) error { return s.repo.EndTargetRequest(cleanup, ended, status, outcome) }); err != nil {
+				slog.Warn("borrow_probe_request_cleanup_failed", "request_id", q.ID, "candidate_id", q.CandidateID, "target_id", q.TargetID, "phase", q.Phase, "error_type", fmt.Sprintf("%T", err), "storage_error", borrowStorageErrorClass(err))
 			}
 		})
 	}
@@ -255,8 +261,6 @@ func borrowAcquisitionReason(err error) string {
 	switch {
 	case errors.Is(err, ErrBorrowCandidateTimeBudget):
 		return "candidate_time_budget_insufficient"
-	case errors.Is(err, ErrBorrowCandidatePoolWindow):
-		return "candidate_pool_window_too_short"
 	case errors.Is(err, ErrBorrowRouteReady):
 		return "target_route_ready"
 	case errors.Is(err, ErrBorrowRequestBudget):

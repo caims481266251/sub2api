@@ -63,6 +63,8 @@ const reasons: Record<string, TagSpec> = {
   candidate_publish_expired: label('warning', 'publishExpired'),
   candidate_publish_conflict: label('warning', 'publishConflict'),
   candidate_publish_failed: label('danger', 'publishFailed'),
+  candidate_environment_invalid: label('warning', 'candidateEnvironmentInvalid'),
+  candidate_pool_lifecycle_upgraded: label('neutral', 'candidatePoolUpgraded'),
   candidate_pool_enqueued: label('info', 'candidatePoolEnqueued'),
   candidate_pool_claimed: label('info', 'candidatePoolClaimed'),
   candidate_pool_source_failed: label('warning', 'candidatePoolSourceFailed'),
