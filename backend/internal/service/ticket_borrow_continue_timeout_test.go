@@ -64,7 +64,7 @@ func (u *continuePolicyUpstream) DoWithTLS(req *http.Request, proxy string, id i
 	})
 }
 func TestBorrowContinueTimeoutCancelsOnlyContinuationAndNeverRetries(t *testing.T) {
-	for _, mode := range []string{"headers", "max_timeout", "body", "close_only", "late_success", "normal", "http401", "http429", "sse429", "parent_cancel"} {
+	for _, mode := range []string{"headers", "max_timeout", "body", "close_only", "late_success", "normal", "http401", "http429", "sse429", "parent_cancel", "changed_ticket"} {
 		t.Run(mode, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				s, base := borrowFixture()
@@ -123,7 +123,11 @@ func TestBorrowContinueTimeoutCancelsOnlyContinuationAndNeverRetries(t *testing.
 						}
 						return 0, req.Context().Err()
 					}}
-					return &http.Response{StatusCode: status, Header: http.Header{"Retry-After": []string{"80"}}, Body: body}, nil
+					headers := http.Header{"Retry-After": []string{"80"}}
+					if mode == "changed_ticket" {
+						headers.Set(openAICodexTurnStateHeader, "replacement")
+					}
+					return &http.Response{StatusCode: status, Header: headers, Body: body}, nil
 				}}
 				req, _ := http.NewRequestWithContext(ctx, "POST", chatgptCodexURL, nil)
 				req.Header.Set("Cookie", "__oailb=borrowed")
@@ -136,6 +140,14 @@ func TestBorrowContinueTimeoutCancelsOnlyContinuationAndNeverRetries(t *testing.
 				require.Zero(t, r.requests[0].ContinueTimeoutSeconds)
 				require.Equal(t, timeout, r.requests[1].ContinueTimeoutSeconds)
 				switch mode {
+				case "changed_ticket":
+					require.Equal(t, OpenAICodexStateDegraded, result.Verdict)
+					require.True(t, result.NewTicket)
+					require.Empty(t, result.Failure)
+					require.Equal(t, 8*time.Second+borrowProbeRejectionGrace, time.Since(start))
+					require.Equal(t, "ticket_changed", result.Continue.Attempts[0].ErrorClass)
+					require.Empty(t, result.Continue.Attempts[0].CancellationCause)
+					require.NotEqual(t, borrowContinueTimeoutReason, r.outcomes[1])
 				case "normal":
 					require.Equal(t, OpenAICodexStateHealthy, result.Verdict)
 					require.Equal(t, 14*time.Second, time.Since(start))

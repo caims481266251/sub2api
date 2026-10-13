@@ -18,6 +18,11 @@ type Span struct {
 	Attempt int     `json:"attempt,omitempty"`
 }
 type Attempt struct {
+	Model           string             `json:"model,omitempty"`
+	ReasoningEffort string             `json:"reasoning_effort,omitempty"`
+	RetryAfterMS    int64              `json:"retry_after_ms,omitempty"`
+	ReasoningEvents int                `json:"reasoning_events,omitempty"`
+	NoTextLongTail  bool               `json:"no_text_long_tail,omitempty"`
 	BorrowRouteID   string             `json:"borrow_route_id,omitempty"`
 	Terminal        string             `json:"terminal,omitempty"`
 	CleanupCanceled bool               `json:"cleanup_canceled,omitempty"`
@@ -200,6 +205,10 @@ func Mode(ctx context.Context, mode string) {
 }
 func (c *Collector) snapshot() Snapshot {
 	d := c.data
+	if d.BorrowRecovery != nil {
+		v := *d.BorrowRecovery
+		d.BorrowRecovery = &v
+	}
 	d.Events = cloneEvents(d.Events)
 	d.Spans = append([]Span{}, d.Spans...)
 	d.Attempts = append([]Attempt{}, d.Attempts...)
@@ -265,5 +274,90 @@ func Outcome(ctx context.Context, result string, disconnected bool) {
 	if !c.finished {
 		c.data.Outcome = result
 		c.data.ClientDisconnect = disconnected
+	}
+}
+
+// LatestAttempt is a detached, credential-free copy, safe to retain in error logs.
+func LatestAttempt(ctx context.Context) *Attempt {
+	c := From(ctx)
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i := len(c.data.Attempts) - 1; i >= 0; i-- {
+		a := c.data.Attempts[i]
+		if a.Kind != "egress" {
+			continue
+		}
+		if _, ok := a.Events["first_text"]; !ok && c.offset(time.Now())-a.StartMS >= 60000 && a.ReasoningEvents > 0 {
+			a.NoTextLongTail = true
+		}
+		a.Events = cloneEvents(a.Events)
+		if a.EndMS != nil {
+			v := *a.EndMS
+			a.EndMS = &v
+		}
+		if a.Reused != nil {
+			v := *a.Reused
+			a.Reused = &v
+		}
+		return &a
+	}
+	return nil
+}
+func RecoverySnapshot(ctx context.Context) *BorrowRecoverySnapshot {
+	c := From(ctx)
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.data.BorrowRecovery == nil {
+		return nil
+	}
+	v := *c.data.BorrowRecovery
+	return &v
+}
+
+// StreamProgress observes structural progress independently of answer text.
+// It never cancels, retries, or retains any model output.
+func StreamProgress(ctx context.Context, reasoning, text bool) {
+	c := From(ctx)
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.finished {
+		return
+	}
+	now := c.offset(time.Now())
+	if reasoning {
+		c.event("first_reasoning", time.Now())
+	}
+	if text {
+		c.event("first_text", time.Now())
+	}
+	if tr, ok := ctx.Value(attemptKey{}).(*Trace); ok && tr.c == c {
+		for i := tr.index; i >= 0; {
+			a := &c.data.Attempts[i]
+			if reasoning {
+				a.ReasoningEvents++
+				if _, ok := a.Events["first_reasoning"]; !ok {
+					a.Events["first_reasoning"] = now
+				}
+			}
+			if _, ok := a.Events["first_text"]; !ok && now-a.StartMS >= 60000 && a.ReasoningEvents > 0 {
+				a.NoTextLongTail = true
+			}
+			if text {
+				if _, ok := a.Events["first_text"]; !ok {
+					a.Events["first_text"] = now
+				}
+			}
+
+			i = a.Parent - 1
+		}
 	}
 }

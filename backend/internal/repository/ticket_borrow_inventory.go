@@ -12,7 +12,7 @@ import (
 const borrowAccountSignature = `md5(jsonb_build_array(a.credentials,a.proxy_id,a.extra->'enable_tls_fingerprint',a.extra->'tls_fingerprint_profile_id')::text)`
 
 // Must match service.BorrowRenewalLead. Computed in the same database snapshot.
-const borrowRenewalLead = `GREATEST(1,LEAST(CASE WHEN t.acquisition_duration_ms>0 THEN ((t.acquisition_duration_ms*3/2+999)/1000)::int+2 ELSE 15 END,GREATEST(1,s.admission_window_seconds/2)))`
+const borrowRenewalLead = `GREATEST(1,LEAST(CASE WHEN t.acquisition_duration_ms>0 THEN ((t.acquisition_duration_ms*3/2+999)/1000)::int+2 ELSE 15 END,GREATEST(1,s.admission_window_seconds)))`
 
 func borrowInventory(ctx context.Context, db borrowQueryer, id int64, identity string) (*service.BorrowInventory, error) {
 	var f service.BorrowInventoryFacts
@@ -135,3 +135,11 @@ func (r *ticketBorrowRepository) RecordCandidate(ctx context.Context, a service.
  VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(target_id,target_revision,identity_hash,cookie_hash) DO UPDATE SET publication=EXCLUDED.publication`, a.TargetID, a.Revision, a.Identity, cookie, candidate, a.Lease, verdict, publication, expiry)
 	return err
 }
+
+// Search time includes failed candidates, but excludes healthy inventory idle time.
+// A successful publication within a long rolling job starts the next search.
+const borrowSearchElapsedMS = `GREATEST(1,(EXTRACT(EPOCH FROM (clock_timestamp()-GREATEST(
+ COALESCE(t.last_batch_started_at,clock_timestamp()),
+ COALESCE((SELECT max(r.checked_at) FROM ticket_borrow_routes r WHERE r.target_id=t.account_id
+ AND r.target_revision=t.revision AND r.identity_hash=t.lease_identity AND NOT r.validation_only),t.last_batch_started_at,clock_timestamp())
+ )))*1000)::bigint)`

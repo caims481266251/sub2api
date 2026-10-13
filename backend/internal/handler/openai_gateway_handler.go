@@ -658,6 +658,7 @@ func NewOpenAIGatewayHandler(
 // Responses handles OpenAI Responses API endpoint
 // POST /openai/v1/responses
 func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
+	defer h.beginBorrowBusinessRequest(c)()
 	// 局部兜底：确保该 handler 内部任何 panic 都不会击穿到进程级。
 	streamStarted := false
 	defer h.recoverResponsesPanic(c, &streamStarted)
@@ -964,6 +965,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		// Streaming Forward intentionally detaches the upstream request so usage can
 		// be drained after a disconnect. Re-check the client context before every
 		// account attempt so a canceled request never starts a failover replay.
+		if h.stopBorrowBusinessRecovery(c, streamStarted, false) {
+			return
+		}
 		if !openAIRequestAllowsFailoverReplay(c) {
 			return
 		}
@@ -984,6 +988,15 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			requestPlatform,
 		)
 		if err != nil {
+			if borrowBusinessSelectionFallback(c, err, failedAccountIDs) {
+				continue
+			}
+			if h.stopBorrowBusinessRecovery(c, streamStarted, false) {
+				return
+			}
+			if h.finishBorrowSelectionFailure(c, err, lastFailoverErr, streamStarted, false) {
+				return
+			}
 			if failoverClientGone(c) {
 				reqLog.Info("openai.account_select_aborted_client_disconnected", zap.Error(err))
 				return
@@ -1183,6 +1196,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			})
 		}
 		if err != nil {
+			if h.stopBorrowBusinessRecovery(c, streamStarted, false) {
+				return
+			}
 			if service.IsOpenAITurnAdmissionError(err) || errors.Is(err, service.ErrBorrowResponseRejected) {
 				status, code, message := openAIAdmissionClientError(err)
 				h.handleStreamingAwareError(c, status, code, message, streamStarted)
@@ -1242,6 +1258,13 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 						return
 					}
 					// 池模式：同账号重试
+					if handled, retry := h.handleBorrowBusinessRecovery(c, failoverErr, account, failedAccountIDs, &switchCount, maxAccountSwitches, streamStarted, false); handled {
+						if retry {
+							lastFailoverErr = failoverErr
+							continue
+						}
+						return
+					}
 					if failoverErr.RetryableOnSameAccount {
 						retryLimit := effectiveSameAccountRetryLimit(failoverErr, account)
 						if sameAccountRetryAllowed(failoverErr, sameAccountRetryCount[account.ID], retryLimit) {
@@ -1482,6 +1505,7 @@ func (h *OpenAIGatewayHandler) logOpenAIRemoteCompactOutcome(c *gin.Context, sta
 // Messages handles Anthropic Messages API requests routed to OpenAI platform.
 // POST /v1/messages (when group platform is OpenAI)
 func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
+	defer h.beginBorrowBusinessRequest(c)()
 	streamStarted := false
 	defer h.recoverAnthropicMessagesPanic(c, &streamStarted)
 
@@ -1628,6 +1652,9 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 	c.Request = c.Request.WithContext(msgPricingCtx)
 
 	for {
+		if h.stopBorrowBusinessRecovery(c, streamStarted, true) {
+			return
+		}
 		if failoverClientGone(c) {
 			return
 		}
@@ -1651,6 +1678,15 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			requestPlatform,
 		)
 		if err != nil {
+			if borrowBusinessSelectionFallback(c, err, failedAccountIDs) {
+				continue
+			}
+			if h.stopBorrowBusinessRecovery(c, streamStarted, true) {
+				return
+			}
+			if h.finishBorrowSelectionFailure(c, err, lastFailoverErr, streamStarted, true) {
+				return
+			}
 			if failoverClientGone(c) {
 				reqLog.Info("openai_messages.account_select_aborted_client_disconnected", zap.Error(err))
 				return
@@ -1812,6 +1848,9 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			})
 		}
 		if err != nil {
+			if h.stopBorrowBusinessRecovery(c, streamStarted, true) {
+				return
+			}
 			if service.IsOpenAITurnAdmissionError(err) || errors.Is(err, service.ErrBorrowResponseRejected) {
 				status, code, message := openAIAdmissionClientError(err)
 				h.anthropicStreamingAwareError(c, status, code, message, streamStarted)
@@ -1846,6 +1885,13 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 						return
 					}
 					// 池模式：同账号重试
+					if handled, retry := h.handleBorrowBusinessRecovery(c, failoverErr, account, failedAccountIDs, &switchCount, maxAccountSwitches, streamStarted, true); handled {
+						if retry {
+							lastFailoverErr = failoverErr
+							continue
+						}
+						return
+					}
 					if failoverErr.RetryableOnSameAccount {
 						retryLimit := effectiveSameAccountRetryLimit(failoverErr, account)
 						if sameAccountRetryAllowed(failoverErr, sameAccountRetryCount[account.ID], retryLimit) {

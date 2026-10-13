@@ -25,7 +25,7 @@ func TestBorrowedRouteReusesStateProbeVerdict(t *testing.T) {
 		{"new ticket", stateProbeMint("mint-secret"), stateProbeReply{status: 200, state: "new-secret", body: stateProbeCompletedStream}, OpenAICodexStateDegraded, "", 2},
 		{"missing ticket", stateProbeReply{status: 200, body: stateProbeCompletedStream}, stateProbeReply{}, OpenAICodexStateInconclusive, OpenAICodexStateFailureNoTicket, 3},
 		{"rate limited", stateProbeMint("mint-secret"), stateProbeReply{status: 429, body: `{"error":{"message":"limited"}}`}, OpenAICodexStateInconclusive, OpenAICodexStateFailureRateLimited, 4},
-		{"stream failed", stateProbeMint("mint-secret"), stateProbeReply{status: 200, state: "new-secret", body: stateProbeFailedStream}, OpenAICodexStateInconclusive, OpenAICodexStateFailureStreamError, 4},
+		{"stream failed", stateProbeMint("mint-secret"), stateProbeReply{status: 200, state: "new-secret", body: stateProbeFailedStream}, OpenAICodexStateInconclusive, OpenAICodexStateFailureStreamError, 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// The source Cookie stays fixed; the target's own mint supplies __cflb.
@@ -110,7 +110,7 @@ func TestBorrowedRouteRetriesTransientPhase(t *testing.T) {
 		{"missing mint ticket", stateProbeReply{status: 200, body: stateProbeCompletedStream}, true},
 		{"rate limit continuation", stateProbeReply{status: 429}, false},
 		{"unavailable continuation", stateProbeReply{status: 503}, false},
-		{"stream continuation", stateProbeReply{status: 200, state: "discarded", body: stateProbeFailedStream}, false},
+		{"stream continuation", stateProbeReply{status: 200, body: stateProbeFailedStream}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mint := stateProbeMint("target-ticket")

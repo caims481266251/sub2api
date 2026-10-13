@@ -10,6 +10,7 @@ import (
 const (
 	DefaultBorrowCandidatePoolCapacity   = 64
 	BorrowCandidatePoolSourceConcurrency = 4
+	BorrowCandidatePoolStandby           = 2
 	// One short wave of prefetch, never an 80-second FIFO backlog. This is a
 	// conservative policy bound, not an empirically optimal success threshold.
 	BorrowCandidatePoolQueueLifetime  = 15 * time.Second

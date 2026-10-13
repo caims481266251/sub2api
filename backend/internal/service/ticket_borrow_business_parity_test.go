@@ -106,7 +106,7 @@ func TestBorrowBusinessPreservesNormalRequest(t *testing.T) {
 					require.NoError(t, err)
 					req.Header = http.Header{"Authorization": {"Bearer target-secret"}, "Accept": {"text/event-stream"}, "Content-Type": {"application/json"}, "Session_id": {"normal-session"}, "Conversation_id": {"normal-conversation"}, "User-Agent": {"normal-target-ua"}, "X-Codex-Turn-State": {"normal-turn"}}
 					resp, err := svc.ForwardHTTP(req, "", 11, 10, profile, func(sent *http.Request, proxy string, id int64, concurrency int, sentProfile *tlsfingerprint.Profile) (*http.Response, error) {
-						require.False(t, recovery.Active(), "borrowing must not activate a separate retry policy")
+						require.Equal(t, enabled, recovery.Active(), "only borrowing activates the bounded recovery budget")
 						require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(sent.Context()))
 						require.Same(t, profile, sentProfile)
 						require.Empty(t, proxy)

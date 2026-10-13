@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptrace"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -23,6 +24,22 @@ func WithBorrowRoute(ctx context.Context, id string) context.Context {
 		parent.update(func(a *Attempt) { a.BorrowRouteID = id })
 	}
 	return context.WithValue(ctx, borrowRouteKey{}, id)
+}
+
+type borrowRequestKey struct{}
+type borrowRequestInfo struct{ model, effort string }
+
+func WithBorrowRequest(ctx context.Context, model, effort string) context.Context {
+	if len(model) > 128 {
+		model = model[:128]
+	}
+	if len(effort) > 32 {
+		effort = effort[:32]
+	}
+	if tr, ok := ctx.Value(attemptKey{}).(*Trace); ok {
+		tr.update(func(a *Attempt) { a.Model = model; a.ReasoningEffort = effort })
+	}
+	return context.WithValue(ctx, borrowRequestKey{}, borrowRequestInfo{model, effort})
 }
 
 type Trace struct {
@@ -59,6 +76,10 @@ func startAttempt(req *http.Request, accountID, proxyID int64, kind string, pare
 	idx := len(c.data.Attempts)
 	c.data.Attempts = append(c.data.Attempts, Attempt{Kind: kind, Parent: parent, Number: idx + 1, AccountID: accountID, ProxyID: proxyID, StartMS: c.offset(time.Now()), RequestBytes: req.ContentLength, Events: map[string]float64{}})
 	c.data.Attempts[idx].BorrowRouteID, _ = req.Context().Value(borrowRouteKey{}).(string)
+	if info, ok := req.Context().Value(borrowRequestKey{}).(borrowRequestInfo); ok {
+		c.data.Attempts[idx].Model = info.model
+		c.data.Attempts[idx].ReasoningEffort = info.effort
+	}
 	c.mu.Unlock()
 	t := &Trace{c: c, index: idx}
 	ctx := context.WithValue(req.Context(), attemptKey{}, t)
@@ -104,6 +125,13 @@ func (t *Trace) Response(resp *http.Response, err error) {
 		}
 		if resp != nil {
 			a.Status = resp.StatusCode
+			if n, e := strconv.ParseInt(resp.Header.Get("Retry-After"), 10, 64); e == nil && n > 0 && n <= 86400 {
+				a.RetryAfterMS = n * 1000
+			} else if at, e := http.ParseTime(resp.Header.Get("Retry-After")); e == nil {
+				if wait := time.Until(at); wait > 0 && wait <= 24*time.Hour {
+					a.RetryAfterMS = wait.Milliseconds()
+				}
+			}
 			a.Events["response_headers"] = t.c.offset(time.Now())
 		}
 		if err != nil || resp == nil || resp.Body == nil {

@@ -63,7 +63,7 @@ func codexAstraCompleted(response gjson.Result) bool {
 // supply previous_response_id and delta input; we never attach unrelated history.
 func (s *OpenAIGatewayService) prepareCodexWSAnchor(ctx context.Context, c *gin.Context, account *Account, body []byte) (context.Context, func(*OpenAIForwardResult, error), error) {
 	// A bounded HTTP recovery must not open a separate WS turn or retry loop.
-	if BorrowBusinessRecoveryFromContext(ctx).FreshConnectionRequired() {
+	if BorrowBusinessRecoveryFromContext(ctx).RecoveringHTTP() {
 		return ctx, nil, nil
 	}
 	if s == nil || s.cfg == nil {

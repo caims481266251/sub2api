@@ -250,9 +250,6 @@ func (s *httpUpstreamService) Do(req *http.Request, proxyURL string, accountID i
 	}
 
 	regionalEgress := s.useRegionalEgress(proxyURL, accountID, profile)
-	if req != nil && service.BorrowBusinessRecoveryFromContext(req.Context()).FreshConnectionRequired() {
-		profile = service.HTTPUpstreamProfileOpenAIHarvest
-	}
 	// 获取或创建对应的客户端，并标记请求占用
 	if regionalEgress {
 		return s.doRegionalEgress(req, accountID, accountConcurrency, profile, nil)
@@ -334,9 +331,6 @@ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, acco
 	}
 
 	regionalEgress := s.useRegionalEgress(proxyURL, accountID, upstreamProfile)
-	if req != nil && service.BorrowBusinessRecoveryFromContext(req.Context()).FreshConnectionRequired() {
-		upstreamProfile = service.HTTPUpstreamProfileOpenAIHarvest
-	}
 	targetHost := ""
 	if req != nil && req.URL != nil {
 		targetHost = req.URL.Host
@@ -415,10 +409,12 @@ func doUpstreamRequest(client *http.Client, req *http.Request) (result *http.Res
 			cancelCause(err)
 		}
 	}, GotConn: func(info httptrace.GotConnInfo) {
-		recovery.WritePossible()
 		err := service.BorrowBeforeSend(req.WithContext(ctx))
 		if err == nil {
 			err = service.BorrowTargetRequestConnected(req.WithContext(ctx))
+		}
+		if err == nil {
+			err = recovery.WritePossible()
 		}
 		if err != nil {
 			cancelCause(err)

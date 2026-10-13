@@ -43,8 +43,12 @@ func TestBorrowBusinessRecoverySharedBudgetAnd429(t *testing.T) {
 		ctx, r := recoveryFixture(t)
 		r.WroteHeaders(ctx)
 		r.ExplicitFailure()
+		require.True(t, r.ReserveRecovery(ctx, http.StatusTooManyRequests))
+		require.NoError(t, r.BeginTransport(ctx))
+		r.WroteHeaders(ctx)
+		r.ExplicitFailure()
 		require.False(t, r.ReserveRecovery(ctx, http.StatusTooManyRequests))
-		require.Equal(t, "upstream_429", r.stopReason)
+		require.Equal(t, "attempt_limit", r.stopReason)
 		require.ErrorIs(t, r.BeginTransport(ctx), ErrBorrowRecoveryBudget)
 	})
 	t.Run("late failure does not append another attempt", func(t *testing.T) {
@@ -256,4 +260,67 @@ func TestBorrowBusinessRecoveryRemainsHTTP(t *testing.T) {
 	_, finish, err := s.prepareCodexWSAnchor(ctx, c, &Account{}, nil)
 	require.NoError(t, err)
 	require.Nil(t, finish)
+}
+
+func TestBorrowBusinessRecoverySentRequestOutlivesWaitBudget(t *testing.T) {
+	ctx, r := recoveryFixture(t)
+	r.timeout = 10 * time.Millisecond
+	r.ExplicitFailure()
+	require.True(t, r.ReserveRecovery(ctx, 429))
+	wait := r.Context(context.WithoutCancel(ctx))
+	require.NoError(t, r.BeginTransport(wait))
+	r.WroteHeaders(wait)
+	// No output or response headers yet. Sending alone removes the wait deadline.
+	time.Sleep(30 * time.Millisecond)
+	require.NoError(t, r.Err())
+	require.NoError(t, wait.Err())
+	r.expire(ErrBorrowRecoveryTimeout) // even an already queued callback is harmless
+	require.NoError(t, wait.Err())
+}
+func TestBorrowBusinessRouteWait(t *testing.T) {
+	ctx, r := WithBorrowBusinessRecovery(t.Context(), nil)
+	defer r.Close()
+	s := &TicketBorrowService{}
+	signal := s.routePublished()
+	s.notifyRoutePublished()
+	require.True(t, r.waitForRoute(ctx, signal), "publication before waiting must not be lost")
+	deadline := r.routeWaitDeadline
+	require.True(t, r.waitForRoute(ctx, signal))
+	require.Equal(t, deadline, r.routeWaitDeadline)
+	r.routeWaitDeadline = time.Now().Add(10 * time.Millisecond)
+	require.False(t, r.waitForRoute(ctx, s.routePublished()))
+	require.False(t, r.waitForRoute(ctx, signal), "deadline is shared across reselections")
+	ctx2, cancel := context.WithCancel(ctx)
+	cancel()
+	require.False(t, r.waitForRoute(ctx2, signal))
+}
+
+func TestBorrowBusinessRecoveryPartialSendDisarmsWait(t *testing.T) {
+	ctx, r := recoveryFixture(t)
+	r.ExplicitFailure()
+	require.True(t, r.ReserveRecovery(ctx, 429))
+	require.NoError(t, r.BeginTransport(ctx))
+	require.NoError(t, r.WritePossible())
+	r.expire(ErrBorrowRecoveryTimeout)
+	require.NoError(t, r.Err())
+	require.Zero(t, r.sends, "partial write is not counted as completed headers")
+}
+
+func TestBorrowBusinessRecoveryRestoresClientLifecycle(t *testing.T) {
+	client, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	ctx, r := WithBorrowBusinessRecovery(client, nil)
+	defer r.Close()
+	require.NoError(t, r.Activate(11, false))
+	require.NoError(t, r.BeginTransport(ctx))
+	r.ExplicitFailure()
+	require.True(t, r.ReserveRecovery(ctx, 429))
+	waiting := r.Context(ctx)
+	final := BorrowBusinessClientContext(waiting)
+	r.expire(ErrBorrowRecoveryTimeout)
+	require.NoError(t, final.Err())
+	require.NoError(t, context.Cause(final))
+	require.Same(t, r, BorrowBusinessRecoveryFromContext(final))
+	cancel()
+	require.ErrorIs(t, final.Err(), context.Canceled)
 }

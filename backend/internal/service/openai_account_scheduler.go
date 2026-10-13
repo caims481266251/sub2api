@@ -2418,6 +2418,25 @@ func (s *OpenAIGatewayService) selectAccountWithScheduler(
 	previousResponseCanMove bool,
 	useUpstreamTokenCost bool,
 ) (selection *AccountSelectionResult, decision OpenAIAccountScheduleDecision, err error) {
+	// Keep existing selection, including ordinary-account and quarantine fallback,
+	// intact. Wait only for a positively identified borrowing admission failure.
+	r := BorrowBusinessRecoveryFromContext(ctx)
+	if s.borrowRoutes != nil && r != nil && !borrowInternal(ctx) {
+		ctx = BorrowBusinessRecoveryContext(ctx)
+		for {
+			published := s.borrowRoutes.routePublished()
+			selection, decision, err = s.selectAccountWithSchedulerNoWait(ctx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, requiredImageCapability, requireCompact, platform, previousResponseCanMove, useUpstreamTokenCost)
+			if err == nil || !IsBorrowRouteUnavailable(err) || !r.waitForRoute(ctx, published) {
+				return
+			}
+		}
+	}
+	return s.selectAccountWithSchedulerNoWait(ctx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, requiredImageCapability, requireCompact, platform, previousResponseCanMove, useUpstreamTokenCost)
+}
+
+func (s *OpenAIGatewayService) selectAccountWithSchedulerNoWait(
+	ctx context.Context, groupID *int64, previousResponseID, sessionHash, requestedModel string, excludedIDs map[int64]struct{}, requiredTransport OpenAIUpstreamTransport, requiredCapability OpenAIEndpointCapability, requiredImageCapability OpenAIImagesCapability, requireCompact bool, platform string, previousResponseCanMove, useUpstreamTokenCost bool,
+) (selection *AccountSelectionResult, decision OpenAIAccountScheduleDecision, err error) {
 	ctx, borrowSelectionError := withBorrowSelectionFailure(ctx)
 	defer func() { err = borrowSelectionError(err) }()
 	selectOnce := func(selectionCtx context.Context) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
@@ -20,11 +21,22 @@ type borrowRecoveryHandlerUpstream struct {
 	status          int
 	succeedRecovery bool
 	specialRecovery bool
+	borrow          bool
 }
 
 func (u *borrowRecoveryHandlerUpstream) Do(req *http.Request, _ string, id int64, _ int) (*http.Response, error) {
 	r := service.BorrowBusinessRecoveryFromContext(req.Context())
-	u.specialRecovery = u.specialRecovery || r != nil
+	if u.borrow {
+		if err := r.Activate(id, false); err != nil {
+			return nil, err
+		}
+		if err := r.BeginTransport(req.Context()); err != nil {
+			return nil, err
+		}
+		r.WroteHeaders(req.Context())
+		r.ExplicitFailure()
+	}
+	u.specialRecovery = u.specialRecovery || r.Active()
 	u.ids = append(u.ids, id)
 	if u.succeedRecovery && len(u.ids) == 2 {
 		body := `data: {"type":"response.output_text.delta","delta":"ok","output_index":0,"content_index":0,"item_id":"msg_test"}
@@ -43,8 +55,10 @@ func TestBorrowBusinessUsesOrdinaryHandlerRetries(t *testing.T) {
 			name                    string
 			status, accounts, calls int
 			disabled                bool
+			borrow                  bool
 		}{
-			{"switch", 503, 3, 3, false}, {"429", 429, 3, 3, false}, {"single-target", 503, 1, 1, false}, {"legacy-disabled", 503, 3, 3, true}, {"recovery-success", 503, 3, 2, false},
+			{"switch", 503, 3, 3, false, false}, {"429", 429, 3, 3, false, false}, {"single-target", 503, 1, 1, false, false}, {"legacy-disabled", 503, 3, 3, true, false}, {"recovery-success", 503, 3, 2, false, false},
+			{"borrow-503", 503, 3, 2, false, true}, {"borrow-429", 429, 3, 2, false, true}, {"borrow-single-429", 429, 1, 1, false, true},
 		} {
 			status := scenario.status
 			t.Run(endpoint+"/"+scenario.name, func(t *testing.T) {
@@ -59,7 +73,7 @@ func TestBorrowBusinessUsesOrdinaryHandlerRetries(t *testing.T) {
 				cfg.Default.RateMultiplier = 1
 				cfg.Gateway.MaxAccountSwitches = 10
 				repo := &openAIWSFailoverHandlerAccountRepoStub{accounts: accounts}
-				upstream := &borrowRecoveryHandlerUpstream{status: status, succeedRecovery: scenario.name == "recovery-success"}
+				upstream := &borrowRecoveryHandlerUpstream{status: status, borrow: scenario.borrow, succeedRecovery: scenario.name == "recovery-success"}
 				billing := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
 				t.Cleanup(billing.Stop)
 				gateway := service.NewOpenAIGatewayService(repo, nil, nil, nil, nil, nil, nil, nil, cfg, nil, nil, service.NewBillingService(cfg, nil), nil, billing, upstream, &service.DeferredService{}, nil, nil, nil, nil, nil, nil, nil)
@@ -79,8 +93,14 @@ func TestBorrowBusinessUsesOrdinaryHandlerRetries(t *testing.T) {
 				case "messages":
 					h.Messages(c)
 				}
-				require.Len(t, upstream.ids, scenario.calls, w.Body.String())
-				require.False(t, upstream.specialRecovery, "normal endpoints must not install borrowing-specific retries")
+				require.NoError(t, c.Request.Context().Err(), "finishing recovery must not look like a client disconnect")
+				if scenario.name == "borrow-single-429" {
+					require.GreaterOrEqual(t, len(upstream.ids), 1)
+					require.LessOrEqual(t, len(upstream.ids), 2, "single-account fallback must share the same budget")
+				} else {
+					require.Len(t, upstream.ids, scenario.calls, w.Body.String())
+				}
+				require.Equal(t, scenario.borrow, upstream.specialRecovery, "ordinary requests must not activate borrowing-specific retries")
 				if status == 429 {
 					require.Equal(t, 429, w.Code, w.Body.String())
 				} else {
@@ -99,4 +119,13 @@ func TestBorrowBusinessUsesOrdinaryHandlerRetries(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestBorrowRecoveryDelayHonorsUpstream(t *testing.T) {
+	for _, raw := range []string{"2", "90000", time.Now().Add(20 * time.Second).UTC().Format(http.TimeFormat)} {
+		f := &service.UpstreamFailoverError{ResponseHeaders: http.Header{"Retry-After": []string{raw}}}
+		require.GreaterOrEqual(t, borrowRecoveryDelay(f, time.Now()), 2*time.Second)
+	}
+	f := &service.UpstreamFailoverError{SameAccountRetryDelay: 8 * time.Second}
+	require.GreaterOrEqual(t, borrowRecoveryDelay(f, time.Now()), 8*time.Second)
 }

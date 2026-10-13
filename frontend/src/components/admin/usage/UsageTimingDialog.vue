@@ -48,6 +48,7 @@
             <div class="mt-1 h-2 overflow-hidden rounded bg-gray-100 dark:bg-dark-700"><div class="h-full rounded" :class="TIMING_BAR[spanHealth(span)]" :style="bar(span)" /></div>
           </div>
         </section>
+        <BorrowAttemptDetails :rows="trace.attempts.filter(a => a.kind === 'egress' && !!a.borrow_route_id).map(attempt => ({ attempt, recovery: trace?.borrow_recovery }))" />
         <section v-for="attempt in trace.attempts" :key="attempt.number" class="rounded-xl border border-gray-200 p-4 dark:border-dark-600">
           <h4 class="font-semibold">{{ attemptTitle(attempt) }} · {{ t('requestTiming.account') }} #{{ attempt.account_id }} · {{ attempt.proxy_id > 0 ? `${t('requestTiming.proxy')} #${attempt.proxy_id}` : t('requestTiming.direct') }}</h4>
           <div class="mt-3 grid gap-x-8 gap-y-3 text-sm md:grid-cols-2">
@@ -62,6 +63,7 @@
 <script setup lang="ts">
 import { inject, computed, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import BorrowAttemptDetails from './BorrowAttemptDetails.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import type { AdminUsageLog } from '@/types'
 import { formatDateTime } from '@/utils/format'

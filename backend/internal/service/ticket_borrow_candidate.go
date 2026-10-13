@@ -174,12 +174,12 @@ func borrowCompatibilityKey(targetIdentity string, sourceID int64, gateway strin
 	return borrowHash(fmt.Sprintf("%s\x00%d\x00%s\x00%d", targetIdentity, sourceID, gateway, entryID))
 }
 
-// Automatic lead consumes at most half the admission window, leaving useful
-// service time even when acquiring a replacement is slow. No samples: 15s.
+// Search includes failed attempts. When search exceeds the admission window,
+// replenish immediately while the current route still serves. No samples: 15s.
 func BorrowRenewalLead(window int, observedMS int64) int {
 	lead := 15
 	if observedMS > 0 {
 		lead = int((observedMS*3/2+999)/1000) + 2
 	}
-	return max(1, min(lead, max(1, window/2)))
+	return max(1, min(lead, max(1, window)))
 }

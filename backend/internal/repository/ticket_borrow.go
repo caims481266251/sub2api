@@ -585,6 +585,14 @@ func (r *ticketBorrowRepository) Publish(ctx context.Context, route *service.Bor
 	if !now.Before(route.AdmissionUntil) {
 		return service.ErrBorrowCandidateExpiry
 	}
+	// Measure before inserting this publication, which becomes the next search's
+	// anchor. Duplicate/failed publication rolls this update back atomically.
+	if _, err = tx.ExecContext(ctx, `UPDATE ticket_borrow_targets t SET acquisition_duration_ms=
+ CASE WHEN acquisition_duration_ms=0 THEN `+borrowSearchElapsedMS+`
+ ELSE GREATEST(`+borrowSearchElapsedMS+`,(acquisition_duration_ms*3+`+borrowSearchElapsedMS+`)/4) END
+ WHERE account_id=$1`, route.TargetID); err != nil {
+		return err
+	}
 	res, err := tx.ExecContext(ctx, `INSERT INTO ticket_borrow_routes(id,target_id,target_revision,source_id,identity_hash,cookie_hash,gateway,secret,expires_at,inventory_eligible,validation_only,checked_at,
  acquisition_identity,acquisition_account_id,acquisition_started_at,admission_until,candidate_id)
  VALUES($1,$2,$3,NULLIF($4,0),$5,$6,$7,$8,$9,true,false,clock_timestamp(),$10,$11,$12,$13,$14)
@@ -602,9 +610,6 @@ func (r *ticketBorrowRepository) Publish(ctx context.Context, route *service.Bor
  VALUES($1,$2,$3,$4,$5,$6,'healthy','target_probe_passed',$7) ON CONFLICT(target_id,target_revision,identity_hash,cookie_hash) DO NOTHING`, route.TargetID, route.TargetRevision, route.IdentityHash, route.CookieHash, route.CandidateID, lease, route.ExpiresAt); err != nil {
 			return err
 		}
-	}
-	if _, err = tx.ExecContext(ctx, `UPDATE ticket_borrow_targets SET acquisition_duration_ms=CASE WHEN acquisition_duration_ms=0 THEN $2 ELSE (acquisition_duration_ms*3+$2)/4 END WHERE account_id=$1`, route.TargetID, max(int64(1), now.Sub(*route.AcquisitionStartedAt).Milliseconds())); err != nil {
-		return err
 	}
 	if err = trimBorrowInventory(ctx, tx, route, policy); err != nil {
 		return err

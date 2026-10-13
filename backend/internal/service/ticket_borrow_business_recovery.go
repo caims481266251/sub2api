@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"errors"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -15,7 +14,7 @@ import (
 )
 
 var ErrBorrowRecoveryBudget = errors.New("borrow business recovery budget exhausted")
-var ErrBorrowRecoveryTimeout = errors.New("borrow business recovery timed out before output")
+var ErrBorrowRecoveryTimeout = errors.New("borrow business recovery timed out before send")
 
 type borrowBusinessRecoveryKey struct{}
 
@@ -23,6 +22,8 @@ type borrowBusinessRecoveryKey struct{}
 // or transport. It remains attached when forwarding detaches for usage draining.
 type BorrowBusinessRecovery struct {
 	closed                                                  bool
+	recoverySent                                            bool
+	routeWaitDeadline                                       time.Time
 	mu                                                      sync.Mutex
 	client                                                  context.Context
 	active, recovering, committed, written, explicitFailure bool
@@ -140,14 +141,34 @@ func (r *BorrowBusinessRecovery) BeginTransport(ctx context.Context) error {
 
 // HTTP may partially write before WroteHeaders fires. Once a connection is
 // handed to its writer, require an explicit upstream failure before replaying.
-func (r *BorrowBusinessRecovery) WritePossible() {
+func (r *BorrowBusinessRecovery) WritePossible() error {
 	if r == nil {
-		return
+		return nil
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.err != nil {
+		return r.err
+	}
 	if r.active {
 		r.writePossible = true
+		r.disarmSendWaitLocked()
+	}
+	return nil
+}
+
+// The transport owns the connection and may start a partial write. From this
+// point the wait deadline must not interrupt an ambiguous upstream execution.
+func (r *BorrowBusinessRecovery) disarmSendWaitLocked() {
+	if !r.recovering {
+		return
+	}
+	r.recoverySent = true
+	if r.timer != nil {
+		r.timer.Stop()
+	}
+	if r.stopClient != nil {
+		r.stopClient()
 	}
 }
 
@@ -157,11 +178,12 @@ func (r *BorrowBusinessRecovery) WroteHeaders(ctx context.Context) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if !r.active || r.written {
+	if !r.active || r.written || r.err != nil {
 		return
 	}
 	r.written, r.writePossible = true, true
 	r.sends++
+	r.disarmSendWaitLocked()
 	if r.firstSend.IsZero() {
 		r.firstSend = time.Now()
 	}
@@ -178,7 +200,7 @@ func (r *BorrowBusinessRecovery) ExplicitFailure() {
 }
 
 // ReserveRecovery is called only after existing replay-safety and error
-// classification checks. 429 never gets the legacy account-wide retry window.
+// classification checks. All retryable failures, including 429, share one budget.
 func (r *BorrowBusinessRecovery) ReserveRecovery(ctx context.Context, status int) bool {
 	if r == nil {
 		return false
@@ -193,8 +215,6 @@ func (r *BorrowBusinessRecovery) ReserveRecovery(ctx context.Context, status int
 		start = r.firstStart
 	}
 	switch {
-	case status == http.StatusTooManyRequests:
-		r.stopReason = "upstream_429"
 	case r.err != nil:
 		r.stopReason = "recovery_timeout"
 	case r.committed:
@@ -222,7 +242,7 @@ func (r *BorrowBusinessRecovery) ReserveRecovery(ctx context.Context, status int
 func (r *BorrowBusinessRecovery) expire(err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.closed || r.committed || r.cancel == nil {
+	if r.closed || r.committed || r.recoverySent || r.cancel == nil {
 		return
 	}
 	r.err = err
@@ -235,7 +255,7 @@ func (r *BorrowBusinessRecovery) expire(err error) {
 }
 
 // Context applies the recovery deadline to selection, admission and transport,
-// even after the upstream context has been detached. The timer can be disarmed
+// even after the upstream context has been detached. Sending disarms the timer
 // without canceling a successful stream, unlike context.WithTimeout.
 func (r *BorrowBusinessRecovery) Context(ctx context.Context) context.Context {
 	if r == nil {
@@ -243,7 +263,7 @@ func (r *BorrowBusinessRecovery) Context(ctx context.Context) context.Context {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if !r.recovering || r.committed {
+	if !r.recovering || r.committed || r.recoverySent {
 		return ctx
 	}
 	child, cancel := context.WithCancelCause(ctx)
@@ -331,7 +351,7 @@ func (r *BorrowBusinessRecovery) Close() {
 	}
 }
 
-func (r *BorrowBusinessRecovery) FreshConnectionRequired() bool {
+func (r *BorrowBusinessRecovery) RecoveringHTTP() bool {
 	if r == nil {
 		return false
 	}
@@ -361,10 +381,10 @@ func (r *BorrowBusinessRecovery) MayRetryBeforeWrite() bool {
 	return r.active && r.transports > 0 && !r.writePossible
 }
 
-// ObserveSSE uses upstream semantic events, not downstream pings or role-only
-// chat chunks, so recovery stays bounded while an upstream remains silent.
+// ObserveSSE records upstream progress and protects the replay boundary.
+// It never imposes a deadline on a sent stream.
 func (r *BorrowBusinessRecovery) ObserveSSE(ctx context.Context, payload []byte, eventType string) {
-	if !r.Active() || !gjson.ValidBytes(payload) {
+	if !gjson.ValidBytes(payload) {
 		return
 	}
 	event := gjson.ParseBytes(payload)
@@ -372,6 +392,12 @@ func (r *BorrowBusinessRecovery) ObserveSSE(ctx context.Context, payload []byte,
 		eventType = event.Get("type").String()
 	}
 	eventType = strings.TrimSpace(eventType)
+	reasoning := strings.Contains(eventType, "reasoning") || event.Get("item.type").String() == "reasoning"
+	text := eventType == "response.output_text.delta" && event.Get("delta").String() != ""
+	requesttiming.StreamProgress(ctx, reasoning, text)
+	if !r.Active() {
+		return
+	}
 	if eventType == "response.failed" || eventType == "error" || event.Get("error").Exists() {
 		r.ExplicitFailure()
 		return
@@ -393,3 +419,35 @@ func (r *BorrowBusinessRecovery) ObserveSSE(ctx context.Context, payload []byte,
 		r.OutputStarted(ctx)
 	}
 }
+
+// Record a local admission stop separately from the last upstream HTTP status.
+func (r *BorrowBusinessRecovery) SelectionStopped(ctx context.Context) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.active && r.err == nil {
+		r.stopReason = "no_available_route"
+		r.observeLocked(ctx)
+	}
+}
+
+// Keep attempt/account values while exposing the original client's lifecycle
+// to middleware. Internal recovery expiration is not a client disconnect.
+func BorrowBusinessClientContext(ctx context.Context) context.Context {
+	r := BorrowBusinessRecoveryFromContext(ctx)
+	if !r.Active() {
+		return ctx
+	}
+	return borrowBusinessClientContext{Context: context.WithoutCancel(ctx), client: r.client}
+}
+
+type borrowBusinessClientContext struct {
+	context.Context
+	client context.Context
+}
+
+func (c borrowBusinessClientContext) Deadline() (time.Time, bool) { return c.client.Deadline() }
+func (c borrowBusinessClientContext) Done() <-chan struct{}       { return c.client.Done() }
+func (c borrowBusinessClientContext) Err() error                  { return c.client.Err() }

@@ -145,6 +145,8 @@
         </div>
       </div>
 
+      <BorrowAttemptDetails :rows="borrowAttempts" />
+
       <!-- Upstream errors list (only for request errors) -->
       <div v-if="showUpstreamList" class="rounded-xl bg-gray-50 p-6 dark:bg-dark-900">
         <div class="flex flex-wrap items-center justify-between gap-2">
@@ -229,6 +231,8 @@
 </template>
 
 <script setup lang="ts">
+import BorrowAttemptDetails from '@/components/admin/usage/BorrowAttemptDetails.vue'
+import { borrowAttemptDetails } from '@/utils/borrowAttemptDetails'
 import { balanceErrorSource } from '../utils/balanceError'
 import { computed, ref, watch, inject } from 'vue'
 import { observerUsageAPI } from '@/api/observerUsage'
@@ -263,6 +267,7 @@ const appStore = useAppStore()
 
 const loading = ref(false)
 const detail = ref<OpsErrorDetail | null>(null)
+const borrowAttempts = computed(() => borrowAttemptDetails(detail.value?.upstream_errors))
 
 const showUpstreamList = computed(() => !observerMode && props.errorType === 'request')
 

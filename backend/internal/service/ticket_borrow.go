@@ -63,6 +63,8 @@ type TicketBorrowService struct {
 	nextEventCleanup time.Time
 	responseBindings sync.Map // pending metadata writes; deltas never wait for these
 	poolSources      atomic.Int32
+	routeNotifyMu    sync.Mutex
+	routeNotify      chan struct{}
 }
 
 func NewTicketBorrowService(repo TicketBorrowRepository, owner *AccountTestService, oauth *OpenAIOAuthService) *TicketBorrowService {
@@ -520,11 +522,17 @@ func (s *TicketBorrowService) ForwardHTTP(req *http.Request, proxy string, id in
 	var payload struct {
 		Model              string `json:"model"`
 		PreviousResponseID string `json:"previous_response_id"`
+		Reasoning          struct {
+			Effort string `json:"effort"`
+		} `json:"reasoning"`
 	}
 	err = json.NewDecoder(io.LimitReader(body, 32<<20)).Decode(&payload)
 	body.Close()
 	if err != nil || strings.TrimSpace(payload.Model) == "" {
 		return nil, ErrBorrowUnavailable
+	}
+	if err := BorrowBusinessRecoveryFromContext(req.Context()).Activate(id, continuation != nil || payload.PreviousResponseID != ""); err != nil {
+		return nil, err
 	}
 	account, err := s.owner.accountRepo.GetByID(req.Context(), target.AccountID)
 	if err != nil {
@@ -630,6 +638,7 @@ func (s *TicketBorrowService) ForwardHTTP(req *http.Request, proxy string, id in
 	r = r.WithContext(WithHTTPUpstreamRedirectsDisabled(r.Context()))
 	// Business always uses the target account exit; a borrowed route only supplies routing data.
 	r = r.WithContext(requesttiming.WithBorrowRoute(r.Context(), route.ID))
+	r = r.WithContext(requesttiming.WithBorrowRequest(r.Context(), payload.Model, payload.Reasoning.Effort))
 	resp, err := send(r, openAIAccountProxyURL(account), id, n, profile)
 	if resp != nil {
 		s.observeBorrowBusinessResponse(r, route, resp)
@@ -1235,6 +1244,7 @@ func (s *TicketBorrowService) runTarget(parent context.Context, target BorrowTar
 			}
 			c.details.PublicationMS = time.Since(publicationStarted).Milliseconds()
 			if err == nil {
+				s.notifyRoutePublished()
 				c.routeID = route.ID
 				reason = "target_probe_passed"
 
@@ -1338,6 +1348,7 @@ func (s *TicketBorrowService) runTarget(parent context.Context, target BorrowTar
 		return true, nil
 	}
 	if sharedPool {
+		ctx = context.WithValue(ctx, borrowGatewayFeedbackDisabledKey{}, feedback == nil)
 		poolReason := s.consumeCandidatePool(ctx, pool, acquisition, capacity, needed, verify, func(out verification) (bool, string) {
 			keep := consume(out)
 			return keep, reason

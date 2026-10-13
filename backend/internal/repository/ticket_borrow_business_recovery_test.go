@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
@@ -102,4 +103,38 @@ func TestBorrowBusinessRecoveryDoesNotFollowRedirects(t *testing.T) {
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusTemporaryRedirect, resp.StatusCode)
 	require.Equal(t, int64(1), posts.Load())
+}
+
+func TestBorrowBusinessRecovery429ThenSlowHeadersNaturalCompletion(t *testing.T) {
+	var posts atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if posts.Add(1) == 1 {
+			w.WriteHeader(429)
+			return
+		}
+		time.Sleep(1200 * time.Millisecond) // exceeds the pre-send recovery timeout
+		_, _ = io.WriteString(w, "natural completion")
+	}))
+	defer srv.Close()
+	ctx, r := service.WithBorrowBusinessRecovery(t.Context(), &config.Config{Gateway: config.GatewayConfig{BorrowBusinessRecoveryTimeoutSeconds: 1}})
+	defer r.Close()
+	require.NoError(t, r.Activate(11, false))
+	send := func() (*http.Response, error) {
+		req, _ := http.NewRequestWithContext(ctx, "POST", srv.URL, strings.NewReader("{}"))
+		return doUpstreamRequest(srv.Client(), req)
+	}
+	resp, err := send()
+	require.NoError(t, err)
+	resp.Body.Close()
+	require.True(t, r.ReserveRecovery(ctx, 429))
+	resp, err = send()
+	require.NoError(t, err)
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	require.NoError(t, err)
+	require.Equal(t, "natural completion", string(body))
+	require.NoError(t, r.Err())
+	require.EqualValues(t, 2, posts.Load())
+	_, err = send()
+	require.ErrorIs(t, err, service.ErrBorrowRecoveryBudget)
 }

@@ -218,7 +218,7 @@ func (r *ticketBorrowRepository) RecordProbeOutcome(ctx context.Context, id int6
 	if reason == "target_probe_passed" {
 		_, err = tx.ExecContext(ctx, `UPDATE ticket_borrow_targets SET consecutive_failures=0 WHERE account_id=$1`, id)
 	} else if reason == "target_ticket_changed" || reason == "target_route_changed" || reason == "target_continue_timeout" {
-		_, err = tx.ExecContext(ctx, `UPDATE ticket_borrow_targets SET consecutive_failures=consecutive_failures+1 WHERE account_id=$1`, id)
+		_, err = tx.ExecContext(ctx, `UPDATE ticket_borrow_targets t SET consecutive_failures=consecutive_failures+1,acquisition_duration_ms=GREATEST(acquisition_duration_ms,`+borrowSearchElapsedMS+`) WHERE account_id=$1`, id)
 	}
 	if err != nil {
 		return err

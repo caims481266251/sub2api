@@ -23,3 +23,12 @@ type BorrowGatewayFeedbackRepository interface {
 func BorrowGatewayFeedbackReason(reason string) bool {
 	return reason == "target_probe_passed" || reason == "target_ticket_changed" || reason == "target_route_changed"
 }
+
+// The shared pool follows the same existing emergency disable as the direct
+// pipeline; this context only affects ordering, never candidate eligibility.
+type borrowGatewayFeedbackDisabledKey struct{}
+
+func BorrowGatewayFeedbackEnabled(ctx context.Context) bool {
+	disabled, _ := ctx.Value(borrowGatewayFeedbackDisabledKey{}).(bool)
+	return !disabled
+}

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -307,6 +308,23 @@ func snapshotOpsStreamErrorContext(c *gin.Context, streamErr *OpsStreamError) {
 		streamErr.UpstreamDetail, _ = value.(string)
 		streamErr.UpstreamDetail = strings.TrimSpace(streamErr.UpstreamDetail)
 	}
+	if c.Request != nil {
+		if a := requesttiming.LatestAttempt(c.Request.Context()); a != nil && a.Status >= 200 && a.Status < 300 && a.Terminal != "completed" && a.BorrowRouteID != "" && (streamErr.AccountID == 0 || a.AccountID == streamErr.AccountID) {
+			found := false
+			if value, ok := c.Get(OpsUpstreamErrorsKey); ok {
+				if events, ok := value.([]*OpsUpstreamErrorEvent); ok && len(events) > 0 {
+					last := events[len(events)-1]
+					if last != nil && last.Attempt != nil && last.Attempt.Number == a.Number {
+						last.Attempt = a
+						found = true
+					}
+				}
+			}
+			if !found {
+				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{AccountID: a.AccountID, Platform: PlatformOpenAI, Kind: "stream_error", UpstreamStatusCode: a.Status, Message: streamErr.Message, SkipMonitoring: streamErr.SkipMonitoring})
+			}
+		}
+	}
 	if value, ok := c.Get(OpsUpstreamErrorsKey); ok {
 		if events, ok := value.([]*OpsUpstreamErrorEvent); ok {
 			streamErr.UpstreamErrors = make([]*OpsUpstreamErrorEvent, 0, len(events))
@@ -396,7 +414,9 @@ func setOpsUpstreamError(c *gin.Context, upstreamStatusCode int, upstreamMessage
 // OpsUpstreamErrorEvent describes one upstream error attempt during a single gateway request.
 // It is stored in ops_error_logs.upstream_errors as a JSON array.
 type OpsUpstreamErrorEvent struct {
-	AtUnixMs int64 `json:"at_unix_ms,omitempty"`
+	Attempt  *requesttiming.Attempt                `json:"attempt,omitempty"`
+	Recovery *requesttiming.BorrowRecoverySnapshot `json:"borrow_recovery,omitempty"`
+	AtUnixMs int64                                 `json:"at_unix_ms,omitempty"`
 
 	// Passthrough 表示本次请求是否命中“原样透传（仅替换认证）”分支。
 	// 该字段用于排障与灰度评估；存入 JSON，不涉及 DB schema 变更。
@@ -458,6 +478,13 @@ const (
 func appendOpsUpstreamError(c *gin.Context, ev OpsUpstreamErrorEvent) {
 	if c == nil {
 		return
+	}
+	if c.Request != nil {
+		a := requesttiming.LatestAttempt(c.Request.Context())
+		if a != nil && a.BorrowRouteID != "" && a.AccountID == ev.AccountID {
+			ev.Attempt = a
+			ev.Recovery = requesttiming.RecoverySnapshot(c.Request.Context())
+		}
 	}
 	if ev.AtUnixMs <= 0 {
 		ev.AtUnixMs = time.Now().UnixMilli()
@@ -693,4 +720,23 @@ func safeUpstreamURL(rawURL string) string {
 		rawURL = rawURL[:idx]
 	}
 	return rawURL
+}
+
+// Refresh the decision after the handler has consumed the shared retry budget.
+func RefreshBorrowRecoveryError(c *gin.Context) {
+	if c == nil || c.Request == nil {
+		return
+	}
+	value, ok := c.Get(OpsUpstreamErrorsKey)
+	if !ok {
+		return
+	}
+	events, ok := value.([]*OpsUpstreamErrorEvent)
+	if !ok || len(events) == 0 {
+		return
+	}
+	last := events[len(events)-1]
+	if last != nil && last.Attempt != nil {
+		last.Recovery = requesttiming.RecoverySnapshot(c.Request.Context())
+	}
 }

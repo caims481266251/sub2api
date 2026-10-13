@@ -1,4 +1,23 @@
 export default {
+  "borrowAttempts": "借票请求尝试",
+  "noTextLongTail": "推理中超过 60 秒无正文",
+  "borrowRoute": "实际路由",
+  "requestWritten": "请求已完整发出",
+  "retryAfter": "上游建议等待",
+  "firstReasoning": "首次推理 / 事件数",
+  "firstText": "首次正文",
+  "recoverySends": "实际发送次数",
+  "recoveryStop": "恢复停止原因",
+  "borrowObservationNote": "时间从本次上游尝试开始计算。推理事件不代表答案正文；慢响应仅作观测，不会因此中断请求。",
+  "recoveryReasons": {
+ "no_available_route": "恢复时没有可用路由",
+    "attempt_limit": "已达到两次尝试上限",
+    "retry_window_elapsed": "已超过恢复发起窗口",
+    "output_started": "已产生输出，禁止重放",
+    "ambiguous_upstream_execution": "上游执行结果不确定，禁止重放",
+    "client_canceled": "客户端已取消",
+    "recovery_timeout": "发送前恢复等待超时"
+  },
   "title": "请求耗时详情",
   "loading": "正在加载耗时详情…",
   "loadError": "耗时详情加载失败",
@@ -30,6 +49,7 @@ export default {
   "timeout": "超时",
   "transport_error": "传输错误",
   "fields": {
+ "borrow_route_wait": "借票可用路由等待",
     "first_semantic": "请求级首个语义事件",
     "first_visible": "请求级首个可见输出",
     "first_output_flush": "首次输出 Flush（应用侧）",

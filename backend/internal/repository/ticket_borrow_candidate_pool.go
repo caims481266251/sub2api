@@ -42,6 +42,13 @@ const borrowPoolOpenDemandSlots = `GREATEST(0,
  -GREATEST((SELECT count(*) FROM ticket_borrow_candidate_pool p WHERE p.target_id=t.account_id AND p.state='claimed'),
  (SELECT count(*) FROM ticket_borrow_requests q WHERE q.target_id=t.account_id AND q.kind='probe' AND q.finished_at IS NULL AND q.lease_until>clock_timestamp())))`
 
+// A small standby wave can be fetched while verification slots are occupied.
+// Reserve HTTP headroom for claimed work before forecasting future consumption.
+const borrowPoolBufferedDemandSlots = `GREATEST(0,LEAST(d.slots,
+ (GREATEST(1,COALESCE((cfg.recovery->>'probe_requests_per_minute')::int,12))-
+ (SELECT count(*) FROM ticket_borrow_requests q WHERE q.target_id=t.account_id AND q.kind='probe' AND q.reserved_at>clock_timestamp()-INTERVAL '60 seconds'))/2
+ -(SELECT count(*) FROM ticket_borrow_candidate_pool p WHERE p.target_id=t.account_id AND p.state='claimed')))`
+
 func (r *ticketBorrowRepository) RegisterCandidatePoolDemand(ctx context.Context, a service.BorrowAcquisition, slots int) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -96,16 +103,16 @@ func (r *ticketBorrowRepository) ReserveCandidatePoolFetch(ctx context.Context, 
 	if err = lockBorrowCandidatePool(ctx, tx); err != nil {
 		return nil, err
 	}
-	var slots, acquiring, queued, total, capacity int
+	var slots, buffered, acquiring, queued, total, capacity int
 	var revision int64
 	if err = tx.QueryRowContext(ctx, `SELECT capacity FROM ticket_borrow_candidate_pool_control WHERE id=1`).Scan(&capacity); err != nil {
 		return nil, err
 	}
-	// Deduct already claimed verifications once (their HTTP activity is not
-	// another candidate). Never produce a backlog just because workers exist.
-	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(sum(`+borrowPoolOpenDemandSlots+`),0)`+borrowPoolDemandFrom).Scan(&slots); err != nil {
+	// Open slots remain the consumer concurrency limit; standby only overlaps source work.
+	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(sum(`+borrowPoolOpenDemandSlots+`),0),COALESCE(sum(`+borrowPoolBufferedDemandSlots+`),0)`+borrowPoolDemandFrom).Scan(&slots, &buffered); err != nil {
 		return nil, err
 	}
+	slots = max(slots, min(service.BorrowCandidatePoolStandby, buffered))
 	if slots == 0 {
 		return nil, nil
 	}
@@ -125,7 +132,7 @@ func (r *ticketBorrowRepository) ReserveCandidatePoolFetch(ctx context.Context, 
  FROM ticket_borrow_candidate_pool WHERE state<>'finished'`).Scan(&acquiring, &queued, &total); err != nil {
 		return nil, err
 	}
-	// At most one currently usable wave; the hard cap includes all verifications.
+	// Standby is included in the hard cap, with the existing short queue lifetime.
 	if acquiring >= service.BorrowCandidatePoolSourceConcurrency || acquiring+queued >= min(slots, capacity) || total >= capacity {
 		return nil, nil
 	}
@@ -286,16 +293,26 @@ func (r *ticketBorrowRepository) ClaimCandidatePool(ctx context.Context, a servi
 	if err = tx.QueryRowContext(ctx, `SELECT continue_timeout_seconds FROM ticket_borrow_settings WHERE id=1`).Scan(&cont); err != nil {
 		return nil, err
 	}
+	scope, err := borrowGatewayScopeForLease(ctx, tx, a)
+	if err != nil {
+		return nil, err
+	}
+	var demoted bool
+	var freshnessRank int
 	var id, secret string
 	var queued, now, deadline time.Time
+	// The pool control row already serializes all claims/updates. The freshness
+	// rank records whether feedback actually displaced the default choice.
 	err = tx.QueryRowContext(ctx, `SELECT p.id,p.secret,p.enqueued_at,clock_timestamp(),LEAST(p.admission_until,e.admission_until,
- e.started_at+cfg.admission_window_seconds*INTERVAL '1 second',COALESCE(cd.expires_at,p.admission_until))
+ e.started_at+cfg.admission_window_seconds*INTERVAL '1 second',COALESCE(cd.expires_at,p.admission_until)),COALESCE(f.deprioritized_until>clock_timestamp(),false),
+ row_number() OVER (ORDER BY LEAST(p.admission_until,e.admission_until,e.started_at+cfg.admission_window_seconds*INTERVAL '1 second',COALESCE(cd.expires_at,p.admission_until)) DESC,p.enqueued_at DESC,p.id)
  FROM ticket_borrow_candidate_pool p JOIN ticket_borrow_candidate_environments e ON e.id=p.id
  CROSS JOIN ticket_borrow_settings cfg LEFT JOIN ticket_borrow_cookie_deadlines cd ON cd.cookie_hash=p.cookie_hash
+ LEFT JOIN ticket_borrow_gateway_feedback f ON f.target_id=$2 AND f.scope=$3 AND f.gateway=p.details->>'gateway' AND $4
  WHERE cfg.id=1 AND p.state='queued' AND p.settings_revision=cfg.revision AND p.lease_until>clock_timestamp()
  AND e.released_at IS NULL AND e.lease_until>clock_timestamp()
  AND LEAST(p.admission_until,e.admission_until,e.started_at+cfg.admission_window_seconds*INTERVAL '1 second',COALESCE(cd.expires_at,p.admission_until))>=clock_timestamp()+$1*INTERVAL '1 millisecond'
- ORDER BY LEAST(p.admission_until,e.admission_until,e.started_at+cfg.admission_window_seconds*INTERVAL '1 second',COALESCE(cd.expires_at,p.admission_until)) DESC,p.enqueued_at DESC,p.id LIMIT 1 FOR UPDATE OF p`, service.BorrowPoolVerificationBudget(cont, "mint").Milliseconds()).Scan(&id, &secret, &queued, &now, &deadline)
+ ORDER BY COALESCE(f.deprioritized_until>clock_timestamp(),false),LEAST(p.admission_until,e.admission_until,e.started_at+cfg.admission_window_seconds*INTERVAL '1 second',COALESCE(cd.expires_at,p.admission_until)) DESC,p.enqueued_at DESC,p.id LIMIT 1`, service.BorrowPoolVerificationBudget(cont, "mint").Milliseconds(), a.TargetID, scope, service.BorrowGatewayFeedbackEnabled(ctx)).Scan(&id, &secret, &queued, &now, &deadline, &demoted, &freshnessRank)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -308,6 +325,13 @@ func (r *ticketBorrowRepository) ClaimCandidatePool(ctx context.Context, a servi
 	}
 	if c.ID != id || c.Details == nil || c.Environment == nil || c.Environment.Fingerprint == nil {
 		return nil, service.ErrBorrowUnavailable
+	}
+	c.Details.GatewayPriority = "normal"
+	if freshnessRank > 1 {
+		c.Details.GatewayPriority = "prioritized"
+	}
+	if demoted {
+		c.Details.GatewayPriority = "recheck"
 	}
 	c.Expires = deadline
 	c.Details.BatchID = a.Lease

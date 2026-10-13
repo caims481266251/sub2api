@@ -21,6 +21,7 @@ import (
 // ChatCompletions handles OpenAI Chat Completions API requests.
 // POST /v1/chat/completions
 func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
+	defer h.beginBorrowBusinessRequest(c)()
 	streamStarted := false
 	defer h.recoverResponsesPanic(c, &streamStarted)
 
@@ -168,6 +169,9 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 	c.Request = c.Request.WithContext(ccPricingCtx)
 
 	for {
+		if h.stopBorrowBusinessRecovery(c, streamStarted, false) {
+			return
+		}
 		if failoverClientGone(c) {
 			return
 		}
@@ -187,6 +191,15 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 			requestPlatform,
 		)
 		if err != nil {
+			if borrowBusinessSelectionFallback(c, err, failedAccountIDs) {
+				continue
+			}
+			if h.stopBorrowBusinessRecovery(c, streamStarted, false) {
+				return
+			}
+			if h.finishBorrowSelectionFailure(c, err, lastFailoverErr, streamStarted, false) {
+				return
+			}
 			err = rpmAdmission.selectionError(err)
 			if isOpenAIRPMError(err) {
 				rpmAdmission.retryAfter(c, err)
@@ -342,6 +355,9 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 			})
 		}
 		if err != nil {
+			if h.stopBorrowBusinessRecovery(c, streamStarted, false) {
+				return
+			}
 			if service.IsOpenAITurnAdmissionError(err) || errors.Is(err, service.ErrBorrowResponseRejected) {
 				status, code, message := openAIAdmissionClientError(err)
 				h.handleStreamingAwareError(c, status, code, message, streamStarted)
@@ -376,6 +392,13 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 						return
 					}
 					// Pool mode: retry on the same account
+					if handled, retry := h.handleBorrowBusinessRecovery(c, failoverErr, account, failedAccountIDs, &switchCount, maxAccountSwitches, streamStarted, false); handled {
+						if retry {
+							lastFailoverErr = failoverErr
+							continue
+						}
+						return
+					}
 					if failoverErr.RetryableOnSameAccount {
 						retryLimit := effectiveSameAccountRetryLimit(failoverErr, account)
 						if sameAccountRetryAllowed(failoverErr, sameAccountRetryCount[account.ID], retryLimit) {

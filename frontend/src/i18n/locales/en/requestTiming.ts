@@ -1,4 +1,23 @@
 export default {
+  "borrowAttempts": "Borrowed-route attempts",
+  "noTextLongTail": "Reasoning without text beyond 60 seconds",
+  "borrowRoute": "Actual route",
+  "requestWritten": "Request fully sent",
+  "retryAfter": "Upstream retry wait",
+  "firstReasoning": "First reasoning / events",
+  "firstText": "First answer text",
+  "recoverySends": "Requests sent",
+  "recoveryStop": "Recovery stop reason",
+  "borrowObservationNote": "Times are relative to this upstream attempt. Reasoning events are not answer text. Slow responses are observed without cancellation.",
+  "recoveryReasons": {
+ "no_available_route": "No admissible route for recovery",
+    "attempt_limit": "Two-attempt limit reached",
+    "retry_window_elapsed": "Recovery initiation window elapsed",
+    "output_started": "Output started; replay prohibited",
+    "ambiguous_upstream_execution": "Uncertain execution; replay prohibited",
+    "client_canceled": "Client canceled",
+    "recovery_timeout": "Recovery wait expired before sending"
+  },
   "title": "Request timing details",
   "loading": "Loading timing details…",
   "loadError": "Unable to load timing details",
@@ -30,6 +49,7 @@ export default {
   "timeout": "Timeout",
   "transport_error": "Transport error",
   "fields": {
+ "borrow_route_wait": "Borrowed-route wait",
     "first_semantic": "First semantic event from request start",
     "first_visible": "First visible output from request start",
     "first_output_flush": "First output flush (application)",

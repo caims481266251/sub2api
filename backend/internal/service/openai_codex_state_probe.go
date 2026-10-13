@@ -95,15 +95,16 @@ type OpenAICodexStateProbeResult struct {
 }
 
 type openAICodexStateShot struct {
-	diagnostic *BorrowHTTPAttempt
-	errorBody  []byte // Bounded HTTP error or structured terminal SSE payload.
-	headers    http.Header
-	failure    string // Structured stream error, independent of HTTP status.
-	retryAfter time.Duration
-	status     int
-	state      string
-	cookies    []string
-	model      string
+	earlyRejected string // Definite borrowed-route rejection, never a completed response.
+	diagnostic    *BorrowHTTPAttempt
+	errorBody     []byte // Bounded HTTP error or structured terminal SSE payload.
+	headers       http.Header
+	failure       string // Structured stream error, independent of HTTP status.
+	retryAfter    time.Duration
+	status        int
+	state         string
+	cookies       []string
+	model         string
 	// streamErr 非空表示 200 但回复流没有完整跑完（上游过载、额度用尽等流内失败）。
 	streamErr error
 	detail    string
@@ -212,6 +213,11 @@ func runOpenAICodexStateProbe(ctx context.Context, result *OpenAICodexStateProbe
 	if cont.state != "" {
 		result.ContinueTicketHash = borrowHash(cont.state)
 	}
+	if cont.earlyRejected == "ticket_changed" && cont.failure == "" && cont.streamErr == nil && ctx.Err() == nil {
+		result.NewTicket = true
+		result.Verdict = OpenAICodexStateDegraded
+		return
+	}
 	if !result.shotUsable(ctx, "门票续接", cont, err) {
 		return
 	}
@@ -251,6 +257,7 @@ func ProbeOpenAICodexStateRoute(ctx context.Context, upstream HTTPUpstream, temp
 		result.fail("route_changed", "缺少借用路由", "")
 		return result
 	}
+	ctx = context.WithValue(ctx, borrowProbeResponseKey{}, true)
 	routeChanged := false
 	runOpenAICodexStateProbe(ctx, result, pinned.String(), func(state, cookie string) (openAICodexStateShot, error) {
 		return retryOpenAICodexStateRouteShot(ctx, result, state == "", func(attemptCtx context.Context) (openAICodexStateShot, error) {
@@ -284,7 +291,7 @@ func ProbeOpenAICodexStateRoute(ctx context.Context, upstream HTTPUpstream, temp
 			return shot, shotErr
 		})
 	})
-	if routeChanged {
+	if routeChanged && result.Failure != OpenAICodexStateFailureRateLimited && result.Failure != OpenAICodexStateFailureAccountError {
 		result.fail("route_changed", "探针期间网关路由已改变", "")
 	}
 	return result
@@ -292,9 +299,9 @@ func ProbeOpenAICodexStateRoute(ctx context.Context, upstream HTTPUpstream, temp
 
 var errOpenAICodexStateRouteChanged = errors.New("target_route_changed")
 
-// Retry only the failed phase on the pinned route. A successful mint and its
-// target-issued ticket are retained when retrying continuation. The caller's
-// validation/recovery deadlines bound all attempts and backoff together.
+// Background candidate validation tries each phase once, then lets the worker
+// release the failed candidate and continue with a fresh one. Standalone route
+// diagnostics retain their phase retries within the caller's deadline.
 func retryOpenAICodexStateRouteShot(ctx context.Context, result *OpenAICodexStateProbeResult, mint bool, fire func(context.Context) (openAICodexStateShot, error)) (openAICodexStateShot, error) {
 	started := time.Now()
 	phase := &BorrowProbePhase{Attempts: []BorrowHTTPAttempt{}}
@@ -318,13 +325,13 @@ func retryOpenAICodexStateRouteShot(ctx context.Context, result *OpenAICodexStat
 		} else {
 			phase.Attempts = append(phase.Attempts, BorrowHTTPAttempt{Number: attempt + 1, Status: shot.status, ErrorClass: borrowErrorClass(err, "admission")})
 		}
-		if borrowInternal(ctx) && (shot.status == 429 || shot.failure == OpenAICodexStateFailureRateLimited) {
+		if borrowInternal(ctx) {
 			return shot, err
 		}
 		if errors.Is(err, ErrBorrowCandidateTimeBudget) || errors.Is(err, ErrBorrowProbeBusy) || errors.Is(err, ErrBorrowRecoveryWaiting) || errors.Is(err, ErrBorrowPaused) || errors.Is(err, ErrBorrowRequestBudget) || errors.Is(err, ErrBorrowRouteReady) {
 			return shot, err
 		}
-		if attempt >= 2 || ctx.Err() != nil || errors.Is(err, errOpenAICodexStateRouteChanged) || borrowContinueTimedOut(err) {
+		if shot.earlyRejected != "" || attempt >= 2 || ctx.Err() != nil || errors.Is(err, errOpenAICodexStateRouteChanged) || borrowContinueTimedOut(err) {
 			return shot, err
 		}
 		if !openAICodexShotRetryable(ctx, shot, err, mint) {
@@ -555,7 +562,20 @@ func fireOpenAICodexStateShotRequest(ctx context.Context, headers http.Header, m
 	}
 	defer cancel()
 	defer func() {
-		diagnostic.finish(shotCtx, resultErr)
+		traceCtx := shotCtx
+		if out.earlyRejected != "" && ctx.Err() == nil {
+			traceCtx = ctx
+			if diagnostic != nil {
+				diagnostic.mu.Lock()
+				diagnostic.data.Terminal = "rejected"
+				diagnostic.data.ErrorClass = out.earlyRejected
+				diagnostic.data.CancellationCause = ""
+				diagnostic.data.TimeoutStage = ""
+				diagnostic.data.FailureStage = "response_headers"
+				diagnostic.mu.Unlock()
+			}
+		}
+		diagnostic.finish(traceCtx, resultErr)
 		out.diagnostic = diagnostic.snapshot()
 	}()
 	body := openAICodexStateProbeBody(model)
@@ -612,7 +632,22 @@ func fireOpenAICodexStateShotRequest(ctx context.Context, headers http.Header, m
 		return out, nil
 	}
 	defer func() { _ = resp.Body.Close() }()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, openAICodexStateProbeMaxBody+1))
+	var data []byte
+	borrowReader, _ := ctx.Value(borrowProbeResponseKey{}).(bool)
+	if borrowReader && out.status == http.StatusOK {
+		if turnState != "" && out.state != "" && out.state != turnState {
+			out.earlyRejected = "ticket_changed"
+		}
+		pinned, _ := req.Cookie("__oailb")
+		for _, got := range resp.Cookies() {
+			if pinned != nil && got.Name == "__oailb" && (got.Value != pinned.Value || got.MaxAge < 0 || (!got.Expires.IsZero() && !time.Now().Before(got.Expires))) {
+				out.earlyRejected = "route_changed"
+			}
+		}
+		data, err = readBorrowProbeResponse(resp.Body, out.earlyRejected != "", cancel)
+	} else {
+		data, err = io.ReadAll(io.LimitReader(resp.Body, openAICodexStateProbeMaxBody+1))
+	}
 	if out.status != http.StatusOK {
 		out.errorBody = data[:min(len(data), openAICodexStateProbeMaxBody)]
 	} else {
@@ -623,6 +658,25 @@ func fireOpenAICodexStateShotRequest(ctx context.Context, headers http.Header, m
 	out.failure, out.retryAfter = codexProbeSignal(data, resp.Header, time.Now())
 	if out.status == http.StatusTooManyRequests {
 		out.retryAfter = codexProbeMaxWait(out.retryAfter, borrowRetryAfter(resp.Header.Get("Retry-After"), time.Now()))
+	}
+	if out.earlyRejected != "" {
+		for _, payload := range openAICodexStateStreamEvents(data) {
+			var event struct {
+				Type string `json:"type"`
+			}
+			if json.Unmarshal(payload, &event) == nil && (event.Type == "error" || event.Type == "response.failed" || event.Type == "response.incomplete") {
+				out.streamErr = errors.New("probe response failed")
+			}
+		}
+	}
+	if out.earlyRejected != "" && ctx.Err() == nil {
+		// Health signals take precedence in shotUsable and the observer. There is
+		// deliberately no claim that the rejected stream completed successfully.
+		if out.failure != "" {
+			out.earlyRejected = ""
+			out.streamErr = errors.New("probe rejected by upstream")
+		}
+		return out, nil
 	}
 	if err != nil {
 		if borrowContinueTimedOut(err) {

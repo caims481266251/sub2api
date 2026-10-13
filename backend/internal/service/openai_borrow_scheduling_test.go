@@ -113,3 +113,34 @@ func TestOpenAIBorrowPreferredScheduling(t *testing.T) {
 		}
 	}
 }
+
+func TestOpenAIBorrowRoutePublishWakesNormalSelection(t *testing.T) {
+	borrow, repo := borrowFixture()
+	route := repo.route
+	repo.route = nil
+	borrowed := *borrow.owner.accountRepo.(borrowTestAccounts).account
+	borrowed.Concurrency = 5
+	gateway := &OpenAIGatewayService{accountRepo: schedulerTestOpenAIAccountRepo{accounts: []Account{borrowed}}, cfg: &config.Config{}, concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{acquireResults: map[int64]bool{11: true}}), borrowRoutes: borrow}
+	ctx, r := WithBorrowBusinessRecovery(t.Context(), nil)
+	defer r.Close()
+	completed := make(chan struct{})
+	go func() {
+		defer close(completed)
+		time.Sleep(30 * time.Millisecond)
+		repo.mu.Lock()
+		repo.route = route
+		repo.mu.Unlock()
+		borrow.notifyRoutePublished()
+	}()
+	start := time.Now()
+	selected, _, err := gateway.selectAccountWithScheduler(ctx, nil, "", "", "gpt-6.1-sol", nil, OpenAIUpstreamTransportHTTPSSE, OpenAIEndpointCapabilityResponses, "", false, PlatformOpenAI, false, false)
+	<-completed
+	require.NoError(t, err)
+	require.NotNil(t, selected)
+	require.EqualValues(t, 11, selected.Account.ID)
+	require.Less(t, time.Since(start), time.Second, "local publication should not wait for the polling interval")
+	if selected.ReleaseFunc != nil {
+		selected.ReleaseFunc()
+	}
+	require.False(t, r.Active(), "selection does not activate transport recovery")
+}
