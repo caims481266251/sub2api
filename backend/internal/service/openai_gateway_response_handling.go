@@ -1483,7 +1483,7 @@ func (s *OpenAIGatewayService) ValidateOpenAIHTTPResponseOwner(
 	if s == nil || strings.TrimSpace(responseID) == "" || userID <= 0 || apiKeyID <= 0 {
 		return false, nil
 	}
-	ownerUserID, ownerAPIKeyID, found, err := s.getOpenAIWSStateStore().GetHTTPResponseOwner(ctx, groupID, responseID)
+	ownerUserID, ownerAPIKeyID, found, err := s.getOpenAIWSStateStoreForContext(ctx).GetHTTPResponseOwner(ctx, groupID, responseID)
 	if err != nil || !found {
 		return false, err
 	}
@@ -1501,7 +1501,7 @@ func (s *OpenAIGatewayService) BindOpenAIHTTPResponseOwner(
 	if s == nil {
 		return nil
 	}
-	return s.getOpenAIWSStateStore().BindHTTPResponseOwner(
+	return s.getOpenAIWSStateStoreForContext(ctx).BindHTTPResponseOwner(
 		ctx, groupID, responseID, userID, apiKeyID, s.openAIWSResponseStickyTTL(),
 	)
 }
@@ -1514,7 +1514,7 @@ func (s *OpenAIGatewayService) bindHTTPResponseAccount(ctx context.Context, c *g
 	if responseID == "" {
 		return
 	}
-	store := s.getOpenAIWSStateStore()
+	store := s.getOpenAIWSStateStoreForContext(ctx)
 	if store == nil {
 		return
 	}

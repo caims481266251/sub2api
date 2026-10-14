@@ -70,6 +70,21 @@ func DeletedAt(v time.Time) predicate.Account {
 	return predicate.Account(sql.FieldEQ(FieldDeletedAt, v))
 }
 
+// OwnerUserID applies equality check predicate on the "owner_user_id" field. It's identical to OwnerUserIDEQ.
+func OwnerUserID(v int64) predicate.Account {
+	return predicate.Account(sql.FieldEQ(FieldOwnerUserID, v))
+}
+
+// HostingPoolID applies equality check predicate on the "hosting_pool_id" field. It's identical to HostingPoolIDEQ.
+func HostingPoolID(v int64) predicate.Account {
+	return predicate.Account(sql.FieldEQ(FieldHostingPoolID, v))
+}
+
+// HostingIdentity applies equality check predicate on the "hosting_identity" field. It's identical to HostingIdentityEQ.
+func HostingIdentity(v string) predicate.Account {
+	return predicate.Account(sql.FieldEQ(FieldHostingIdentity, v))
+}
+
 // Name applies equality check predicate on the "name" field. It's identical to NameEQ.
 func Name(v string) predicate.Account {
 	return predicate.Account(sql.FieldEQ(FieldName, v))
@@ -328,6 +343,181 @@ func DeletedAtIsNil() predicate.Account {
 // DeletedAtNotNil applies the NotNil predicate on the "deleted_at" field.
 func DeletedAtNotNil() predicate.Account {
 	return predicate.Account(sql.FieldNotNull(FieldDeletedAt))
+}
+
+// OwnerUserIDEQ applies the EQ predicate on the "owner_user_id" field.
+func OwnerUserIDEQ(v int64) predicate.Account {
+	return predicate.Account(sql.FieldEQ(FieldOwnerUserID, v))
+}
+
+// OwnerUserIDNEQ applies the NEQ predicate on the "owner_user_id" field.
+func OwnerUserIDNEQ(v int64) predicate.Account {
+	return predicate.Account(sql.FieldNEQ(FieldOwnerUserID, v))
+}
+
+// OwnerUserIDIn applies the In predicate on the "owner_user_id" field.
+func OwnerUserIDIn(vs ...int64) predicate.Account {
+	return predicate.Account(sql.FieldIn(FieldOwnerUserID, vs...))
+}
+
+// OwnerUserIDNotIn applies the NotIn predicate on the "owner_user_id" field.
+func OwnerUserIDNotIn(vs ...int64) predicate.Account {
+	return predicate.Account(sql.FieldNotIn(FieldOwnerUserID, vs...))
+}
+
+// OwnerUserIDGT applies the GT predicate on the "owner_user_id" field.
+func OwnerUserIDGT(v int64) predicate.Account {
+	return predicate.Account(sql.FieldGT(FieldOwnerUserID, v))
+}
+
+// OwnerUserIDGTE applies the GTE predicate on the "owner_user_id" field.
+func OwnerUserIDGTE(v int64) predicate.Account {
+	return predicate.Account(sql.FieldGTE(FieldOwnerUserID, v))
+}
+
+// OwnerUserIDLT applies the LT predicate on the "owner_user_id" field.
+func OwnerUserIDLT(v int64) predicate.Account {
+	return predicate.Account(sql.FieldLT(FieldOwnerUserID, v))
+}
+
+// OwnerUserIDLTE applies the LTE predicate on the "owner_user_id" field.
+func OwnerUserIDLTE(v int64) predicate.Account {
+	return predicate.Account(sql.FieldLTE(FieldOwnerUserID, v))
+}
+
+// OwnerUserIDIsNil applies the IsNil predicate on the "owner_user_id" field.
+func OwnerUserIDIsNil() predicate.Account {
+	return predicate.Account(sql.FieldIsNull(FieldOwnerUserID))
+}
+
+// OwnerUserIDNotNil applies the NotNil predicate on the "owner_user_id" field.
+func OwnerUserIDNotNil() predicate.Account {
+	return predicate.Account(sql.FieldNotNull(FieldOwnerUserID))
+}
+
+// HostingPoolIDEQ applies the EQ predicate on the "hosting_pool_id" field.
+func HostingPoolIDEQ(v int64) predicate.Account {
+	return predicate.Account(sql.FieldEQ(FieldHostingPoolID, v))
+}
+
+// HostingPoolIDNEQ applies the NEQ predicate on the "hosting_pool_id" field.
+func HostingPoolIDNEQ(v int64) predicate.Account {
+	return predicate.Account(sql.FieldNEQ(FieldHostingPoolID, v))
+}
+
+// HostingPoolIDIn applies the In predicate on the "hosting_pool_id" field.
+func HostingPoolIDIn(vs ...int64) predicate.Account {
+	return predicate.Account(sql.FieldIn(FieldHostingPoolID, vs...))
+}
+
+// HostingPoolIDNotIn applies the NotIn predicate on the "hosting_pool_id" field.
+func HostingPoolIDNotIn(vs ...int64) predicate.Account {
+	return predicate.Account(sql.FieldNotIn(FieldHostingPoolID, vs...))
+}
+
+// HostingPoolIDGT applies the GT predicate on the "hosting_pool_id" field.
+func HostingPoolIDGT(v int64) predicate.Account {
+	return predicate.Account(sql.FieldGT(FieldHostingPoolID, v))
+}
+
+// HostingPoolIDGTE applies the GTE predicate on the "hosting_pool_id" field.
+func HostingPoolIDGTE(v int64) predicate.Account {
+	return predicate.Account(sql.FieldGTE(FieldHostingPoolID, v))
+}
+
+// HostingPoolIDLT applies the LT predicate on the "hosting_pool_id" field.
+func HostingPoolIDLT(v int64) predicate.Account {
+	return predicate.Account(sql.FieldLT(FieldHostingPoolID, v))
+}
+
+// HostingPoolIDLTE applies the LTE predicate on the "hosting_pool_id" field.
+func HostingPoolIDLTE(v int64) predicate.Account {
+	return predicate.Account(sql.FieldLTE(FieldHostingPoolID, v))
+}
+
+// HostingPoolIDIsNil applies the IsNil predicate on the "hosting_pool_id" field.
+func HostingPoolIDIsNil() predicate.Account {
+	return predicate.Account(sql.FieldIsNull(FieldHostingPoolID))
+}
+
+// HostingPoolIDNotNil applies the NotNil predicate on the "hosting_pool_id" field.
+func HostingPoolIDNotNil() predicate.Account {
+	return predicate.Account(sql.FieldNotNull(FieldHostingPoolID))
+}
+
+// HostingIdentityEQ applies the EQ predicate on the "hosting_identity" field.
+func HostingIdentityEQ(v string) predicate.Account {
+	return predicate.Account(sql.FieldEQ(FieldHostingIdentity, v))
+}
+
+// HostingIdentityNEQ applies the NEQ predicate on the "hosting_identity" field.
+func HostingIdentityNEQ(v string) predicate.Account {
+	return predicate.Account(sql.FieldNEQ(FieldHostingIdentity, v))
+}
+
+// HostingIdentityIn applies the In predicate on the "hosting_identity" field.
+func HostingIdentityIn(vs ...string) predicate.Account {
+	return predicate.Account(sql.FieldIn(FieldHostingIdentity, vs...))
+}
+
+// HostingIdentityNotIn applies the NotIn predicate on the "hosting_identity" field.
+func HostingIdentityNotIn(vs ...string) predicate.Account {
+	return predicate.Account(sql.FieldNotIn(FieldHostingIdentity, vs...))
+}
+
+// HostingIdentityGT applies the GT predicate on the "hosting_identity" field.
+func HostingIdentityGT(v string) predicate.Account {
+	return predicate.Account(sql.FieldGT(FieldHostingIdentity, v))
+}
+
+// HostingIdentityGTE applies the GTE predicate on the "hosting_identity" field.
+func HostingIdentityGTE(v string) predicate.Account {
+	return predicate.Account(sql.FieldGTE(FieldHostingIdentity, v))
+}
+
+// HostingIdentityLT applies the LT predicate on the "hosting_identity" field.
+func HostingIdentityLT(v string) predicate.Account {
+	return predicate.Account(sql.FieldLT(FieldHostingIdentity, v))
+}
+
+// HostingIdentityLTE applies the LTE predicate on the "hosting_identity" field.
+func HostingIdentityLTE(v string) predicate.Account {
+	return predicate.Account(sql.FieldLTE(FieldHostingIdentity, v))
+}
+
+// HostingIdentityContains applies the Contains predicate on the "hosting_identity" field.
+func HostingIdentityContains(v string) predicate.Account {
+	return predicate.Account(sql.FieldContains(FieldHostingIdentity, v))
+}
+
+// HostingIdentityHasPrefix applies the HasPrefix predicate on the "hosting_identity" field.
+func HostingIdentityHasPrefix(v string) predicate.Account {
+	return predicate.Account(sql.FieldHasPrefix(FieldHostingIdentity, v))
+}
+
+// HostingIdentityHasSuffix applies the HasSuffix predicate on the "hosting_identity" field.
+func HostingIdentityHasSuffix(v string) predicate.Account {
+	return predicate.Account(sql.FieldHasSuffix(FieldHostingIdentity, v))
+}
+
+// HostingIdentityIsNil applies the IsNil predicate on the "hosting_identity" field.
+func HostingIdentityIsNil() predicate.Account {
+	return predicate.Account(sql.FieldIsNull(FieldHostingIdentity))
+}
+
+// HostingIdentityNotNil applies the NotNil predicate on the "hosting_identity" field.
+func HostingIdentityNotNil() predicate.Account {
+	return predicate.Account(sql.FieldNotNull(FieldHostingIdentity))
+}
+
+// HostingIdentityEqualFold applies the EqualFold predicate on the "hosting_identity" field.
+func HostingIdentityEqualFold(v string) predicate.Account {
+	return predicate.Account(sql.FieldEqualFold(FieldHostingIdentity, v))
+}
+
+// HostingIdentityContainsFold applies the ContainsFold predicate on the "hosting_identity" field.
+func HostingIdentityContainsFold(v string) predicate.Account {
+	return predicate.Account(sql.FieldContainsFold(FieldHostingIdentity, v))
 }
 
 // NameEQ applies the EQ predicate on the "name" field.

@@ -64,6 +64,7 @@ const (
 // 若编辑 Key 时无条件整行回写，并发累计的配额与限流计数就会被旧快照覆盖。
 // 因此调用方必须显式声明要改的列。
 type APIKeyUpdateFields struct {
+	HostingRoute     bool
 	ConcurrencyLimit bool
 	Name             bool
 	Status           bool
@@ -213,12 +214,16 @@ type APIKeyAuthCacheInvalidator interface {
 
 // CreateAPIKeyRequest 创建API Key请求
 type CreateAPIKeyRequest struct {
-	ConcurrencyLimit int      `json:"concurrency_limit"`
-	Name             string   `json:"name"`
-	GroupID          *int64   `json:"group_id"`
-	CustomKey        *string  `json:"custom_key"`   // 可选的自定义key
-	IPWhitelist      []string `json:"ip_whitelist"` // IP 白名单
-	IPBlacklist      []string `json:"ip_blacklist"` // IP 黑名单
+	RouteMode              string   `json:"route_mode"`
+	HostingPoolID          *int64   `json:"hosting_pool_id"`
+	HostingFallbackGroupID *int64   `json:"hosting_fallback_group_id"`
+	HostingFallbackEnabled *bool    `json:"hosting_fallback_enabled"`
+	ConcurrencyLimit       int      `json:"concurrency_limit"`
+	Name                   string   `json:"name"`
+	GroupID                *int64   `json:"group_id"`
+	CustomKey              *string  `json:"custom_key"`   // 可选的自定义key
+	IPWhitelist            []string `json:"ip_whitelist"` // IP 白名单
+	IPBlacklist            []string `json:"ip_blacklist"` // IP 黑名单
 
 	// Quota fields
 	Quota         float64 `json:"quota"`           // Quota limit in USD (0 = unlimited)
@@ -232,12 +237,16 @@ type CreateAPIKeyRequest struct {
 
 // UpdateAPIKeyRequest 更新API Key请求
 type UpdateAPIKeyRequest struct {
-	ConcurrencyLimit *int      `json:"concurrency_limit"` // nil = no change, 0 = no additional limit
-	Name             *string   `json:"name"`
-	GroupID          *int64    `json:"group_id"`
-	Status           *string   `json:"status"`
-	IPWhitelist      *[]string `json:"ip_whitelist"` // IP 白名单（nil 不修改，空数组清空）
-	IPBlacklist      *[]string `json:"ip_blacklist"` // IP 黑名单（nil 不修改，空数组清空）
+	RouteMode              *string   `json:"route_mode"`
+	HostingPoolID          *int64    `json:"hosting_pool_id"`
+	HostingFallbackGroupID *int64    `json:"hosting_fallback_group_id"`
+	HostingFallbackEnabled *bool     `json:"hosting_fallback_enabled"`
+	ConcurrencyLimit       *int      `json:"concurrency_limit"` // nil = no change, 0 = no additional limit
+	Name                   *string   `json:"name"`
+	GroupID                *int64    `json:"group_id"`
+	Status                 *string   `json:"status"`
+	IPWhitelist            *[]string `json:"ip_whitelist"` // IP 白名单（nil 不修改，空数组清空）
+	IPBlacklist            *[]string `json:"ip_blacklist"` // IP 黑名单（nil 不修改，空数组清空）
 
 	// Quota fields
 	Quota           *float64   `json:"quota"`       // Quota limit in USD (nil = no change, 0 = unlimited)
@@ -289,6 +298,7 @@ type RateLimitCacheInvalidator interface {
 }
 
 type APIKeyService struct {
+	hostingService            *HostingService
 	apiKeyRepo                APIKeyRepository
 	userRepo                  UserRepository
 	groupRepo                 GroupRepository
@@ -519,6 +529,39 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 		}
 	}
 
+	if req.RouteMode == "" {
+		req.RouteMode = "group"
+	}
+	if req.RouteMode != "group" && req.RouteMode != RouteModeHosted {
+		return nil, infraerrors.BadRequest("API_KEY_ROUTE_INVALID", "调用模式无效")
+	}
+	if req.RouteMode == RouteModeHosted {
+		if s.hostingService == nil {
+			return nil, ErrHostingDisabled
+		}
+		_, err := s.hostingService.requireEnabled(ctx, userID)
+		if err != nil {
+			return nil, err
+		}
+		req.GroupID = nil
+		req.HostingPoolID = normalizeHostingPoolID(req.HostingPoolID)
+		if err := s.hostingService.ResolvePool(ctx, userID, req.HostingPoolID); err != nil {
+			return nil, err
+		}
+		if req.HostingFallbackEnabled == nil || *req.HostingFallbackEnabled {
+			if req.HostingFallbackGroupID == nil {
+				return nil, ErrHostingFallbackInvalid
+			}
+			if _, err := s.hostingService.ResolveFallback(ctx, userID, req.HostingFallbackGroupID); err != nil {
+				return nil, err
+			}
+		} else {
+			req.HostingFallbackGroupID = nil
+		}
+	} else if req.HostingFallbackGroupID != nil || req.HostingFallbackEnabled != nil || req.HostingPoolID != nil {
+		return nil, ErrHostingFallbackInvalid
+	}
+
 	// 验证分组权限（如果指定了分组）
 	if req.GroupID != nil {
 		group, err := s.groupRepo.GetByID(ctx, *req.GroupID)
@@ -573,19 +616,22 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 
 	// 创建API Key记录
 	apiKey := &APIKey{
-		UserID:           userID,
-		Key:              key,
-		Name:             html.EscapeString(req.Name),
-		GroupID:          req.GroupID,
-		Status:           StatusActive,
-		IPWhitelist:      req.IPWhitelist,
-		IPBlacklist:      req.IPBlacklist,
-		Quota:            req.Quota,
-		QuotaUsed:        0,
-		ConcurrencyLimit: req.ConcurrencyLimit,
-		RateLimit5h:      req.RateLimit5h,
-		RateLimit1d:      req.RateLimit1d,
-		RateLimit7d:      req.RateLimit7d,
+		UserID:                 userID,
+		RouteMode:              req.RouteMode,
+		HostingPoolID:          req.HostingPoolID,
+		HostingFallbackGroupID: req.HostingFallbackGroupID,
+		Key:                    key,
+		Name:                   html.EscapeString(req.Name),
+		GroupID:                req.GroupID,
+		Status:                 StatusActive,
+		IPWhitelist:            req.IPWhitelist,
+		IPBlacklist:            req.IPBlacklist,
+		Quota:                  req.Quota,
+		QuotaUsed:              0,
+		ConcurrencyLimit:       req.ConcurrencyLimit,
+		RateLimit5h:            req.RateLimit5h,
+		RateLimit1d:            req.RateLimit1d,
+		RateLimit7d:            req.RateLimit7d,
 	}
 
 	// Set expiration time if specified
@@ -877,6 +923,64 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 	// 下面若干分支会顺带把 Status 改回 active（配额扩容、清除过期等），
 	// 所以用原始值比对来决定是否写 status，而不是只看 req.Status。
 	originalStatus := apiKey.Status
+	if req.RouteMode != nil || req.HostingFallbackEnabled != nil || req.HostingFallbackGroupID != nil || req.HostingPoolID != nil {
+		mode := apiKey.RouteMode
+		if req.RouteMode != nil {
+			mode = *req.RouteMode
+		}
+		if mode != "group" && mode != RouteModeHosted {
+			return nil, infraerrors.BadRequest("API_KEY_ROUTE_INVALID", "调用模式无效")
+		}
+		if mode == RouteModeHosted {
+			if s.hostingService == nil {
+				return nil, ErrHostingDisabled
+			}
+			_, err := s.hostingService.requireEnabled(ctx, userID)
+			if err != nil {
+				return nil, err
+			}
+			enteringHosted := apiKey.RouteMode != RouteModeHosted
+			if enteringHosted {
+				apiKey.HostingFallbackGroupID = nil
+				apiKey.HostingPoolID = nil
+			}
+			if req.HostingPoolID != nil {
+				apiKey.HostingPoolID = normalizeHostingPoolID(req.HostingPoolID)
+			}
+			if err := s.hostingService.ResolvePool(ctx, userID, apiKey.HostingPoolID); err != nil {
+				return nil, err
+			}
+			if req.HostingFallbackGroupID != nil {
+				apiKey.HostingFallbackGroupID = req.HostingFallbackGroupID
+			}
+			if req.HostingFallbackEnabled != nil {
+				if !*req.HostingFallbackEnabled {
+					apiKey.HostingFallbackGroupID = nil
+				}
+			}
+			if apiKey.HostingFallbackGroupID == nil && ((req.HostingFallbackEnabled != nil && *req.HostingFallbackEnabled) || (enteringHosted && req.HostingFallbackEnabled == nil)) {
+				return nil, ErrHostingFallbackInvalid
+			}
+			if _, err := s.hostingService.ResolveFallback(ctx, userID, apiKey.HostingFallbackGroupID); err != nil {
+				return nil, err
+			}
+			apiKey.GroupID = nil
+			apiKey.Group = nil
+			fields.GroupID = true
+			req.GroupID = nil
+		} else {
+			if req.HostingPoolID != nil {
+				return nil, infraerrors.BadRequest("API_KEY_ROUTE_INVALID", "普通分组模式不能选择托管池")
+			}
+			apiKey.HostingPoolID = nil
+			apiKey.HostingFallbackGroupID = nil
+		}
+		apiKey.RouteMode = mode
+		fields.HostingRoute = true
+	}
+	if apiKey.RouteMode == RouteModeHosted && req.GroupID != nil {
+		return nil, infraerrors.BadRequest("API_KEY_ROUTE_INVALID", "托管模式不能绑定普通分组")
+	}
 
 	// 更新字段
 	if req.Name != nil {

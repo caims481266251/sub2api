@@ -66,6 +66,8 @@ export default {
 
   // API Keys
   keys: {
+    formUsageLimits: 'Usage limits and expiration',
+    formSecurity: 'Security and customization',
     title: 'API Keys',
     description: 'Manage your API keys and access tokens',
     searchPlaceholder: 'Search name or key...',

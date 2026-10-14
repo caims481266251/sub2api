@@ -27,6 +27,62 @@ type UsageLogCreate struct {
 	conflict []sql.ConflictOption
 }
 
+// SetHostingPoolID sets the "hosting_pool_id" field.
+func (_c *UsageLogCreate) SetHostingPoolID(v int64) *UsageLogCreate {
+	_c.mutation.SetHostingPoolID(v)
+	return _c
+}
+
+// SetNillableHostingPoolID sets the "hosting_pool_id" field if the given value is not nil.
+func (_c *UsageLogCreate) SetNillableHostingPoolID(v *int64) *UsageLogCreate {
+	if v != nil {
+		_c.SetHostingPoolID(*v)
+	}
+	return _c
+}
+
+// SetHostingPoolName sets the "hosting_pool_name" field.
+func (_c *UsageLogCreate) SetHostingPoolName(v string) *UsageLogCreate {
+	_c.mutation.SetHostingPoolName(v)
+	return _c
+}
+
+// SetNillableHostingPoolName sets the "hosting_pool_name" field if the given value is not nil.
+func (_c *UsageLogCreate) SetNillableHostingPoolName(v *string) *UsageLogCreate {
+	if v != nil {
+		_c.SetHostingPoolName(*v)
+	}
+	return _c
+}
+
+// SetHostingRoute sets the "hosting_route" field.
+func (_c *UsageLogCreate) SetHostingRoute(v string) *UsageLogCreate {
+	_c.mutation.SetHostingRoute(v)
+	return _c
+}
+
+// SetNillableHostingRoute sets the "hosting_route" field if the given value is not nil.
+func (_c *UsageLogCreate) SetNillableHostingRoute(v *string) *UsageLogCreate {
+	if v != nil {
+		_c.SetHostingRoute(*v)
+	}
+	return _c
+}
+
+// SetHostingFallbackReason sets the "hosting_fallback_reason" field.
+func (_c *UsageLogCreate) SetHostingFallbackReason(v string) *UsageLogCreate {
+	_c.mutation.SetHostingFallbackReason(v)
+	return _c
+}
+
+// SetNillableHostingFallbackReason sets the "hosting_fallback_reason" field if the given value is not nil.
+func (_c *UsageLogCreate) SetNillableHostingFallbackReason(v *string) *UsageLogCreate {
+	if v != nil {
+		_c.SetHostingFallbackReason(*v)
+	}
+	return _c
+}
+
 // SetUserID sets the "user_id" field.
 func (_c *UsageLogCreate) SetUserID(v int64) *UsageLogCreate {
 	_c.mutation.SetUserID(v)
@@ -781,6 +837,16 @@ func (_c *UsageLogCreate) defaults() {
 
 // check runs all checks and user-defined validators on the builder.
 func (_c *UsageLogCreate) check() error {
+	if v, ok := _c.mutation.HostingPoolName(); ok {
+		if err := usagelog.HostingPoolNameValidator(v); err != nil {
+			return &ValidationError{Name: "hosting_pool_name", err: fmt.Errorf(`ent: validator failed for field "UsageLog.hosting_pool_name": %w`, err)}
+		}
+	}
+	if v, ok := _c.mutation.HostingRoute(); ok {
+		if err := usagelog.HostingRouteValidator(v); err != nil {
+			return &ValidationError{Name: "hosting_route", err: fmt.Errorf(`ent: validator failed for field "UsageLog.hosting_route": %w`, err)}
+		}
+	}
 	if _, ok := _c.mutation.UserID(); !ok {
 		return &ValidationError{Name: "user_id", err: errors.New(`ent: missing required field "UsageLog.user_id"`)}
 	}
@@ -967,6 +1033,22 @@ func (_c *UsageLogCreate) createSpec() (*UsageLog, *sqlgraph.CreateSpec) {
 		_spec = sqlgraph.NewCreateSpec(usagelog.Table, sqlgraph.NewFieldSpec(usagelog.FieldID, field.TypeInt64))
 	)
 	_spec.OnConflict = _c.conflict
+	if value, ok := _c.mutation.HostingPoolID(); ok {
+		_spec.SetField(usagelog.FieldHostingPoolID, field.TypeInt64, value)
+		_node.HostingPoolID = &value
+	}
+	if value, ok := _c.mutation.HostingPoolName(); ok {
+		_spec.SetField(usagelog.FieldHostingPoolName, field.TypeString, value)
+		_node.HostingPoolName = &value
+	}
+	if value, ok := _c.mutation.HostingRoute(); ok {
+		_spec.SetField(usagelog.FieldHostingRoute, field.TypeString, value)
+		_node.HostingRoute = &value
+	}
+	if value, ok := _c.mutation.HostingFallbackReason(); ok {
+		_spec.SetField(usagelog.FieldHostingFallbackReason, field.TypeString, value)
+		_node.HostingFallbackReason = &value
+	}
 	if value, ok := _c.mutation.RequestID(); ok {
 		_spec.SetField(usagelog.FieldRequestID, field.TypeString, value)
 		_node.RequestID = value
@@ -1227,7 +1309,7 @@ func (_c *UsageLogCreate) createSpec() (*UsageLog, *sqlgraph.CreateSpec) {
 // of the `INSERT` statement. For example:
 //
 //	client.UsageLog.Create().
-//		SetUserID(v).
+//		SetHostingPoolID(v).
 //		OnConflict(
 //			// Update the row with the new values
 //			// the was proposed for insertion.
@@ -1236,7 +1318,7 @@ func (_c *UsageLogCreate) createSpec() (*UsageLog, *sqlgraph.CreateSpec) {
 //		// Override some of the fields with custom
 //		// update values.
 //		Update(func(u *ent.UsageLogUpsert) {
-//			SetUserID(v+v).
+//			SetHostingPoolID(v+v).
 //		}).
 //		Exec(ctx)
 func (_c *UsageLogCreate) OnConflict(opts ...sql.ConflictOption) *UsageLogUpsertOne {
@@ -1271,6 +1353,84 @@ type (
 		*sql.UpdateSet
 	}
 )
+
+// SetHostingPoolID sets the "hosting_pool_id" field.
+func (u *UsageLogUpsert) SetHostingPoolID(v int64) *UsageLogUpsert {
+	u.Set(usagelog.FieldHostingPoolID, v)
+	return u
+}
+
+// UpdateHostingPoolID sets the "hosting_pool_id" field to the value that was provided on create.
+func (u *UsageLogUpsert) UpdateHostingPoolID() *UsageLogUpsert {
+	u.SetExcluded(usagelog.FieldHostingPoolID)
+	return u
+}
+
+// AddHostingPoolID adds v to the "hosting_pool_id" field.
+func (u *UsageLogUpsert) AddHostingPoolID(v int64) *UsageLogUpsert {
+	u.Add(usagelog.FieldHostingPoolID, v)
+	return u
+}
+
+// ClearHostingPoolID clears the value of the "hosting_pool_id" field.
+func (u *UsageLogUpsert) ClearHostingPoolID() *UsageLogUpsert {
+	u.SetNull(usagelog.FieldHostingPoolID)
+	return u
+}
+
+// SetHostingPoolName sets the "hosting_pool_name" field.
+func (u *UsageLogUpsert) SetHostingPoolName(v string) *UsageLogUpsert {
+	u.Set(usagelog.FieldHostingPoolName, v)
+	return u
+}
+
+// UpdateHostingPoolName sets the "hosting_pool_name" field to the value that was provided on create.
+func (u *UsageLogUpsert) UpdateHostingPoolName() *UsageLogUpsert {
+	u.SetExcluded(usagelog.FieldHostingPoolName)
+	return u
+}
+
+// ClearHostingPoolName clears the value of the "hosting_pool_name" field.
+func (u *UsageLogUpsert) ClearHostingPoolName() *UsageLogUpsert {
+	u.SetNull(usagelog.FieldHostingPoolName)
+	return u
+}
+
+// SetHostingRoute sets the "hosting_route" field.
+func (u *UsageLogUpsert) SetHostingRoute(v string) *UsageLogUpsert {
+	u.Set(usagelog.FieldHostingRoute, v)
+	return u
+}
+
+// UpdateHostingRoute sets the "hosting_route" field to the value that was provided on create.
+func (u *UsageLogUpsert) UpdateHostingRoute() *UsageLogUpsert {
+	u.SetExcluded(usagelog.FieldHostingRoute)
+	return u
+}
+
+// ClearHostingRoute clears the value of the "hosting_route" field.
+func (u *UsageLogUpsert) ClearHostingRoute() *UsageLogUpsert {
+	u.SetNull(usagelog.FieldHostingRoute)
+	return u
+}
+
+// SetHostingFallbackReason sets the "hosting_fallback_reason" field.
+func (u *UsageLogUpsert) SetHostingFallbackReason(v string) *UsageLogUpsert {
+	u.Set(usagelog.FieldHostingFallbackReason, v)
+	return u
+}
+
+// UpdateHostingFallbackReason sets the "hosting_fallback_reason" field to the value that was provided on create.
+func (u *UsageLogUpsert) UpdateHostingFallbackReason() *UsageLogUpsert {
+	u.SetExcluded(usagelog.FieldHostingFallbackReason)
+	return u
+}
+
+// ClearHostingFallbackReason clears the value of the "hosting_fallback_reason" field.
+func (u *UsageLogUpsert) ClearHostingFallbackReason() *UsageLogUpsert {
+	u.SetNull(usagelog.FieldHostingFallbackReason)
+	return u
+}
 
 // SetUserID sets the "user_id" field.
 func (u *UsageLogUpsert) SetUserID(v int64) *UsageLogUpsert {
@@ -2125,6 +2285,97 @@ func (u *UsageLogUpsertOne) Update(set func(*UsageLogUpsert)) *UsageLogUpsertOne
 		set(&UsageLogUpsert{UpdateSet: update})
 	}))
 	return u
+}
+
+// SetHostingPoolID sets the "hosting_pool_id" field.
+func (u *UsageLogUpsertOne) SetHostingPoolID(v int64) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetHostingPoolID(v)
+	})
+}
+
+// AddHostingPoolID adds v to the "hosting_pool_id" field.
+func (u *UsageLogUpsertOne) AddHostingPoolID(v int64) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.AddHostingPoolID(v)
+	})
+}
+
+// UpdateHostingPoolID sets the "hosting_pool_id" field to the value that was provided on create.
+func (u *UsageLogUpsertOne) UpdateHostingPoolID() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateHostingPoolID()
+	})
+}
+
+// ClearHostingPoolID clears the value of the "hosting_pool_id" field.
+func (u *UsageLogUpsertOne) ClearHostingPoolID() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.ClearHostingPoolID()
+	})
+}
+
+// SetHostingPoolName sets the "hosting_pool_name" field.
+func (u *UsageLogUpsertOne) SetHostingPoolName(v string) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetHostingPoolName(v)
+	})
+}
+
+// UpdateHostingPoolName sets the "hosting_pool_name" field to the value that was provided on create.
+func (u *UsageLogUpsertOne) UpdateHostingPoolName() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateHostingPoolName()
+	})
+}
+
+// ClearHostingPoolName clears the value of the "hosting_pool_name" field.
+func (u *UsageLogUpsertOne) ClearHostingPoolName() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.ClearHostingPoolName()
+	})
+}
+
+// SetHostingRoute sets the "hosting_route" field.
+func (u *UsageLogUpsertOne) SetHostingRoute(v string) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetHostingRoute(v)
+	})
+}
+
+// UpdateHostingRoute sets the "hosting_route" field to the value that was provided on create.
+func (u *UsageLogUpsertOne) UpdateHostingRoute() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateHostingRoute()
+	})
+}
+
+// ClearHostingRoute clears the value of the "hosting_route" field.
+func (u *UsageLogUpsertOne) ClearHostingRoute() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.ClearHostingRoute()
+	})
+}
+
+// SetHostingFallbackReason sets the "hosting_fallback_reason" field.
+func (u *UsageLogUpsertOne) SetHostingFallbackReason(v string) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetHostingFallbackReason(v)
+	})
+}
+
+// UpdateHostingFallbackReason sets the "hosting_fallback_reason" field to the value that was provided on create.
+func (u *UsageLogUpsertOne) UpdateHostingFallbackReason() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateHostingFallbackReason()
+	})
+}
+
+// ClearHostingFallbackReason clears the value of the "hosting_fallback_reason" field.
+func (u *UsageLogUpsertOne) ClearHostingFallbackReason() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.ClearHostingFallbackReason()
+	})
 }
 
 // SetUserID sets the "user_id" field.
@@ -3207,7 +3458,7 @@ func (_c *UsageLogCreateBulk) ExecX(ctx context.Context) {
 //		// Override some of the fields with custom
 //		// update values.
 //		Update(func(u *ent.UsageLogUpsert) {
-//			SetUserID(v+v).
+//			SetHostingPoolID(v+v).
 //		}).
 //		Exec(ctx)
 func (_c *UsageLogCreateBulk) OnConflict(opts ...sql.ConflictOption) *UsageLogUpsertBulk {
@@ -3281,6 +3532,97 @@ func (u *UsageLogUpsertBulk) Update(set func(*UsageLogUpsert)) *UsageLogUpsertBu
 		set(&UsageLogUpsert{UpdateSet: update})
 	}))
 	return u
+}
+
+// SetHostingPoolID sets the "hosting_pool_id" field.
+func (u *UsageLogUpsertBulk) SetHostingPoolID(v int64) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetHostingPoolID(v)
+	})
+}
+
+// AddHostingPoolID adds v to the "hosting_pool_id" field.
+func (u *UsageLogUpsertBulk) AddHostingPoolID(v int64) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.AddHostingPoolID(v)
+	})
+}
+
+// UpdateHostingPoolID sets the "hosting_pool_id" field to the value that was provided on create.
+func (u *UsageLogUpsertBulk) UpdateHostingPoolID() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateHostingPoolID()
+	})
+}
+
+// ClearHostingPoolID clears the value of the "hosting_pool_id" field.
+func (u *UsageLogUpsertBulk) ClearHostingPoolID() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.ClearHostingPoolID()
+	})
+}
+
+// SetHostingPoolName sets the "hosting_pool_name" field.
+func (u *UsageLogUpsertBulk) SetHostingPoolName(v string) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetHostingPoolName(v)
+	})
+}
+
+// UpdateHostingPoolName sets the "hosting_pool_name" field to the value that was provided on create.
+func (u *UsageLogUpsertBulk) UpdateHostingPoolName() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateHostingPoolName()
+	})
+}
+
+// ClearHostingPoolName clears the value of the "hosting_pool_name" field.
+func (u *UsageLogUpsertBulk) ClearHostingPoolName() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.ClearHostingPoolName()
+	})
+}
+
+// SetHostingRoute sets the "hosting_route" field.
+func (u *UsageLogUpsertBulk) SetHostingRoute(v string) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetHostingRoute(v)
+	})
+}
+
+// UpdateHostingRoute sets the "hosting_route" field to the value that was provided on create.
+func (u *UsageLogUpsertBulk) UpdateHostingRoute() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateHostingRoute()
+	})
+}
+
+// ClearHostingRoute clears the value of the "hosting_route" field.
+func (u *UsageLogUpsertBulk) ClearHostingRoute() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.ClearHostingRoute()
+	})
+}
+
+// SetHostingFallbackReason sets the "hosting_fallback_reason" field.
+func (u *UsageLogUpsertBulk) SetHostingFallbackReason(v string) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetHostingFallbackReason(v)
+	})
+}
+
+// UpdateHostingFallbackReason sets the "hosting_fallback_reason" field to the value that was provided on create.
+func (u *UsageLogUpsertBulk) UpdateHostingFallbackReason() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateHostingFallbackReason()
+	})
+}
+
+// ClearHostingFallbackReason clears the value of the "hosting_fallback_reason" field.
+func (u *UsageLogUpsertBulk) ClearHostingFallbackReason() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.ClearHostingFallbackReason()
+	})
 }
 
 // SetUserID sets the "user_id" field.

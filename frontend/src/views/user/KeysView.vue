@@ -155,7 +155,8 @@
           </template>
 
           <template #cell-group="{ row }">
-            <div class="group/dropdown relative">
+            <span v-if="row.route_mode === 'hosted'" class="rounded bg-teal-50 px-2 py-1 text-sm text-teal-700 dark:bg-teal-950/40 dark:text-teal-300">{{ hostedPoolName(row.hosting_pool_id) }}</span>
+            <div v-else class="group/dropdown relative">
               <button
                 :ref="(el) => setGroupButtonRef(row.id, el)"
                 @click="openGroupSelector(row)"
@@ -514,13 +515,15 @@
     <BaseDialog
       :show="showCreateModal || showEditModal"
       :title="showEditModal ? t('keys.editKey') : t('keys.createKey')"
-      width="normal"
+      width="wide"
+      content-class="sm:!max-w-2xl"
       @close="closeModals"
     >
       <form id="key-form" @submit.prevent="handleSubmit" class="space-y-5">
         <div>
-          <label class="input-label">{{ t('keys.nameLabel') }}</label>
+          <label for="key-form-name" class="input-label">{{ t('keys.nameLabel') }}</label>
           <input
+            id="key-form-name"
             v-model="formData.name"
             type="text"
             required
@@ -530,7 +533,9 @@
           />
         </div>
 
-        <fieldset v-if="!showEditModal" data-tour="key-form-provider">
+        <HostingKeyFields v-model:route-mode="formData.route_mode" v-model:pool-id="formData.hosting_pool_id" v-model:fallback-enabled="formData.hosting_fallback_enabled" v-model:fallback-group-id="formData.hosting_fallback_group_id" :groups="groups" :rates="userGroupRates" />
+
+        <fieldset v-if="!showEditModal && formData.route_mode !== 'hosted'" data-tour="key-form-provider">
           <legend class="input-label">{{ t('keys.providerLabel') }}</legend>
           <div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
             <label
@@ -578,7 +583,7 @@
           </p>
         </fieldset>
 
-        <div>
+        <div v-if="formData.route_mode !== 'hosted'">
           <label class="input-label" for="key-form-group">{{ t('keys.groupLabel') }}</label>
           <Select
             :key="showEditModal ? 'edit' : createProvider"
@@ -625,39 +630,6 @@
           </Select>
         </div>
 
-        <!-- Custom Key Section (only for create) -->
-        <div v-if="!showEditModal" class="space-y-3">
-          <div class="flex items-center justify-between">
-            <label class="input-label mb-0">{{ t('keys.customKeyLabel') }}</label>
-            <button
-              type="button"
-              @click="formData.use_custom_key = !formData.use_custom_key"
-              :class="[
-                'relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none',
-                formData.use_custom_key ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
-              ]"
-            >
-              <span
-                :class="[
-                  'pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
-                  formData.use_custom_key ? 'translate-x-4' : 'translate-x-0'
-                ]"
-              />
-            </button>
-          </div>
-          <div v-if="formData.use_custom_key">
-            <input
-              v-model="formData.custom_key"
-              type="text"
-              class="input font-mono"
-              :placeholder="t('keys.customKeyPlaceholder')"
-              :class="{ 'border-red-500 dark:border-red-500': customKeyError }"
-            />
-            <p v-if="customKeyError" class="mt-1 text-sm text-red-500">{{ customKeyError }}</p>
-            <p v-else class="input-hint">{{ t('keys.customKeyHint') }}</p>
-          </div>
-        </div>
-
         <div v-if="showEditModal">
           <label class="input-label">{{ t('keys.statusLabel') }}</label>
           <Select
@@ -667,52 +639,9 @@
           />
         </div>
 
-        <!-- IP Restriction Section -->
-        <div class="space-y-3">
-          <div class="flex items-center justify-between">
-            <label class="input-label mb-0">{{ t('keys.ipRestriction') }}</label>
-            <button
-              type="button"
-              @click="formData.enable_ip_restriction = !formData.enable_ip_restriction"
-              :class="[
-                'relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none',
-                formData.enable_ip_restriction ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
-              ]"
-            >
-              <span
-                :class="[
-                  'pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
-                  formData.enable_ip_restriction ? 'translate-x-4' : 'translate-x-0'
-                ]"
-              />
-            </button>
-          </div>
-
-          <div v-if="formData.enable_ip_restriction" class="space-y-4 pt-2">
-            <div>
-              <label class="input-label">{{ t('keys.ipWhitelist') }}</label>
-              <textarea
-                v-model="formData.ip_whitelist"
-                rows="3"
-                class="input font-mono text-sm"
-                :placeholder="t('keys.ipWhitelistPlaceholder')"
-              />
-              <p class="input-hint">{{ t('keys.ipWhitelistHint') }}</p>
-            </div>
-
-            <div>
-              <label class="input-label">{{ t('keys.ipBlacklist') }}</label>
-              <textarea
-                v-model="formData.ip_blacklist"
-                rows="3"
-                class="input font-mono text-sm"
-                :placeholder="t('keys.ipBlacklistPlaceholder')"
-              />
-              <p class="input-hint">{{ t('keys.ipBlacklistHint') }}</p>
-            </div>
-          </div>
-        </div>
-
+        <section class="space-y-4 border-t border-gray-200 pt-5 dark:border-dark-600">
+          <h4 class="text-sm font-semibold text-gray-900 dark:text-gray-100">{{ t('keys.formUsageLimits') }}</h4>
+          <div class="grid grid-cols-1 gap-5 sm:grid-cols-2">
         <div>
           <label for="key-concurrency-limit" class="input-label">{{ t('keys.concurrencyLimit') }}</label>
           <input
@@ -739,34 +668,15 @@
         </div>
 
         <!-- Quota Limit Section -->
-        <div class="space-y-3">
-          <label class="input-label">{{ t('keys.quotaLimit') }}</label>
-          <!-- Switch commented out - always show input, 0 = unlimited
-          <div class="flex items-center justify-between">
-            <label class="input-label mb-0">{{ t('keys.quotaLimit') }}</label>
-            <button
-              type="button"
-              @click="formData.enable_quota = !formData.enable_quota"
-              :class="[
-                'relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none',
-                formData.enable_quota ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
-              ]"
-            >
-              <span
-                :class="[
-                  'pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
-                  formData.enable_quota ? 'translate-x-4' : 'translate-x-0'
-                ]"
-              />
-            </button>
-          </div>
-          -->
+        <div class="space-y-0">
+          <label for="key-quota-limit" class="input-label">{{ t('keys.quotaLimit') }}</label>
 
           <div class="space-y-4">
             <div>
               <div class="relative">
                 <span class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">$</span>
                 <input
+                  id="key-quota-limit"
                   v-model.number="formData.quota"
                   type="number"
                   step="0.01"
@@ -804,25 +714,12 @@
           </div>
         </div>
 
+          </div>
         <!-- Rate Limit Section -->
-        <div class="space-y-3">
+        <div class="space-y-3 border-t border-gray-100 pt-4 dark:border-dark-700">
           <div class="flex items-center justify-between">
             <label class="input-label mb-0">{{ t('keys.rateLimitSection') }}</label>
-            <button
-              type="button"
-              @click="formData.enable_rate_limit = !formData.enable_rate_limit"
-              :class="[
-                'relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none',
-                formData.enable_rate_limit ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
-              ]"
-            >
-              <span
-                :class="[
-                  'pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
-                  formData.enable_rate_limit ? 'translate-x-4' : 'translate-x-0'
-                ]"
-              />
-            </button>
+            <Toggle v-model="formData.enable_rate_limit" :aria-label="t('keys.rateLimitSection')" />
           </div>
 
           <div v-if="formData.enable_rate_limit" class="space-y-4 pt-2">
@@ -979,24 +876,10 @@
         </div>
 
         <!-- Expiration Section -->
-        <div class="space-y-3">
+        <div class="space-y-3 border-t border-gray-100 pt-4 dark:border-dark-700">
           <div class="flex items-center justify-between">
             <label class="input-label mb-0">{{ t('keys.expiration') }}</label>
-            <button
-              type="button"
-              @click="formData.enable_expiration = !formData.enable_expiration"
-              :class="[
-                'relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none',
-                formData.enable_expiration ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
-              ]"
-            >
-              <span
-                :class="[
-                  'pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
-                  formData.enable_expiration ? 'translate-x-4' : 'translate-x-0'
-                ]"
-              />
-            </button>
+            <Toggle v-model="formData.enable_expiration" :aria-label="t('keys.expiration')" />
           </div>
 
           <div v-if="formData.enable_expiration" class="space-y-4 pt-2">
@@ -1050,6 +933,67 @@
             </div>
           </div>
         </div>
+        </section>
+        <details class="group rounded-xl border border-gray-200 dark:border-dark-600" :open="formData.use_custom_key || formData.enable_ip_restriction">
+          <summary class="flex cursor-pointer list-none items-center gap-2 p-4 text-sm font-medium text-gray-700 transition-colors hover:text-primary-600 dark:text-gray-200 [&::-webkit-details-marker]:hidden">
+            <Icon name="shield" size="sm" class="text-gray-400" />
+            {{ t('keys.formSecurity') }}
+            <Icon name="chevronDown" size="sm" class="ml-auto text-gray-400 transition-transform group-open:rotate-180" />
+          </summary>
+          <div class="space-y-5 border-t border-gray-100 p-4 dark:border-dark-700">
+        <!-- Custom Key Section (only for create) -->
+        <div v-if="!showEditModal" class="space-y-3">
+          <div class="flex items-center justify-between">
+            <label class="input-label mb-0">{{ t('keys.customKeyLabel') }}</label>
+            <Toggle v-model="formData.use_custom_key" :aria-label="t('keys.customKeyLabel')" />
+          </div>
+          <div v-if="formData.use_custom_key">
+            <input
+              v-model="formData.custom_key"
+              type="text"
+              class="input font-mono"
+              :placeholder="t('keys.customKeyPlaceholder')"
+              :class="{ 'border-red-500 dark:border-red-500': customKeyError }"
+            />
+            <p v-if="customKeyError" class="mt-1 text-sm text-red-500">{{ customKeyError }}</p>
+            <p v-else class="input-hint">{{ t('keys.customKeyHint') }}</p>
+          </div>
+        </div>
+
+        <!-- IP Restriction Section -->
+        <div class="space-y-3">
+          <div class="flex items-center justify-between">
+            <label class="input-label mb-0">{{ t('keys.ipRestriction') }}</label>
+            <Toggle v-model="formData.enable_ip_restriction" :aria-label="t('keys.ipRestriction')" />
+          </div>
+
+          <div v-if="formData.enable_ip_restriction" class="space-y-4 pt-2">
+            <div>
+              <label class="input-label">{{ t('keys.ipWhitelist') }}</label>
+              <textarea
+                v-model="formData.ip_whitelist"
+                rows="3"
+                class="input font-mono text-sm"
+                :placeholder="t('keys.ipWhitelistPlaceholder')"
+              />
+              <p class="input-hint">{{ t('keys.ipWhitelistHint') }}</p>
+            </div>
+
+            <div>
+              <label class="input-label">{{ t('keys.ipBlacklist') }}</label>
+              <textarea
+                v-model="formData.ip_blacklist"
+                rows="3"
+                class="input font-mono text-sm"
+                :placeholder="t('keys.ipBlacklistPlaceholder')"
+              />
+              <p class="input-hint">{{ t('keys.ipBlacklistHint') }}</p>
+            </div>
+          </div>
+        </div>
+
+          </div>
+        </details>
       </form>
       <template #footer>
         <div class="flex justify-end gap-3">
@@ -1144,7 +1088,7 @@
       :show="showUseKeyModal"
       :api-key="selectedKey?.key || ''"
       :base-url="publicSettings?.api_base_url || ''"
-      :platform="selectedKey?.group?.platform || null"
+      :platform="resolveKeyPlatform(selectedKey)"
       :allow-messages-dispatch="selectedKey?.group?.allow_messages_dispatch || false"
       @close="closeUseKeyModal"
     />
@@ -1277,12 +1221,15 @@ import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 
 const { t } = useI18n()
 import { keysAPI, authAPI, usageAPI, userGroupsAPI } from '@/api'
+import { hostingAPI, type HostingPool } from '@/api/hosting'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 import BulkEditKeysModal from '@/components/keys/BulkEditKeysModal.vue'
 	import DataTable from '@/components/common/DataTable.vue'
 	import Pagination from '@/components/common/Pagination.vue'
-	import BaseDialog from '@/components/common/BaseDialog.vue'
+	import HostingKeyFields from '@/components/keys/HostingKeyFields.vue'
+import Toggle from '@/components/common/Toggle.vue'
+import BaseDialog from '@/components/common/BaseDialog.vue'
 	import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 	import EmptyState from '@/components/common/EmptyState.vue'
 	import Select from '@/components/common/Select.vue'
@@ -1587,6 +1534,10 @@ const setGroupButtonRef = (keyId: number, el: Element | ComponentPublicInstance 
 }
 
 const formData = ref({
+  route_mode: 'group' as 'group' | 'hosted',
+  hosting_pool_id: 0,
+  hosting_fallback_enabled: true,
+  hosting_fallback_group_id: null as number | null,
   name: '',
   concurrency_limit: 0 as number | string,
   group_id: null as number | null,
@@ -1608,6 +1559,11 @@ const formData = ref({
   expiration_preset: '30' as '7' | '30' | '90' | 'custom',
   expiration_date: ''
 })
+const hostedPools = ref<HostingPool[]>([])
+const hostedPoolName = (id?: number | null) => id == null || id === 0 ? t('hosting.defaultPool') : hostedPools.value.find(pool => pool.id === id)?.name ?? `${t('hosting.pool')} #${id}`
+const loadHostingPools = async () => {
+  try { hostedPools.value = (await hostingAPI.status()).pools ?? [] } catch { hostedPools.value = [] }
+}
 
 const concurrencyLimitError = computed(() => {
   const limit = Number(formData.value.concurrency_limit)
@@ -1836,6 +1792,10 @@ const loadPublicSettings = async () => {
   }
 }
 
+// Hosted keys use the OpenAI gateway without a public group binding.
+const resolveKeyPlatform = (key: ApiKey | null) =>
+  key?.route_mode === 'hosted' ? 'openai' : key?.group?.platform || null
+
 const openUseKeyModal = (key: ApiKey) => {
   selectedKey.value = key
   showUseKeyModal.value = true
@@ -1872,6 +1832,10 @@ const editKey = (key: ApiKey) => {
   const hasIPRestriction = (key.ip_whitelist?.length > 0) || (key.ip_blacklist?.length > 0)
   const hasExpiration = !!key.expires_at
   formData.value = {
+    route_mode: key.route_mode ?? 'group',
+    hosting_pool_id: key.hosting_pool_id ?? 0,
+    hosting_fallback_enabled: key.hosting_fallback_group_id != null,
+    hosting_fallback_group_id: key.hosting_fallback_group_id ?? null,
     name: key.name,
     concurrency_limit: key.concurrency_limit ?? 0,
     group_id: key.group_id,
@@ -1981,10 +1945,15 @@ const handleSubmit = async () => {
   const concurrencyLimit = Number(formData.value.concurrency_limit)
 
   // Validate group_id is required
-  if (formData.value.group_id === null) {
+  if (formData.value.route_mode !== 'hosted' && formData.value.group_id === null) {
     appStore.showError(t('keys.groupRequired'))
     return
   }
+
+  if (formData.value.route_mode === 'hosted' && formData.value.hosting_fallback_enabled && !formData.value.hosting_fallback_group_id) {
+    appStore.showError(t('hosting.selectFallback')); return
+  }
+  const hosting = { route_mode: formData.value.route_mode, ...(formData.value.route_mode === 'hosted' ? { hosting_pool_id: formData.value.hosting_pool_id, hosting_fallback_enabled: formData.value.hosting_fallback_enabled, hosting_fallback_group_id: formData.value.hosting_fallback_enabled ? formData.value.hosting_fallback_group_id : null } : {}) }
 
   // Validate custom key if enabled
   if (!showEditModal.value && formData.value.use_custom_key) {
@@ -2036,10 +2005,16 @@ const handleSubmit = async () => {
   submitting.value = true
   try {
     if (showEditModal.value && selectedKey.value) {
+      const hostingChanged = selectedKey.value && (
+        (selectedKey.value.route_mode ?? 'group') !== formData.value.route_mode ||
+        (formData.value.route_mode === 'hosted' && (selectedKey.value.hosting_pool_id ?? 0) !== formData.value.hosting_pool_id) ||
+        (selectedKey.value.hosting_fallback_group_id ?? null) !== (formData.value.hosting_fallback_enabled ? formData.value.hosting_fallback_group_id : null)
+      )
       const updates: UpdateApiKeyRequest = {
+        ...(hostingChanged ? hosting : {}),
         name: formData.value.name,
         concurrency_limit: concurrencyLimit,
-        group_id: formData.value.group_id,
+        group_id: formData.value.route_mode === 'hosted' ? null : formData.value.group_id,
         ip_whitelist: ipWhitelist,
         ip_blacklist: ipBlacklist,
         quota: quota,
@@ -2057,14 +2032,15 @@ const handleSubmit = async () => {
       const customKey = formData.value.use_custom_key ? formData.value.custom_key : undefined
       await keysAPI.create(
         formData.value.name,
-        formData.value.group_id,
+        formData.value.route_mode === 'hosted' ? null : formData.value.group_id,
         customKey,
         ipWhitelist,
         ipBlacklist,
         quota,
         expiresInDays,
         rateLimitData,
-        concurrencyLimit
+        concurrencyLimit,
+        ...(formData.value.route_mode === 'hosted' ? [hosting] as [typeof hosting] : [])
       )
       appStore.showSuccess(t('keys.keyCreatedSuccess'))
       // Only advance tour if active, on submit step, and creation succeeded
@@ -2108,6 +2084,10 @@ const closeModals = () => {
   showEditModal.value = false
   selectedKey.value = null
   formData.value = {
+    route_mode: 'group',
+    hosting_pool_id: 0,
+    hosting_fallback_enabled: true,
+    hosting_fallback_group_id: null,
     name: '',
     concurrency_limit: 0,
     group_id: null,
@@ -2195,7 +2175,7 @@ const resetRateLimitUsage = async () => {
 }
 
 const importToCcswitch = (row: ApiKey) => {
-  const platform = row.group?.platform || 'anthropic'
+  const platform = resolveKeyPlatform(row)
 
   // For antigravity platform, show client selection dialog
   if (platform === 'antigravity') {
@@ -2210,7 +2190,7 @@ const importToCcswitch = (row: ApiKey) => {
 
 const executeCcsImport = (row: ApiKey, clientType: CcSwitchClientType) => {
   const baseUrl = publicSettings.value?.api_base_url || window.location.origin
-  const platform = row.group?.platform || 'anthropic'
+  const platform = resolveKeyPlatform(row)
 
   const usageScript = CC_SWITCH_USAGE_SCRIPT
   const providerName = (publicSettings.value?.site_name || 'sub2api').trim() || 'sub2api'
@@ -2267,6 +2247,7 @@ onMounted(() => {
   loadSavedColumns()
   loadApiKeys()
   loadGroups()
+  loadHostingPools()
   loadUserGroupRates()
   loadPublicSettings()
   document.addEventListener('click', closeGroupSelector)

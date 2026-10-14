@@ -37,7 +37,20 @@ func TestBorrowRouteFingerprintUpgradeRechecksWithoutDroppingLeases(t *testing.T
 	require.NoError(t, err)
 	data, err := migrations.FS.ReadFile("307_ticket_borrow_route_fingerprint.sql")
 	require.NoError(t, err)
-	rotationExec(t, string(data))
+	sharedConcurrency, err := migrations.FS.ReadFile("309_ticket_borrow_shared_account_concurrency.sql")
+	require.NoError(t, err)
+	// Recreate the pre-309 schema while testing the historical upgrade, then
+	// restore the current schema before exercising the repository below.
+	tx, err := integrationDB.BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+	defer tx.Rollback()
+	_, err = tx.Exec(`ALTER TABLE ticket_borrow_routes ADD COLUMN dispatch_limit INT NOT NULL DEFAULT 1 CHECK(dispatch_limit>0)`)
+	require.NoError(t, err)
+	_, err = tx.Exec(string(data))
+	require.NoError(t, err)
+	_, err = tx.Exec(string(sharedConcurrency))
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
 	var state, answer string
 	var valid *time.Time
 	require.NoError(t, integrationDB.QueryRow(`SELECT state,quality_result->>'answer',quality_valid_until FROM ticket_borrow_routes WHERE id=$1`, id).Scan(&state, &answer, &valid))

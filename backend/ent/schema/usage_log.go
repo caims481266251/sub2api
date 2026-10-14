@@ -31,6 +31,10 @@ func (UsageLog) Annotations() []schema.Annotation {
 // Fields 定义使用日志实体的所有字段。
 func (UsageLog) Fields() []ent.Field {
 	return []ent.Field{
+		field.Int64("hosting_pool_id").Optional().Nillable(),
+		field.String("hosting_pool_name").Optional().Nillable().MaxLen(100),
+		field.String("hosting_route").Optional().Nillable().MaxLen(20),
+		field.String("hosting_fallback_reason").Optional().Nillable(),
 		// 关联字段
 		field.Int64("user_id"),
 		field.Int64("api_key_id"),

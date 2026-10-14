@@ -39,6 +39,32 @@ type auditCaptureRepository struct {
 	logs []*service.AuditLog
 }
 
+func TestHostingLoginAuditOmitsCredentialsAndPreservesHandlerBody(t *testing.T) {
+	for _, path := range []string{"/api/v1/hosting/import", "/api/v1/hosting/oauth/complete", "/api/v1/hosting/two-fa-login"} {
+		t.Run(path, func(t *testing.T) {
+			repository := &auditCaptureRepository{}
+			auditService := service.NewAuditLogService(repository, nil)
+			auditService.Start()
+			router := gin.New()
+			router.Use(gin.HandlerFunc(NewAuditLogMiddleware(auditService)))
+			var received map[string]any
+			router.POST(path, func(c *gin.Context) { require.NoError(t, c.ShouldBindJSON(&received)); c.Status(http.StatusOK) })
+			body := `{"password":"password-canary","mfa_secret":"mfa-canary","content":"{\"refresh_token\":\"token-canary\"}","code":"code-canary"}`
+			request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+			request.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, request)
+			require.Equal(t, http.StatusOK, w.Code)
+			require.Equal(t, "password-canary", received["password"])
+			auditService.Stop()
+			repository.mu.Lock()
+			defer repository.mu.Unlock()
+			require.Len(t, repository.logs, 1)
+			require.Equal(t, "<credential-bearing body omitted>", repository.logs[0].RequestBody)
+		})
+	}
+}
+
 func (r *auditCaptureRepository) BatchInsert(_ context.Context, logs []*service.AuditLog) (int64, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

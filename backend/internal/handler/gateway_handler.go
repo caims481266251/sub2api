@@ -1142,6 +1142,12 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 		}
 		defer release()
 	}
+	// Private pools have no public group. Do not discover models from public
+	// accounts; Codex's client_version endpoint supplies the live private manifest.
+	if apiKey != nil && apiKey.RouteMode == service.RouteModeHosted && !apiKey.HostingFallback {
+		writeModelsListResponse(c, openai.DefaultModels)
+		return
+	}
 
 	var groupID *int64
 	var platform string

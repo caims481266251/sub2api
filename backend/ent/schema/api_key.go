@@ -33,6 +33,9 @@ func (APIKey) Mixin() []ent.Mixin {
 
 func (APIKey) Fields() []ent.Field {
 	return []ent.Field{
+		field.String("route_mode").Default("group").MaxLen(20),
+		field.Int64("hosting_fallback_group_id").Optional().Nillable(),
+		field.Int64("hosting_pool_id").Optional().Nillable(),
 		field.Int64("user_id"),
 		field.Int("concurrency_limit").
 			Default(0).

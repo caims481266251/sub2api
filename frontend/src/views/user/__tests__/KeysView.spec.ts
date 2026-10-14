@@ -5,8 +5,12 @@ import { nextTick } from 'vue'
 import type { ApiKey, ApiKeyConcurrencySnapshot } from '@/types'
 import { keysAPI } from '@/api'
 import KeysView from '../KeysView.vue'
+import { hostingAPI } from '@/api/hosting'
+import UseKeyModal from '@/components/keys/UseKeyModal.vue'
 
 enableAutoUnmount(afterEach)
+
+vi.mock('@/api/hosting', () => ({ hostingAPI: { status: vi.fn().mockResolvedValue({ enabled: false }) }, hostingFallbackGroups: (groups: unknown[]) => groups }))
 
 const {
   listKeys,
@@ -316,6 +320,7 @@ describe('user KeysView column settings', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
     vi.spyOn(document, 'hidden', 'get').mockReturnValue(false)
     localStorage.clear()
+    vi.mocked(hostingAPI.status).mockResolvedValue({ enabled: false, rate_multiplier: .03, pools: [] })
 
     listKeys.mockReset()
     createKey.mockReset().mockResolvedValue(createApiKey())
@@ -986,6 +991,71 @@ describe('user KeysView column settings', () => {
       },
       expect.objectContaining({ signal: expect.any(AbortSignal) })
     )
+  })
+
+  it('creates a Key with its selected hosted pool without a public group binding', async () => {
+    vi.mocked(hostingAPI.status).mockResolvedValue({ enabled: true, rate_multiplier: .03, pools: [{ id: 0, name: '', account_count: 1, key_count: 0 }, { id: 31, name: '工作池', account_count: 2, key_count: 0 }] })
+    const wrapper = await mountView()
+    await wrapper.get('[data-tour="keys-create-btn"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-tour="key-form-name"]').setValue('工作 Key')
+    await wrapper.get('input[value="hosted"]').setValue()
+    await wrapper.get('#hosting-pool').setValue('31')
+    await wrapper.get('[data-testid="hosting-fallback-toggle"]').trigger('click')
+    await wrapper.get('#key-form').trigger('submit')
+    await flushPromises()
+    expect(createKey).toHaveBeenCalledOnce()
+    expect(createKey.mock.calls[0][1]).toBeNull()
+    expect(createKey.mock.calls[0][9]).toMatchObject({ route_mode: 'hosted', hosting_pool_id: 31, hosting_fallback_enabled: false, hosting_fallback_group_id: null })
+  })
+
+  it.each([null, 42])('uses Codex setup and CCS import for a hosted Key with fallback %s', async (fallbackGroupId) => {
+    const hosted: ApiKey = { ...createApiKey(), route_mode: 'hosted', hosting_pool_id: 31, hosting_fallback_group_id: fallbackGroupId, group_id: null, group: null }
+    setKeys(hosted)
+    getPublicSettings.mockResolvedValue({ api_base_url: 'https://api.example.com', site_name: 'Sub2API' })
+    const open = vi.spyOn(window, 'open').mockReturnValue(null)
+    const wrapper = await mountView()
+
+    await getButtonByText(wrapper, 'keys.useKey').trigger('click')
+    const modal = wrapper.findComponent(UseKeyModal)
+    expect(modal.props()).toMatchObject({ show: true, platform: 'openai', apiKey: hosted.key })
+    await getButtonByText(wrapper, 'keys.importToCcSwitch').trigger('click')
+    expect(open).toHaveBeenCalledOnce()
+    const link = new URL(String(open.mock.calls[0][0]))
+    expect(link.protocol).toBe('ccswitch:')
+    expect(link.searchParams.get('app')).toBe('codex')
+    expect(link.searchParams.get('endpoint')).toBe('https://api.example.com/v1')
+    expect(link.searchParams.get('apiKey')).toBe(hosted.key)
+  })
+
+  it('retains the configured platform for ordinary Keys and the warning for unassigned Keys', async () => {
+    const ordinary = { ...createApiKey(), route_mode: 'group', group_id: 12, group: { platform: 'anthropic' } } as ApiKey
+    setKeys(ordinary)
+    const open = vi.spyOn(window, 'open').mockReturnValue(null)
+    const wrapper = await mountView()
+    await getButtonByText(wrapper, 'keys.useKey').trigger('click')
+    expect(wrapper.findComponent(UseKeyModal).props('platform')).toBe('anthropic')
+    await getButtonByText(wrapper, 'keys.importToCcSwitch').trigger('click')
+    expect(new URL(String(open.mock.calls[0][0])).searchParams.get('app')).toBe('claude')
+    wrapper.unmount()
+
+    setKeys(createApiKey())
+    const unassigned = await mountView()
+    await getButtonByText(unassigned, 'keys.useKey').trigger('click')
+    expect(unassigned.findComponent(UseKeyModal).props('platform')).toBeNull()
+  })
+
+  it('persists a pool-only edit on a hosted Key', async () => {
+    const hosted = { ...createApiKey(), route_mode: 'hosted', hosting_pool_id: 31, group_id: null, group: null } as ApiKey
+    listKeys.mockResolvedValue({ items: [hosted], total: 1, page: 1, page_size: 20, pages: 1 })
+    vi.mocked(hostingAPI.status).mockResolvedValue({ enabled: true, rate_multiplier: .03, pools: [{ id: 0, name: '', account_count: 1, key_count: 0 }, { id: 31, name: '工作池', account_count: 2, key_count: 1 }] })
+    const wrapper = await mountView()
+    await getButtonByText(wrapper, 'common.edit').trigger('click')
+    await flushPromises()
+    await wrapper.get('#hosting-pool').setValue('0')
+    await wrapper.get('#key-form').trigger('submit')
+    await flushPromises()
+    expect(updateKey).toHaveBeenCalledWith(hosted.id, expect.objectContaining({ route_mode: 'hosted', hosting_pool_id: 0, hosting_fallback_enabled: false, group_id: null }))
   })
 
   describe('create provider selection', () => {

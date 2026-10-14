@@ -26,6 +26,7 @@ func (r *pluginDirRepoStub) ListByPlatform(_ context.Context, platform string) (
 func TestListPluginAccounts_ScopeAndSchedulable(t *testing.T) {
 	future := time.Now().Add(time.Hour)
 	parentID := int64(1)
+	ownerID := int64(7)
 	openai := []Account{
 		// schedulable active oauth. Credentials hold secrets (stripped); Extra is
 		// released.
@@ -45,6 +46,7 @@ func TestListPluginAccounts_ScopeAndSchedulable(t *testing.T) {
 			ParentAccountID: &parentID},
 		// apikey type — out of (openai, oauth) scope, excluded
 		{ID: 5, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true},
+		{ID: 6, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, OwnerUserID: &ownerID},
 	}
 	svc := &OpenAIGatewayService{accountRepo: &pluginDirRepoStub{byPlatform: map[string][]Account{PlatformOpenAI: openai}}}
 	scope := newPluginAccountScope(pluginAccountScopeEntry{Platform: PlatformOpenAI, AccountType: AccountTypeOAuth})
@@ -86,6 +88,17 @@ func TestListPluginAccounts_ScopeAndSchedulable(t *testing.T) {
 // this test fails: add the field to `stripped` (and zero it in
 // accountReadableSnapshotJSON) if it can hold secrets/heavy data, otherwise add it
 // to `safeToExpose`.
+func TestAccountReadableSnapshotHostingMetadataIsPrivate(t *testing.T) {
+	owner, pool, identity := int64(71), int64(93), "private-hosting-identity"
+	a := &Account{ID: 5, OwnerUserID: &owner, HostingPoolID: &pool, HostingIdentity: &identity}
+	var snapshot map[string]any
+	require.NoError(t, json.Unmarshal(accountReadableSnapshotJSON(a), &snapshot))
+	for _, field := range []string{"OwnerUserID", "HostingPoolID", "HostingIdentity"} {
+		require.Nil(t, snapshot[field], field)
+	}
+	require.Equal(t, pool, *a.HostingPoolID, "redaction must not mutate the account")
+}
+
 func TestAccountReadableSnapshot_DenylistTripwire(t *testing.T) {
 	// Fields the snapshot intentionally strips. Credentials = long-lived secret
 	// (refresh_token) not handed out by ResolveOutboundIdentity. Groups/AccountGroups
@@ -93,6 +106,7 @@ func TestAccountReadableSnapshot_DenylistTripwire(t *testing.T) {
 	// InitialQualityPlan = internal creation-only policy, not readable plugin metadata.
 	stripped := map[string]struct{}{
 		"Credentials": {}, "Groups": {}, "AccountGroups": {}, "InitialQualityPlan": {},
+		"OwnerUserID": {}, "HostingIdentity": {}, "HostingPoolID": {},
 	}
 	// Fields intentionally exposed as readable metadata (incl. Extra and Proxy —
 	// the proxy password is already handed out via ResolveOutboundIdentity's URL).

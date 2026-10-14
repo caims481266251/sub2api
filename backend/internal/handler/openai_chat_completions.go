@@ -181,7 +181,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 			return
 		}
 		reqLog.Debug("openai_chat_completions.account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
-		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
+		selection, scheduleDecision, err := h.selectHostedAccount(apiKey, switchCount, maxAccountSwitches,
 			openAIModelFailoverSelectionContext(c.Request.Context(), lastFailoverErr),
 			apiKey.GroupID,
 			"",
@@ -196,6 +196,20 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 			requestPlatform,
 		)
 		if err != nil {
+			if switched, fallbackErr := h.tryHostedFallback(c, c.Request.Context(), err, reqModel, reqStream, streamStarted, false); fallbackErr != nil {
+				status, code, message := hostingGatewayError(fallbackErr)
+				h.handleStreamingAwareError(c, status, code, message, streamStarted)
+				return
+			} else if switched {
+				channelMapping, _ = h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
+				fallbackCtx, fallbackAt := h.gatewayService.WithOpenAITurnPricingContext(c.Request.Context(), apiKey.GroupID)
+				pricingAt = fallbackAt
+				c.Request = c.Request.WithContext(fallbackCtx)
+				forwardModel = openAIChannelForwardModel(channelMapping, reqModel)
+				failedAccountIDs = make(map[int64]struct{})
+				switchCount = 0
+				continue
+			}
 			if borrowBusinessSelectionFallback(c, err, failedAccountIDs) {
 				continue
 			}
@@ -331,10 +345,11 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 			quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
 			sessionID := service.ExtractClientSessionID(c)
 			cyberBlocked := service.GetOpsCyberPolicy(c) != nil
+			billingKeySnapshot := snapshotHostedKey(apiKey)
 			h.submitOpenAIUsageRecordTask(c.Request.Context(), res, func(ctx context.Context) {
 				if err := h.gatewayService.RecordUsage(ctx, &service.OpenAIRecordUsageInput{
 					Result:             res,
-					APIKey:             apiKey,
+					APIKey:             billingKeySnapshot,
 					User:               apiKey.User,
 					Account:            account,
 					Subscription:       subscription,
@@ -428,12 +443,12 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 					h.gatewayService.RecordOpenAIAccountSwitch()
 					failedAccountIDs[account.ID] = struct{}{}
 					lastFailoverErr = failoverErr
-					if switchCount >= maxAccountSwitches {
+					if switchCount >= maxAccountSwitches && !canTryHostedFallback(apiKey) {
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
 					switchCount++
-					if h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount, &oauth429FailoverState) {
+					if h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount, &oauth429FailoverState) && markHostedPoolExhausted(apiKey, &switchCount, maxAccountSwitches) {
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}

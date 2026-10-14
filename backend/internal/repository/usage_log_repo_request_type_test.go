@@ -103,6 +103,10 @@ func TestUsageLogRepositoryCreateSyncRequestTypeAndLegacyFields(t *testing.T) {
 			sqlmock.AnyArg(), // session_id
 			log.NativeCompactionV2,
 			createdAt,
+			sqlmock.AnyArg(), // hosting_route
+			sqlmock.AnyArg(), // hosting_fallback_reason
+			sqlmock.AnyArg(), // hosting_pool_id
+			sqlmock.AnyArg(), // hosting_pool_name
 		).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(int64(99), createdAt))
 
@@ -198,6 +202,10 @@ func TestUsageLogRepositoryCreate_PersistsServiceTier(t *testing.T) {
 			sqlmock.AnyArg(), // session_id
 			log.NativeCompactionV2,
 			createdAt,
+			sqlmock.AnyArg(), // hosting_route
+			sqlmock.AnyArg(), // hosting_fallback_reason
+			sqlmock.AnyArg(), // hosting_pool_id
+			sqlmock.AnyArg(), // hosting_pool_name
 		).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(int64(100), createdAt))
 
@@ -278,8 +286,8 @@ func TestPrepareUsageLogInsert_PersistsNativeCompactionV2WithoutChangingRequestT
 	prepared := prepareUsageLogInsert(log)
 
 	require.Len(t, prepared.args, len(usageLogInsertArgTypes))
-	require.Equal(t, "boolean", usageLogInsertArgTypes[len(usageLogInsertArgTypes)-2])
-	require.Equal(t, true, prepared.args[len(prepared.args)-2])
+	require.Equal(t, "boolean", usageLogInsertArgTypes[len(usageLogInsertArgTypes)-6])
+	require.Equal(t, true, prepared.args[len(prepared.args)-6])
 	require.Equal(t, int16(service.RequestTypeStream), prepared.args[30])
 	require.Equal(t, service.RequestTypeStream, log.RequestType)
 	require.True(t, log.Stream)
@@ -961,6 +969,10 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{},
 			false, // native_compaction_v2
 			now,
+			sql.NullString{}, // hosting_route
+			sql.NullString{}, // hosting_fallback_reason
+			sql.NullInt64{},  // hosting_pool_id
+			sql.NullString{}, // hosting_pool_name
 		}})
 		require.NoError(t, err)
 		require.Equal(t, 2, log.ImageCount)
@@ -1041,6 +1053,10 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{},  // session_id
 			false,             // native_compaction_v2
 			now,
+			sql.NullString{}, // hosting_route
+			sql.NullString{}, // hosting_fallback_reason
+			sql.NullInt64{},  // hosting_pool_id
+			sql.NullString{}, // hosting_pool_name
 		}})
 		require.NoError(t, err)
 		require.NotNil(t, log.ServiceTier)
@@ -1104,6 +1120,10 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{},  // session_id
 			true,              // native_compaction_v2
 			now,
+			sql.NullString{}, // hosting_route
+			sql.NullString{}, // hosting_fallback_reason
+			sql.NullInt64{},  // hosting_pool_id
+			sql.NullString{}, // hosting_pool_name
 		}})
 		require.NoError(t, err)
 		require.NotNil(t, log.ServiceTier)
@@ -1168,6 +1188,10 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{},  // session_id
 			false,             // native_compaction_v2
 			now,
+			sql.NullString{}, // hosting_route
+			sql.NullString{}, // hosting_fallback_reason
+			sql.NullInt64{},  // hosting_pool_id
+			sql.NullString{}, // hosting_pool_name
 		}})
 		require.NoError(t, err)
 		require.NotNil(t, log.ServiceTier)

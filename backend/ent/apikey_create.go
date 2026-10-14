@@ -67,6 +67,48 @@ func (_c *APIKeyCreate) SetNillableDeletedAt(v *time.Time) *APIKeyCreate {
 	return _c
 }
 
+// SetRouteMode sets the "route_mode" field.
+func (_c *APIKeyCreate) SetRouteMode(v string) *APIKeyCreate {
+	_c.mutation.SetRouteMode(v)
+	return _c
+}
+
+// SetNillableRouteMode sets the "route_mode" field if the given value is not nil.
+func (_c *APIKeyCreate) SetNillableRouteMode(v *string) *APIKeyCreate {
+	if v != nil {
+		_c.SetRouteMode(*v)
+	}
+	return _c
+}
+
+// SetHostingFallbackGroupID sets the "hosting_fallback_group_id" field.
+func (_c *APIKeyCreate) SetHostingFallbackGroupID(v int64) *APIKeyCreate {
+	_c.mutation.SetHostingFallbackGroupID(v)
+	return _c
+}
+
+// SetNillableHostingFallbackGroupID sets the "hosting_fallback_group_id" field if the given value is not nil.
+func (_c *APIKeyCreate) SetNillableHostingFallbackGroupID(v *int64) *APIKeyCreate {
+	if v != nil {
+		_c.SetHostingFallbackGroupID(*v)
+	}
+	return _c
+}
+
+// SetHostingPoolID sets the "hosting_pool_id" field.
+func (_c *APIKeyCreate) SetHostingPoolID(v int64) *APIKeyCreate {
+	_c.mutation.SetHostingPoolID(v)
+	return _c
+}
+
+// SetNillableHostingPoolID sets the "hosting_pool_id" field if the given value is not nil.
+func (_c *APIKeyCreate) SetNillableHostingPoolID(v *int64) *APIKeyCreate {
+	if v != nil {
+		_c.SetHostingPoolID(*v)
+	}
+	return _c
+}
+
 // SetUserID sets the "user_id" field.
 func (_c *APIKeyCreate) SetUserID(v int64) *APIKeyCreate {
 	_c.mutation.SetUserID(v)
@@ -397,6 +439,10 @@ func (_c *APIKeyCreate) defaults() error {
 		v := apikey.DefaultUpdatedAt()
 		_c.mutation.SetUpdatedAt(v)
 	}
+	if _, ok := _c.mutation.RouteMode(); !ok {
+		v := apikey.DefaultRouteMode
+		_c.mutation.SetRouteMode(v)
+	}
 	if _, ok := _c.mutation.ConcurrencyLimit(); !ok {
 		v := apikey.DefaultConcurrencyLimit
 		_c.mutation.SetConcurrencyLimit(v)
@@ -447,6 +493,14 @@ func (_c *APIKeyCreate) check() error {
 	}
 	if _, ok := _c.mutation.UpdatedAt(); !ok {
 		return &ValidationError{Name: "updated_at", err: errors.New(`ent: missing required field "APIKey.updated_at"`)}
+	}
+	if _, ok := _c.mutation.RouteMode(); !ok {
+		return &ValidationError{Name: "route_mode", err: errors.New(`ent: missing required field "APIKey.route_mode"`)}
+	}
+	if v, ok := _c.mutation.RouteMode(); ok {
+		if err := apikey.RouteModeValidator(v); err != nil {
+			return &ValidationError{Name: "route_mode", err: fmt.Errorf(`ent: validator failed for field "APIKey.route_mode": %w`, err)}
+		}
 	}
 	if _, ok := _c.mutation.UserID(); !ok {
 		return &ValidationError{Name: "user_id", err: errors.New(`ent: missing required field "APIKey.user_id"`)}
@@ -548,6 +602,18 @@ func (_c *APIKeyCreate) createSpec() (*APIKey, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.DeletedAt(); ok {
 		_spec.SetField(apikey.FieldDeletedAt, field.TypeTime, value)
 		_node.DeletedAt = &value
+	}
+	if value, ok := _c.mutation.RouteMode(); ok {
+		_spec.SetField(apikey.FieldRouteMode, field.TypeString, value)
+		_node.RouteMode = value
+	}
+	if value, ok := _c.mutation.HostingFallbackGroupID(); ok {
+		_spec.SetField(apikey.FieldHostingFallbackGroupID, field.TypeInt64, value)
+		_node.HostingFallbackGroupID = &value
+	}
+	if value, ok := _c.mutation.HostingPoolID(); ok {
+		_spec.SetField(apikey.FieldHostingPoolID, field.TypeInt64, value)
+		_node.HostingPoolID = &value
 	}
 	if value, ok := _c.mutation.ConcurrencyLimit(); ok {
 		_spec.SetField(apikey.FieldConcurrencyLimit, field.TypeInt, value)
@@ -754,6 +820,66 @@ func (u *APIKeyUpsert) UpdateDeletedAt() *APIKeyUpsert {
 // ClearDeletedAt clears the value of the "deleted_at" field.
 func (u *APIKeyUpsert) ClearDeletedAt() *APIKeyUpsert {
 	u.SetNull(apikey.FieldDeletedAt)
+	return u
+}
+
+// SetRouteMode sets the "route_mode" field.
+func (u *APIKeyUpsert) SetRouteMode(v string) *APIKeyUpsert {
+	u.Set(apikey.FieldRouteMode, v)
+	return u
+}
+
+// UpdateRouteMode sets the "route_mode" field to the value that was provided on create.
+func (u *APIKeyUpsert) UpdateRouteMode() *APIKeyUpsert {
+	u.SetExcluded(apikey.FieldRouteMode)
+	return u
+}
+
+// SetHostingFallbackGroupID sets the "hosting_fallback_group_id" field.
+func (u *APIKeyUpsert) SetHostingFallbackGroupID(v int64) *APIKeyUpsert {
+	u.Set(apikey.FieldHostingFallbackGroupID, v)
+	return u
+}
+
+// UpdateHostingFallbackGroupID sets the "hosting_fallback_group_id" field to the value that was provided on create.
+func (u *APIKeyUpsert) UpdateHostingFallbackGroupID() *APIKeyUpsert {
+	u.SetExcluded(apikey.FieldHostingFallbackGroupID)
+	return u
+}
+
+// AddHostingFallbackGroupID adds v to the "hosting_fallback_group_id" field.
+func (u *APIKeyUpsert) AddHostingFallbackGroupID(v int64) *APIKeyUpsert {
+	u.Add(apikey.FieldHostingFallbackGroupID, v)
+	return u
+}
+
+// ClearHostingFallbackGroupID clears the value of the "hosting_fallback_group_id" field.
+func (u *APIKeyUpsert) ClearHostingFallbackGroupID() *APIKeyUpsert {
+	u.SetNull(apikey.FieldHostingFallbackGroupID)
+	return u
+}
+
+// SetHostingPoolID sets the "hosting_pool_id" field.
+func (u *APIKeyUpsert) SetHostingPoolID(v int64) *APIKeyUpsert {
+	u.Set(apikey.FieldHostingPoolID, v)
+	return u
+}
+
+// UpdateHostingPoolID sets the "hosting_pool_id" field to the value that was provided on create.
+func (u *APIKeyUpsert) UpdateHostingPoolID() *APIKeyUpsert {
+	u.SetExcluded(apikey.FieldHostingPoolID)
+	return u
+}
+
+// AddHostingPoolID adds v to the "hosting_pool_id" field.
+func (u *APIKeyUpsert) AddHostingPoolID(v int64) *APIKeyUpsert {
+	u.Add(apikey.FieldHostingPoolID, v)
+	return u
+}
+
+// ClearHostingPoolID clears the value of the "hosting_pool_id" field.
+func (u *APIKeyUpsert) ClearHostingPoolID() *APIKeyUpsert {
+	u.SetNull(apikey.FieldHostingPoolID)
 	return u
 }
 
@@ -1188,6 +1314,76 @@ func (u *APIKeyUpsertOne) UpdateDeletedAt() *APIKeyUpsertOne {
 func (u *APIKeyUpsertOne) ClearDeletedAt() *APIKeyUpsertOne {
 	return u.Update(func(s *APIKeyUpsert) {
 		s.ClearDeletedAt()
+	})
+}
+
+// SetRouteMode sets the "route_mode" field.
+func (u *APIKeyUpsertOne) SetRouteMode(v string) *APIKeyUpsertOne {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.SetRouteMode(v)
+	})
+}
+
+// UpdateRouteMode sets the "route_mode" field to the value that was provided on create.
+func (u *APIKeyUpsertOne) UpdateRouteMode() *APIKeyUpsertOne {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.UpdateRouteMode()
+	})
+}
+
+// SetHostingFallbackGroupID sets the "hosting_fallback_group_id" field.
+func (u *APIKeyUpsertOne) SetHostingFallbackGroupID(v int64) *APIKeyUpsertOne {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.SetHostingFallbackGroupID(v)
+	})
+}
+
+// AddHostingFallbackGroupID adds v to the "hosting_fallback_group_id" field.
+func (u *APIKeyUpsertOne) AddHostingFallbackGroupID(v int64) *APIKeyUpsertOne {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.AddHostingFallbackGroupID(v)
+	})
+}
+
+// UpdateHostingFallbackGroupID sets the "hosting_fallback_group_id" field to the value that was provided on create.
+func (u *APIKeyUpsertOne) UpdateHostingFallbackGroupID() *APIKeyUpsertOne {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.UpdateHostingFallbackGroupID()
+	})
+}
+
+// ClearHostingFallbackGroupID clears the value of the "hosting_fallback_group_id" field.
+func (u *APIKeyUpsertOne) ClearHostingFallbackGroupID() *APIKeyUpsertOne {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.ClearHostingFallbackGroupID()
+	})
+}
+
+// SetHostingPoolID sets the "hosting_pool_id" field.
+func (u *APIKeyUpsertOne) SetHostingPoolID(v int64) *APIKeyUpsertOne {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.SetHostingPoolID(v)
+	})
+}
+
+// AddHostingPoolID adds v to the "hosting_pool_id" field.
+func (u *APIKeyUpsertOne) AddHostingPoolID(v int64) *APIKeyUpsertOne {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.AddHostingPoolID(v)
+	})
+}
+
+// UpdateHostingPoolID sets the "hosting_pool_id" field to the value that was provided on create.
+func (u *APIKeyUpsertOne) UpdateHostingPoolID() *APIKeyUpsertOne {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.UpdateHostingPoolID()
+	})
+}
+
+// ClearHostingPoolID clears the value of the "hosting_pool_id" field.
+func (u *APIKeyUpsertOne) ClearHostingPoolID() *APIKeyUpsertOne {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.ClearHostingPoolID()
 	})
 }
 
@@ -1847,6 +2043,76 @@ func (u *APIKeyUpsertBulk) UpdateDeletedAt() *APIKeyUpsertBulk {
 func (u *APIKeyUpsertBulk) ClearDeletedAt() *APIKeyUpsertBulk {
 	return u.Update(func(s *APIKeyUpsert) {
 		s.ClearDeletedAt()
+	})
+}
+
+// SetRouteMode sets the "route_mode" field.
+func (u *APIKeyUpsertBulk) SetRouteMode(v string) *APIKeyUpsertBulk {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.SetRouteMode(v)
+	})
+}
+
+// UpdateRouteMode sets the "route_mode" field to the value that was provided on create.
+func (u *APIKeyUpsertBulk) UpdateRouteMode() *APIKeyUpsertBulk {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.UpdateRouteMode()
+	})
+}
+
+// SetHostingFallbackGroupID sets the "hosting_fallback_group_id" field.
+func (u *APIKeyUpsertBulk) SetHostingFallbackGroupID(v int64) *APIKeyUpsertBulk {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.SetHostingFallbackGroupID(v)
+	})
+}
+
+// AddHostingFallbackGroupID adds v to the "hosting_fallback_group_id" field.
+func (u *APIKeyUpsertBulk) AddHostingFallbackGroupID(v int64) *APIKeyUpsertBulk {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.AddHostingFallbackGroupID(v)
+	})
+}
+
+// UpdateHostingFallbackGroupID sets the "hosting_fallback_group_id" field to the value that was provided on create.
+func (u *APIKeyUpsertBulk) UpdateHostingFallbackGroupID() *APIKeyUpsertBulk {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.UpdateHostingFallbackGroupID()
+	})
+}
+
+// ClearHostingFallbackGroupID clears the value of the "hosting_fallback_group_id" field.
+func (u *APIKeyUpsertBulk) ClearHostingFallbackGroupID() *APIKeyUpsertBulk {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.ClearHostingFallbackGroupID()
+	})
+}
+
+// SetHostingPoolID sets the "hosting_pool_id" field.
+func (u *APIKeyUpsertBulk) SetHostingPoolID(v int64) *APIKeyUpsertBulk {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.SetHostingPoolID(v)
+	})
+}
+
+// AddHostingPoolID adds v to the "hosting_pool_id" field.
+func (u *APIKeyUpsertBulk) AddHostingPoolID(v int64) *APIKeyUpsertBulk {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.AddHostingPoolID(v)
+	})
+}
+
+// UpdateHostingPoolID sets the "hosting_pool_id" field to the value that was provided on create.
+func (u *APIKeyUpsertBulk) UpdateHostingPoolID() *APIKeyUpsertBulk {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.UpdateHostingPoolID()
+	})
+}
+
+// ClearHostingPoolID clears the value of the "hosting_pool_id" field.
+func (u *APIKeyUpsertBulk) ClearHostingPoolID() *APIKeyUpsertBulk {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.ClearHostingPoolID()
 	})
 }
 

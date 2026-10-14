@@ -73,7 +73,7 @@
         {{ t('admin.accounts.openaiQuotaReset.points') }}
         <span class="truncate tabular-nums">{{ creditsDisplay }}</span>
       </button>
-      <OpenAIReferralCell :account="account" />
+      <OpenAIReferralCell v-if="showReferral" :account="account" />
     </div>
 
     <div v-if="creditsCacheWarning" class="text-[10px] text-amber-600 dark:text-amber-400">
@@ -192,10 +192,13 @@ import {
 } from '@/api/admin/accounts'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import OpenAIReferralCell from '@/components/account/OpenAIReferralCell.vue'
+import type { OpenAIQuotaAccount, OpenAIQuotaTransport } from './openAIQuotaTransport'
 
-const props = defineProps<{
-  account: Account
-}>()
+const props = withDefaults(defineProps<{
+  account: OpenAIQuotaAccount
+  transport?: OpenAIQuotaTransport
+  showReferral?: boolean
+}>(), { showReferral: true })
 
 const emit = defineEmits<{
   'account-updated': [account: Account]
@@ -217,7 +220,7 @@ const showResetConfirm = ref(false)
 const showResetCreditDetails = ref(false)
 const creditsCacheWarning = ref(false)
 
-const readCachedCredits = (account: Account) => {
+const readCachedCredits = (account: OpenAIQuotaAccount) => {
   const snapshot = account.extra?.codex_credits_snapshot
   const credits = snapshot?.credits
   if (!credits || typeof credits.has_credits !== 'boolean' || typeof credits.unlimited !== 'boolean') return null
@@ -289,7 +292,7 @@ const autoResetStateClass = computed(() => {
 // freshness signal, so an unfiltered read would offer to consume credits that no
 // longer exist. A snapshot claiming credits with no usable expiration left is
 // treated as absent, which keeps the reset button gated on a live query.
-const readCachedResetCredits = (account: Account): OpenAIQuotaUsage | null => {
+const readCachedResetCredits = (account: OpenAIQuotaAccount): OpenAIQuotaUsage | null => {
   const cached = account.extra?.codex_reset_credit_snapshot
   if (!cached || typeof cached !== 'object' || Array.isArray(cached)) return null
 
@@ -442,7 +445,7 @@ const handleQuery = async () => {
   resetWarning.value = null
   showResetCreditDetails.value = false
   try {
-    const result = await refreshOpenAIQuota(accountID)
+    const result = await (props.transport?.refresh ?? refreshOpenAIQuota)(accountID)
     if (props.account.id !== accountID) return
     updateCredits(result)
     creditsCacheWarning.value = result.credits_cache_persisted === false
@@ -486,7 +489,7 @@ const confirmReset = async () => {
   resetMessage.value = null
   resetWarning.value = null
   try {
-    const result: OpenAIQuotaResetResult = await resetOpenAIQuota(accountID)
+    const result: OpenAIQuotaResetResult = await (props.transport?.reset ?? resetOpenAIQuota)(accountID)
     if (props.account.id !== accountID) return
     updateCredits(result.quota ?? null)
     showResetCreditDetails.value = false

@@ -216,7 +216,11 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	// Account-side group multiplier is independent from RateMultiplier (which
 	// only changes account cost statistics). A value of 5 offsets a 0.2x group
 	// for this account and restores a 1.0x user charge.
-	multiplier *= account.UserGroupRateMultiplier()
+	if apiKey.RouteMode == RouteModeHosted && !apiKey.HostingFallback && apiKey.HostingRate != nil {
+		multiplier = *apiKey.HostingRate
+	} else {
+		multiplier *= account.UserGroupRateMultiplier()
+	}
 	// token 倍率叠加高峰因子（token 计费含图片 token，图片按次倍率不受影响）。
 	// 高峰因子按请求级 PricingAt 现算（与利润门 D 同源同刻，跨峰谷请求不中途
 	// 变价）；未装配 PricingAt 的路径回退记录时刻，保持既有行为。不并入上面的
@@ -245,6 +249,11 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		result.UpstreamModel,
 		result.Model,
 	)
+	if apiKey.RouteMode == RouteModeHosted && !apiKey.HostingFallback && strings.TrimSpace(result.UpstreamModel) != "" {
+		// Hosted mappings are user-controlled, including compact mappings.
+		// Price the actual upstream model, never a cheaper client alias.
+		billingModels = usageBillingModelCandidates(result.UpstreamModel)
+	}
 	billingModels = s.filterCNProviderBillingModelCandidates(ctx, account, apiKey, billingModels)
 	serviceTier := ""
 	if result.ServiceTier != nil {
@@ -337,6 +346,13 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		if standardErr == nil && cost != nil && standardCost != nil {
 			cost.ActualCost = standardCost.ActualCost
 		}
+	}
+
+	if apiKey.RouteMode == RouteModeHosted && !apiKey.HostingFallback {
+		if apiKey.HostingRate == nil || account.OwnerUserID == nil || *account.OwnerUserID != user.ID {
+			return ErrHostingAccountNotFound
+		}
+		cost.ActualCost = QuantizeUsageBillingAmount(cost.TotalCost * *apiKey.HostingRate)
 	}
 
 	// Determine billing type
@@ -448,7 +464,28 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		usageLog.RateMultiplier = multiplier
 	}
 	usageLog.RateMultiplier *= costModelBillingMultiplier(cost)
+	if apiKey.RouteMode == RouteModeHosted && !apiKey.HostingFallback {
+		usageLog.RateMultiplier = *apiKey.HostingRate
+	}
 	usageLog.AccountRateMultiplier = &accountRateMultiplier
+	if apiKey.RouteMode == RouteModeHosted {
+		route := "hosted"
+		if apiKey.HostingFallback {
+			route = "fallback"
+			reason := apiKey.HostingFallbackReason
+			usageLog.HostingFallbackReason = &reason
+		}
+		usageLog.HostingRoute = &route
+		poolID := int64(0)
+		if apiKey.HostingPoolID != nil {
+			poolID = *apiKey.HostingPoolID
+		}
+		usageLog.HostingPoolID = &poolID
+		if apiKey.HostingPoolName != nil {
+			name := *apiKey.HostingPoolName
+			usageLog.HostingPoolName = &name
+		}
+	}
 	usageLog.BillingType = billingType
 	usageLog.Stream = result.Stream
 	if input.CyberBlocked {

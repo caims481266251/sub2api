@@ -23,6 +23,14 @@ type UsageLog struct {
 	config `json:"-"`
 	// ID of the ent.
 	ID int64 `json:"id,omitempty"`
+	// HostingPoolID holds the value of the "hosting_pool_id" field.
+	HostingPoolID *int64 `json:"hosting_pool_id,omitempty"`
+	// HostingPoolName holds the value of the "hosting_pool_name" field.
+	HostingPoolName *string `json:"hosting_pool_name,omitempty"`
+	// HostingRoute holds the value of the "hosting_route" field.
+	HostingRoute *string `json:"hosting_route,omitempty"`
+	// HostingFallbackReason holds the value of the "hosting_fallback_reason" field.
+	HostingFallbackReason *string `json:"hosting_fallback_reason,omitempty"`
 	// UserID holds the value of the "user_id" field.
 	UserID int64 `json:"user_id,omitempty"`
 	// APIKeyID holds the value of the "api_key_id" field.
@@ -206,9 +214,9 @@ func (*UsageLog) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullBool)
 		case usagelog.FieldInputCost, usagelog.FieldOutputCost, usagelog.FieldCacheCreationCost, usagelog.FieldCacheReadCost, usagelog.FieldTotalCost, usagelog.FieldActualCost, usagelog.FieldRateMultiplier, usagelog.FieldAccountRateMultiplier:
 			values[i] = new(sql.NullFloat64)
-		case usagelog.FieldID, usagelog.FieldUserID, usagelog.FieldAPIKeyID, usagelog.FieldAccountID, usagelog.FieldChannelID, usagelog.FieldGroupID, usagelog.FieldSubscriptionID, usagelog.FieldInputTokens, usagelog.FieldOutputTokens, usagelog.FieldCacheCreationTokens, usagelog.FieldCacheReadTokens, usagelog.FieldCacheCreation5mTokens, usagelog.FieldCacheCreation1hTokens, usagelog.FieldBillingType, usagelog.FieldDurationMs, usagelog.FieldFirstTokenMs, usagelog.FieldImageCount, usagelog.FieldVideoCount, usagelog.FieldVideoDurationSeconds:
+		case usagelog.FieldID, usagelog.FieldHostingPoolID, usagelog.FieldUserID, usagelog.FieldAPIKeyID, usagelog.FieldAccountID, usagelog.FieldChannelID, usagelog.FieldGroupID, usagelog.FieldSubscriptionID, usagelog.FieldInputTokens, usagelog.FieldOutputTokens, usagelog.FieldCacheCreationTokens, usagelog.FieldCacheReadTokens, usagelog.FieldCacheCreation5mTokens, usagelog.FieldCacheCreation1hTokens, usagelog.FieldBillingType, usagelog.FieldDurationMs, usagelog.FieldFirstTokenMs, usagelog.FieldImageCount, usagelog.FieldVideoCount, usagelog.FieldVideoDurationSeconds:
 			values[i] = new(sql.NullInt64)
-		case usagelog.FieldRequestID, usagelog.FieldModel, usagelog.FieldRequestedModel, usagelog.FieldUpstreamModel, usagelog.FieldUpstreamResponseModel, usagelog.FieldModelMappingChain, usagelog.FieldBillingTier, usagelog.FieldBillingMode, usagelog.FieldUserAgent, usagelog.FieldIPAddress, usagelog.FieldImageSize, usagelog.FieldImageInputSize, usagelog.FieldImageOutputSize, usagelog.FieldImageSizeSource, usagelog.FieldVideoResolution:
+		case usagelog.FieldHostingPoolName, usagelog.FieldHostingRoute, usagelog.FieldHostingFallbackReason, usagelog.FieldRequestID, usagelog.FieldModel, usagelog.FieldRequestedModel, usagelog.FieldUpstreamModel, usagelog.FieldUpstreamResponseModel, usagelog.FieldModelMappingChain, usagelog.FieldBillingTier, usagelog.FieldBillingMode, usagelog.FieldUserAgent, usagelog.FieldIPAddress, usagelog.FieldImageSize, usagelog.FieldImageInputSize, usagelog.FieldImageOutputSize, usagelog.FieldImageSizeSource, usagelog.FieldVideoResolution:
 			values[i] = new(sql.NullString)
 		case usagelog.FieldCreatedAt:
 			values[i] = new(sql.NullTime)
@@ -233,6 +241,34 @@ func (_m *UsageLog) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field id", value)
 			}
 			_m.ID = int64(value.Int64)
+		case usagelog.FieldHostingPoolID:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field hosting_pool_id", values[i])
+			} else if value.Valid {
+				_m.HostingPoolID = new(int64)
+				*_m.HostingPoolID = value.Int64
+			}
+		case usagelog.FieldHostingPoolName:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field hosting_pool_name", values[i])
+			} else if value.Valid {
+				_m.HostingPoolName = new(string)
+				*_m.HostingPoolName = value.String
+			}
+		case usagelog.FieldHostingRoute:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field hosting_route", values[i])
+			} else if value.Valid {
+				_m.HostingRoute = new(string)
+				*_m.HostingRoute = value.String
+			}
+		case usagelog.FieldHostingFallbackReason:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field hosting_fallback_reason", values[i])
+			} else if value.Valid {
+				_m.HostingFallbackReason = new(string)
+				*_m.HostingFallbackReason = value.String
+			}
 		case usagelog.FieldUserID:
 			if value, ok := values[i].(*sql.NullInt64); !ok {
 				return fmt.Errorf("unexpected type %T for field user_id", values[i])
@@ -599,6 +635,26 @@ func (_m *UsageLog) String() string {
 	var builder strings.Builder
 	builder.WriteString("UsageLog(")
 	builder.WriteString(fmt.Sprintf("id=%v, ", _m.ID))
+	if v := _m.HostingPoolID; v != nil {
+		builder.WriteString("hosting_pool_id=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	if v := _m.HostingPoolName; v != nil {
+		builder.WriteString("hosting_pool_name=")
+		builder.WriteString(*v)
+	}
+	builder.WriteString(", ")
+	if v := _m.HostingRoute; v != nil {
+		builder.WriteString("hosting_route=")
+		builder.WriteString(*v)
+	}
+	builder.WriteString(", ")
+	if v := _m.HostingFallbackReason; v != nil {
+		builder.WriteString("hosting_fallback_reason=")
+		builder.WriteString(*v)
+	}
+	builder.WriteString(", ")
 	builder.WriteString("user_id=")
 	builder.WriteString(fmt.Sprintf("%v", _m.UserID))
 	builder.WriteString(", ")

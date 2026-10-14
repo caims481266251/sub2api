@@ -108,53 +108,58 @@ const (
 // APIKeyMutation represents an operation that mutates the APIKey nodes in the graph.
 type APIKeyMutation struct {
 	config
-	op                   Op
-	typ                  string
-	id                   *int64
-	created_at           *time.Time
-	updated_at           *time.Time
-	deleted_at           *time.Time
-	concurrency_limit    *int
-	addconcurrency_limit *int
-	key                  *string
-	name                 *string
-	status               *string
-	last_used_at         *time.Time
-	ip_whitelist         *[]string
-	appendip_whitelist   []string
-	ip_blacklist         *[]string
-	appendip_blacklist   []string
-	quota                *float64
-	addquota             *float64
-	quota_used           *float64
-	addquota_used        *float64
-	expires_at           *time.Time
-	rate_limit_5h        *float64
-	addrate_limit_5h     *float64
-	rate_limit_1d        *float64
-	addrate_limit_1d     *float64
-	rate_limit_7d        *float64
-	addrate_limit_7d     *float64
-	usage_5h             *float64
-	addusage_5h          *float64
-	usage_1d             *float64
-	addusage_1d          *float64
-	usage_7d             *float64
-	addusage_7d          *float64
-	window_5h_start      *time.Time
-	window_1d_start      *time.Time
-	window_7d_start      *time.Time
-	clearedFields        map[string]struct{}
-	user                 *int64
-	cleareduser          bool
-	group                *int64
-	clearedgroup         bool
-	usage_logs           map[int64]struct{}
-	removedusage_logs    map[int64]struct{}
-	clearedusage_logs    bool
-	done                 bool
-	oldValue             func(context.Context) (*APIKey, error)
-	predicates           []predicate.APIKey
+	op                           Op
+	typ                          string
+	id                           *int64
+	created_at                   *time.Time
+	updated_at                   *time.Time
+	deleted_at                   *time.Time
+	route_mode                   *string
+	hosting_fallback_group_id    *int64
+	addhosting_fallback_group_id *int64
+	hosting_pool_id              *int64
+	addhosting_pool_id           *int64
+	concurrency_limit            *int
+	addconcurrency_limit         *int
+	key                          *string
+	name                         *string
+	status                       *string
+	last_used_at                 *time.Time
+	ip_whitelist                 *[]string
+	appendip_whitelist           []string
+	ip_blacklist                 *[]string
+	appendip_blacklist           []string
+	quota                        *float64
+	addquota                     *float64
+	quota_used                   *float64
+	addquota_used                *float64
+	expires_at                   *time.Time
+	rate_limit_5h                *float64
+	addrate_limit_5h             *float64
+	rate_limit_1d                *float64
+	addrate_limit_1d             *float64
+	rate_limit_7d                *float64
+	addrate_limit_7d             *float64
+	usage_5h                     *float64
+	addusage_5h                  *float64
+	usage_1d                     *float64
+	addusage_1d                  *float64
+	usage_7d                     *float64
+	addusage_7d                  *float64
+	window_5h_start              *time.Time
+	window_1d_start              *time.Time
+	window_7d_start              *time.Time
+	clearedFields                map[string]struct{}
+	user                         *int64
+	cleareduser                  bool
+	group                        *int64
+	clearedgroup                 bool
+	usage_logs                   map[int64]struct{}
+	removedusage_logs            map[int64]struct{}
+	clearedusage_logs            bool
+	done                         bool
+	oldValue                     func(context.Context) (*APIKey, error)
+	predicates                   []predicate.APIKey
 }
 
 var _ ent.Mutation = (*APIKeyMutation)(nil)
@@ -374,6 +379,182 @@ func (m *APIKeyMutation) DeletedAtCleared() bool {
 func (m *APIKeyMutation) ResetDeletedAt() {
 	m.deleted_at = nil
 	delete(m.clearedFields, apikey.FieldDeletedAt)
+}
+
+// SetRouteMode sets the "route_mode" field.
+func (m *APIKeyMutation) SetRouteMode(s string) {
+	m.route_mode = &s
+}
+
+// RouteMode returns the value of the "route_mode" field in the mutation.
+func (m *APIKeyMutation) RouteMode() (r string, exists bool) {
+	v := m.route_mode
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRouteMode returns the old "route_mode" field's value of the APIKey entity.
+// If the APIKey object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyMutation) OldRouteMode(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRouteMode is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRouteMode requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRouteMode: %w", err)
+	}
+	return oldValue.RouteMode, nil
+}
+
+// ResetRouteMode resets all changes to the "route_mode" field.
+func (m *APIKeyMutation) ResetRouteMode() {
+	m.route_mode = nil
+}
+
+// SetHostingFallbackGroupID sets the "hosting_fallback_group_id" field.
+func (m *APIKeyMutation) SetHostingFallbackGroupID(i int64) {
+	m.hosting_fallback_group_id = &i
+	m.addhosting_fallback_group_id = nil
+}
+
+// HostingFallbackGroupID returns the value of the "hosting_fallback_group_id" field in the mutation.
+func (m *APIKeyMutation) HostingFallbackGroupID() (r int64, exists bool) {
+	v := m.hosting_fallback_group_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldHostingFallbackGroupID returns the old "hosting_fallback_group_id" field's value of the APIKey entity.
+// If the APIKey object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyMutation) OldHostingFallbackGroupID(ctx context.Context) (v *int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldHostingFallbackGroupID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldHostingFallbackGroupID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldHostingFallbackGroupID: %w", err)
+	}
+	return oldValue.HostingFallbackGroupID, nil
+}
+
+// AddHostingFallbackGroupID adds i to the "hosting_fallback_group_id" field.
+func (m *APIKeyMutation) AddHostingFallbackGroupID(i int64) {
+	if m.addhosting_fallback_group_id != nil {
+		*m.addhosting_fallback_group_id += i
+	} else {
+		m.addhosting_fallback_group_id = &i
+	}
+}
+
+// AddedHostingFallbackGroupID returns the value that was added to the "hosting_fallback_group_id" field in this mutation.
+func (m *APIKeyMutation) AddedHostingFallbackGroupID() (r int64, exists bool) {
+	v := m.addhosting_fallback_group_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearHostingFallbackGroupID clears the value of the "hosting_fallback_group_id" field.
+func (m *APIKeyMutation) ClearHostingFallbackGroupID() {
+	m.hosting_fallback_group_id = nil
+	m.addhosting_fallback_group_id = nil
+	m.clearedFields[apikey.FieldHostingFallbackGroupID] = struct{}{}
+}
+
+// HostingFallbackGroupIDCleared returns if the "hosting_fallback_group_id" field was cleared in this mutation.
+func (m *APIKeyMutation) HostingFallbackGroupIDCleared() bool {
+	_, ok := m.clearedFields[apikey.FieldHostingFallbackGroupID]
+	return ok
+}
+
+// ResetHostingFallbackGroupID resets all changes to the "hosting_fallback_group_id" field.
+func (m *APIKeyMutation) ResetHostingFallbackGroupID() {
+	m.hosting_fallback_group_id = nil
+	m.addhosting_fallback_group_id = nil
+	delete(m.clearedFields, apikey.FieldHostingFallbackGroupID)
+}
+
+// SetHostingPoolID sets the "hosting_pool_id" field.
+func (m *APIKeyMutation) SetHostingPoolID(i int64) {
+	m.hosting_pool_id = &i
+	m.addhosting_pool_id = nil
+}
+
+// HostingPoolID returns the value of the "hosting_pool_id" field in the mutation.
+func (m *APIKeyMutation) HostingPoolID() (r int64, exists bool) {
+	v := m.hosting_pool_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldHostingPoolID returns the old "hosting_pool_id" field's value of the APIKey entity.
+// If the APIKey object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyMutation) OldHostingPoolID(ctx context.Context) (v *int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldHostingPoolID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldHostingPoolID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldHostingPoolID: %w", err)
+	}
+	return oldValue.HostingPoolID, nil
+}
+
+// AddHostingPoolID adds i to the "hosting_pool_id" field.
+func (m *APIKeyMutation) AddHostingPoolID(i int64) {
+	if m.addhosting_pool_id != nil {
+		*m.addhosting_pool_id += i
+	} else {
+		m.addhosting_pool_id = &i
+	}
+}
+
+// AddedHostingPoolID returns the value that was added to the "hosting_pool_id" field in this mutation.
+func (m *APIKeyMutation) AddedHostingPoolID() (r int64, exists bool) {
+	v := m.addhosting_pool_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearHostingPoolID clears the value of the "hosting_pool_id" field.
+func (m *APIKeyMutation) ClearHostingPoolID() {
+	m.hosting_pool_id = nil
+	m.addhosting_pool_id = nil
+	m.clearedFields[apikey.FieldHostingPoolID] = struct{}{}
+}
+
+// HostingPoolIDCleared returns if the "hosting_pool_id" field was cleared in this mutation.
+func (m *APIKeyMutation) HostingPoolIDCleared() bool {
+	_, ok := m.clearedFields[apikey.FieldHostingPoolID]
+	return ok
+}
+
+// ResetHostingPoolID resets all changes to the "hosting_pool_id" field.
+func (m *APIKeyMutation) ResetHostingPoolID() {
+	m.hosting_pool_id = nil
+	m.addhosting_pool_id = nil
+	delete(m.clearedFields, apikey.FieldHostingPoolID)
 }
 
 // SetUserID sets the "user_id" field.
@@ -1590,7 +1771,7 @@ func (m *APIKeyMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *APIKeyMutation) Fields() []string {
-	fields := make([]string, 0, 24)
+	fields := make([]string, 0, 27)
 	if m.created_at != nil {
 		fields = append(fields, apikey.FieldCreatedAt)
 	}
@@ -1599,6 +1780,15 @@ func (m *APIKeyMutation) Fields() []string {
 	}
 	if m.deleted_at != nil {
 		fields = append(fields, apikey.FieldDeletedAt)
+	}
+	if m.route_mode != nil {
+		fields = append(fields, apikey.FieldRouteMode)
+	}
+	if m.hosting_fallback_group_id != nil {
+		fields = append(fields, apikey.FieldHostingFallbackGroupID)
+	}
+	if m.hosting_pool_id != nil {
+		fields = append(fields, apikey.FieldHostingPoolID)
 	}
 	if m.user != nil {
 		fields = append(fields, apikey.FieldUserID)
@@ -1677,6 +1867,12 @@ func (m *APIKeyMutation) Field(name string) (ent.Value, bool) {
 		return m.UpdatedAt()
 	case apikey.FieldDeletedAt:
 		return m.DeletedAt()
+	case apikey.FieldRouteMode:
+		return m.RouteMode()
+	case apikey.FieldHostingFallbackGroupID:
+		return m.HostingFallbackGroupID()
+	case apikey.FieldHostingPoolID:
+		return m.HostingPoolID()
 	case apikey.FieldUserID:
 		return m.UserID()
 	case apikey.FieldConcurrencyLimit:
@@ -1734,6 +1930,12 @@ func (m *APIKeyMutation) OldField(ctx context.Context, name string) (ent.Value, 
 		return m.OldUpdatedAt(ctx)
 	case apikey.FieldDeletedAt:
 		return m.OldDeletedAt(ctx)
+	case apikey.FieldRouteMode:
+		return m.OldRouteMode(ctx)
+	case apikey.FieldHostingFallbackGroupID:
+		return m.OldHostingFallbackGroupID(ctx)
+	case apikey.FieldHostingPoolID:
+		return m.OldHostingPoolID(ctx)
 	case apikey.FieldUserID:
 		return m.OldUserID(ctx)
 	case apikey.FieldConcurrencyLimit:
@@ -1805,6 +2007,27 @@ func (m *APIKeyMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetDeletedAt(v)
+		return nil
+	case apikey.FieldRouteMode:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRouteMode(v)
+		return nil
+	case apikey.FieldHostingFallbackGroupID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetHostingFallbackGroupID(v)
+		return nil
+	case apikey.FieldHostingPoolID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetHostingPoolID(v)
 		return nil
 	case apikey.FieldUserID:
 		v, ok := value.(int64)
@@ -1961,6 +2184,12 @@ func (m *APIKeyMutation) SetField(name string, value ent.Value) error {
 // this mutation.
 func (m *APIKeyMutation) AddedFields() []string {
 	var fields []string
+	if m.addhosting_fallback_group_id != nil {
+		fields = append(fields, apikey.FieldHostingFallbackGroupID)
+	}
+	if m.addhosting_pool_id != nil {
+		fields = append(fields, apikey.FieldHostingPoolID)
+	}
 	if m.addconcurrency_limit != nil {
 		fields = append(fields, apikey.FieldConcurrencyLimit)
 	}
@@ -1996,6 +2225,10 @@ func (m *APIKeyMutation) AddedFields() []string {
 // was not set, or was not defined in the schema.
 func (m *APIKeyMutation) AddedField(name string) (ent.Value, bool) {
 	switch name {
+	case apikey.FieldHostingFallbackGroupID:
+		return m.AddedHostingFallbackGroupID()
+	case apikey.FieldHostingPoolID:
+		return m.AddedHostingPoolID()
 	case apikey.FieldConcurrencyLimit:
 		return m.AddedConcurrencyLimit()
 	case apikey.FieldQuota:
@@ -2023,6 +2256,20 @@ func (m *APIKeyMutation) AddedField(name string) (ent.Value, bool) {
 // type.
 func (m *APIKeyMutation) AddField(name string, value ent.Value) error {
 	switch name {
+	case apikey.FieldHostingFallbackGroupID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddHostingFallbackGroupID(v)
+		return nil
+	case apikey.FieldHostingPoolID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddHostingPoolID(v)
+		return nil
 	case apikey.FieldConcurrencyLimit:
 		v, ok := value.(int)
 		if !ok {
@@ -2097,6 +2344,12 @@ func (m *APIKeyMutation) ClearedFields() []string {
 	if m.FieldCleared(apikey.FieldDeletedAt) {
 		fields = append(fields, apikey.FieldDeletedAt)
 	}
+	if m.FieldCleared(apikey.FieldHostingFallbackGroupID) {
+		fields = append(fields, apikey.FieldHostingFallbackGroupID)
+	}
+	if m.FieldCleared(apikey.FieldHostingPoolID) {
+		fields = append(fields, apikey.FieldHostingPoolID)
+	}
 	if m.FieldCleared(apikey.FieldGroupID) {
 		fields = append(fields, apikey.FieldGroupID)
 	}
@@ -2138,6 +2391,12 @@ func (m *APIKeyMutation) ClearField(name string) error {
 	case apikey.FieldDeletedAt:
 		m.ClearDeletedAt()
 		return nil
+	case apikey.FieldHostingFallbackGroupID:
+		m.ClearHostingFallbackGroupID()
+		return nil
+	case apikey.FieldHostingPoolID:
+		m.ClearHostingPoolID()
+		return nil
 	case apikey.FieldGroupID:
 		m.ClearGroupID()
 		return nil
@@ -2178,6 +2437,15 @@ func (m *APIKeyMutation) ResetField(name string) error {
 		return nil
 	case apikey.FieldDeletedAt:
 		m.ResetDeletedAt()
+		return nil
+	case apikey.FieldRouteMode:
+		m.ResetRouteMode()
+		return nil
+	case apikey.FieldHostingFallbackGroupID:
+		m.ResetHostingFallbackGroupID()
+		return nil
+	case apikey.FieldHostingPoolID:
+		m.ResetHostingPoolID()
 		return nil
 	case apikey.FieldUserID:
 		m.ResetUserID()
@@ -2375,6 +2643,11 @@ type AccountMutation struct {
 	created_at                  *time.Time
 	updated_at                  *time.Time
 	deleted_at                  *time.Time
+	owner_user_id               *int64
+	addowner_user_id            *int64
+	hosting_pool_id             *int64
+	addhosting_pool_id          *int64
+	hosting_identity            *string
 	name                        *string
 	notes                       *string
 	platform                    *string
@@ -2644,6 +2917,195 @@ func (m *AccountMutation) DeletedAtCleared() bool {
 func (m *AccountMutation) ResetDeletedAt() {
 	m.deleted_at = nil
 	delete(m.clearedFields, account.FieldDeletedAt)
+}
+
+// SetOwnerUserID sets the "owner_user_id" field.
+func (m *AccountMutation) SetOwnerUserID(i int64) {
+	m.owner_user_id = &i
+	m.addowner_user_id = nil
+}
+
+// OwnerUserID returns the value of the "owner_user_id" field in the mutation.
+func (m *AccountMutation) OwnerUserID() (r int64, exists bool) {
+	v := m.owner_user_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldOwnerUserID returns the old "owner_user_id" field's value of the Account entity.
+// If the Account object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccountMutation) OldOwnerUserID(ctx context.Context) (v *int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldOwnerUserID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldOwnerUserID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldOwnerUserID: %w", err)
+	}
+	return oldValue.OwnerUserID, nil
+}
+
+// AddOwnerUserID adds i to the "owner_user_id" field.
+func (m *AccountMutation) AddOwnerUserID(i int64) {
+	if m.addowner_user_id != nil {
+		*m.addowner_user_id += i
+	} else {
+		m.addowner_user_id = &i
+	}
+}
+
+// AddedOwnerUserID returns the value that was added to the "owner_user_id" field in this mutation.
+func (m *AccountMutation) AddedOwnerUserID() (r int64, exists bool) {
+	v := m.addowner_user_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearOwnerUserID clears the value of the "owner_user_id" field.
+func (m *AccountMutation) ClearOwnerUserID() {
+	m.owner_user_id = nil
+	m.addowner_user_id = nil
+	m.clearedFields[account.FieldOwnerUserID] = struct{}{}
+}
+
+// OwnerUserIDCleared returns if the "owner_user_id" field was cleared in this mutation.
+func (m *AccountMutation) OwnerUserIDCleared() bool {
+	_, ok := m.clearedFields[account.FieldOwnerUserID]
+	return ok
+}
+
+// ResetOwnerUserID resets all changes to the "owner_user_id" field.
+func (m *AccountMutation) ResetOwnerUserID() {
+	m.owner_user_id = nil
+	m.addowner_user_id = nil
+	delete(m.clearedFields, account.FieldOwnerUserID)
+}
+
+// SetHostingPoolID sets the "hosting_pool_id" field.
+func (m *AccountMutation) SetHostingPoolID(i int64) {
+	m.hosting_pool_id = &i
+	m.addhosting_pool_id = nil
+}
+
+// HostingPoolID returns the value of the "hosting_pool_id" field in the mutation.
+func (m *AccountMutation) HostingPoolID() (r int64, exists bool) {
+	v := m.hosting_pool_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldHostingPoolID returns the old "hosting_pool_id" field's value of the Account entity.
+// If the Account object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccountMutation) OldHostingPoolID(ctx context.Context) (v *int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldHostingPoolID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldHostingPoolID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldHostingPoolID: %w", err)
+	}
+	return oldValue.HostingPoolID, nil
+}
+
+// AddHostingPoolID adds i to the "hosting_pool_id" field.
+func (m *AccountMutation) AddHostingPoolID(i int64) {
+	if m.addhosting_pool_id != nil {
+		*m.addhosting_pool_id += i
+	} else {
+		m.addhosting_pool_id = &i
+	}
+}
+
+// AddedHostingPoolID returns the value that was added to the "hosting_pool_id" field in this mutation.
+func (m *AccountMutation) AddedHostingPoolID() (r int64, exists bool) {
+	v := m.addhosting_pool_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearHostingPoolID clears the value of the "hosting_pool_id" field.
+func (m *AccountMutation) ClearHostingPoolID() {
+	m.hosting_pool_id = nil
+	m.addhosting_pool_id = nil
+	m.clearedFields[account.FieldHostingPoolID] = struct{}{}
+}
+
+// HostingPoolIDCleared returns if the "hosting_pool_id" field was cleared in this mutation.
+func (m *AccountMutation) HostingPoolIDCleared() bool {
+	_, ok := m.clearedFields[account.FieldHostingPoolID]
+	return ok
+}
+
+// ResetHostingPoolID resets all changes to the "hosting_pool_id" field.
+func (m *AccountMutation) ResetHostingPoolID() {
+	m.hosting_pool_id = nil
+	m.addhosting_pool_id = nil
+	delete(m.clearedFields, account.FieldHostingPoolID)
+}
+
+// SetHostingIdentity sets the "hosting_identity" field.
+func (m *AccountMutation) SetHostingIdentity(s string) {
+	m.hosting_identity = &s
+}
+
+// HostingIdentity returns the value of the "hosting_identity" field in the mutation.
+func (m *AccountMutation) HostingIdentity() (r string, exists bool) {
+	v := m.hosting_identity
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldHostingIdentity returns the old "hosting_identity" field's value of the Account entity.
+// If the Account object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccountMutation) OldHostingIdentity(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldHostingIdentity is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldHostingIdentity requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldHostingIdentity: %w", err)
+	}
+	return oldValue.HostingIdentity, nil
+}
+
+// ClearHostingIdentity clears the value of the "hosting_identity" field.
+func (m *AccountMutation) ClearHostingIdentity() {
+	m.hosting_identity = nil
+	m.clearedFields[account.FieldHostingIdentity] = struct{}{}
+}
+
+// HostingIdentityCleared returns if the "hosting_identity" field was cleared in this mutation.
+func (m *AccountMutation) HostingIdentityCleared() bool {
+	_, ok := m.clearedFields[account.FieldHostingIdentity]
+	return ok
+}
+
+// ResetHostingIdentity resets all changes to the "hosting_identity" field.
+func (m *AccountMutation) ResetHostingIdentity() {
+	m.hosting_identity = nil
+	delete(m.clearedFields, account.FieldHostingIdentity)
 }
 
 // SetName sets the "name" field.
@@ -4283,7 +4745,7 @@ func (m *AccountMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *AccountMutation) Fields() []string {
-	fields := make([]string, 0, 32)
+	fields := make([]string, 0, 35)
 	if m.created_at != nil {
 		fields = append(fields, account.FieldCreatedAt)
 	}
@@ -4292,6 +4754,15 @@ func (m *AccountMutation) Fields() []string {
 	}
 	if m.deleted_at != nil {
 		fields = append(fields, account.FieldDeletedAt)
+	}
+	if m.owner_user_id != nil {
+		fields = append(fields, account.FieldOwnerUserID)
+	}
+	if m.hosting_pool_id != nil {
+		fields = append(fields, account.FieldHostingPoolID)
+	}
+	if m.hosting_identity != nil {
+		fields = append(fields, account.FieldHostingIdentity)
 	}
 	if m.name != nil {
 		fields = append(fields, account.FieldName)
@@ -4394,6 +4865,12 @@ func (m *AccountMutation) Field(name string) (ent.Value, bool) {
 		return m.UpdatedAt()
 	case account.FieldDeletedAt:
 		return m.DeletedAt()
+	case account.FieldOwnerUserID:
+		return m.OwnerUserID()
+	case account.FieldHostingPoolID:
+		return m.HostingPoolID()
+	case account.FieldHostingIdentity:
+		return m.HostingIdentity()
 	case account.FieldName:
 		return m.Name()
 	case account.FieldNotes:
@@ -4467,6 +4944,12 @@ func (m *AccountMutation) OldField(ctx context.Context, name string) (ent.Value,
 		return m.OldUpdatedAt(ctx)
 	case account.FieldDeletedAt:
 		return m.OldDeletedAt(ctx)
+	case account.FieldOwnerUserID:
+		return m.OldOwnerUserID(ctx)
+	case account.FieldHostingPoolID:
+		return m.OldHostingPoolID(ctx)
+	case account.FieldHostingIdentity:
+		return m.OldHostingIdentity(ctx)
 	case account.FieldName:
 		return m.OldName(ctx)
 	case account.FieldNotes:
@@ -4554,6 +5037,27 @@ func (m *AccountMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetDeletedAt(v)
+		return nil
+	case account.FieldOwnerUserID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetOwnerUserID(v)
+		return nil
+	case account.FieldHostingPoolID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetHostingPoolID(v)
+		return nil
+	case account.FieldHostingIdentity:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetHostingIdentity(v)
 		return nil
 	case account.FieldName:
 		v, ok := value.(string)
@@ -4766,6 +5270,12 @@ func (m *AccountMutation) SetField(name string, value ent.Value) error {
 // this mutation.
 func (m *AccountMutation) AddedFields() []string {
 	var fields []string
+	if m.addowner_user_id != nil {
+		fields = append(fields, account.FieldOwnerUserID)
+	}
+	if m.addhosting_pool_id != nil {
+		fields = append(fields, account.FieldHostingPoolID)
+	}
 	if m.addproxy_fallback_origin_id != nil {
 		fields = append(fields, account.FieldProxyFallbackOriginID)
 	}
@@ -4792,6 +5302,10 @@ func (m *AccountMutation) AddedFields() []string {
 // was not set, or was not defined in the schema.
 func (m *AccountMutation) AddedField(name string) (ent.Value, bool) {
 	switch name {
+	case account.FieldOwnerUserID:
+		return m.AddedOwnerUserID()
+	case account.FieldHostingPoolID:
+		return m.AddedHostingPoolID()
 	case account.FieldProxyFallbackOriginID:
 		return m.AddedProxyFallbackOriginID()
 	case account.FieldConcurrency:
@@ -4813,6 +5327,20 @@ func (m *AccountMutation) AddedField(name string) (ent.Value, bool) {
 // type.
 func (m *AccountMutation) AddField(name string, value ent.Value) error {
 	switch name {
+	case account.FieldOwnerUserID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddOwnerUserID(v)
+		return nil
+	case account.FieldHostingPoolID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddHostingPoolID(v)
+		return nil
 	case account.FieldProxyFallbackOriginID:
 		v, ok := value.(int64)
 		if !ok {
@@ -4865,6 +5393,15 @@ func (m *AccountMutation) ClearedFields() []string {
 	var fields []string
 	if m.FieldCleared(account.FieldDeletedAt) {
 		fields = append(fields, account.FieldDeletedAt)
+	}
+	if m.FieldCleared(account.FieldOwnerUserID) {
+		fields = append(fields, account.FieldOwnerUserID)
+	}
+	if m.FieldCleared(account.FieldHostingPoolID) {
+		fields = append(fields, account.FieldHostingPoolID)
+	}
+	if m.FieldCleared(account.FieldHostingIdentity) {
+		fields = append(fields, account.FieldHostingIdentity)
 	}
 	if m.FieldCleared(account.FieldNotes) {
 		fields = append(fields, account.FieldNotes)
@@ -4931,6 +5468,15 @@ func (m *AccountMutation) ClearField(name string) error {
 	case account.FieldDeletedAt:
 		m.ClearDeletedAt()
 		return nil
+	case account.FieldOwnerUserID:
+		m.ClearOwnerUserID()
+		return nil
+	case account.FieldHostingPoolID:
+		m.ClearHostingPoolID()
+		return nil
+	case account.FieldHostingIdentity:
+		m.ClearHostingIdentity()
+		return nil
 	case account.FieldNotes:
 		m.ClearNotes()
 		return nil
@@ -4995,6 +5541,15 @@ func (m *AccountMutation) ResetField(name string) error {
 		return nil
 	case account.FieldDeletedAt:
 		m.ResetDeletedAt()
+		return nil
+	case account.FieldOwnerUserID:
+		m.ResetOwnerUserID()
+		return nil
+	case account.FieldHostingPoolID:
+		m.ResetHostingPoolID()
+		return nil
+	case account.FieldHostingIdentity:
+		m.ResetHostingIdentity()
 		return nil
 	case account.FieldName:
 		m.ResetName()
@@ -44919,6 +45474,11 @@ type UsageLogMutation struct {
 	op                           Op
 	typ                          string
 	id                           *int64
+	hosting_pool_id              *int64
+	addhosting_pool_id           *int64
+	hosting_pool_name            *string
+	hosting_route                *string
+	hosting_fallback_reason      *string
 	request_id                   *string
 	model                        *string
 	requested_model              *string
@@ -45094,6 +45654,223 @@ func (m *UsageLogMutation) IDs(ctx context.Context) ([]int64, error) {
 	default:
 		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
 	}
+}
+
+// SetHostingPoolID sets the "hosting_pool_id" field.
+func (m *UsageLogMutation) SetHostingPoolID(i int64) {
+	m.hosting_pool_id = &i
+	m.addhosting_pool_id = nil
+}
+
+// HostingPoolID returns the value of the "hosting_pool_id" field in the mutation.
+func (m *UsageLogMutation) HostingPoolID() (r int64, exists bool) {
+	v := m.hosting_pool_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldHostingPoolID returns the old "hosting_pool_id" field's value of the UsageLog entity.
+// If the UsageLog object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UsageLogMutation) OldHostingPoolID(ctx context.Context) (v *int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldHostingPoolID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldHostingPoolID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldHostingPoolID: %w", err)
+	}
+	return oldValue.HostingPoolID, nil
+}
+
+// AddHostingPoolID adds i to the "hosting_pool_id" field.
+func (m *UsageLogMutation) AddHostingPoolID(i int64) {
+	if m.addhosting_pool_id != nil {
+		*m.addhosting_pool_id += i
+	} else {
+		m.addhosting_pool_id = &i
+	}
+}
+
+// AddedHostingPoolID returns the value that was added to the "hosting_pool_id" field in this mutation.
+func (m *UsageLogMutation) AddedHostingPoolID() (r int64, exists bool) {
+	v := m.addhosting_pool_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearHostingPoolID clears the value of the "hosting_pool_id" field.
+func (m *UsageLogMutation) ClearHostingPoolID() {
+	m.hosting_pool_id = nil
+	m.addhosting_pool_id = nil
+	m.clearedFields[usagelog.FieldHostingPoolID] = struct{}{}
+}
+
+// HostingPoolIDCleared returns if the "hosting_pool_id" field was cleared in this mutation.
+func (m *UsageLogMutation) HostingPoolIDCleared() bool {
+	_, ok := m.clearedFields[usagelog.FieldHostingPoolID]
+	return ok
+}
+
+// ResetHostingPoolID resets all changes to the "hosting_pool_id" field.
+func (m *UsageLogMutation) ResetHostingPoolID() {
+	m.hosting_pool_id = nil
+	m.addhosting_pool_id = nil
+	delete(m.clearedFields, usagelog.FieldHostingPoolID)
+}
+
+// SetHostingPoolName sets the "hosting_pool_name" field.
+func (m *UsageLogMutation) SetHostingPoolName(s string) {
+	m.hosting_pool_name = &s
+}
+
+// HostingPoolName returns the value of the "hosting_pool_name" field in the mutation.
+func (m *UsageLogMutation) HostingPoolName() (r string, exists bool) {
+	v := m.hosting_pool_name
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldHostingPoolName returns the old "hosting_pool_name" field's value of the UsageLog entity.
+// If the UsageLog object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UsageLogMutation) OldHostingPoolName(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldHostingPoolName is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldHostingPoolName requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldHostingPoolName: %w", err)
+	}
+	return oldValue.HostingPoolName, nil
+}
+
+// ClearHostingPoolName clears the value of the "hosting_pool_name" field.
+func (m *UsageLogMutation) ClearHostingPoolName() {
+	m.hosting_pool_name = nil
+	m.clearedFields[usagelog.FieldHostingPoolName] = struct{}{}
+}
+
+// HostingPoolNameCleared returns if the "hosting_pool_name" field was cleared in this mutation.
+func (m *UsageLogMutation) HostingPoolNameCleared() bool {
+	_, ok := m.clearedFields[usagelog.FieldHostingPoolName]
+	return ok
+}
+
+// ResetHostingPoolName resets all changes to the "hosting_pool_name" field.
+func (m *UsageLogMutation) ResetHostingPoolName() {
+	m.hosting_pool_name = nil
+	delete(m.clearedFields, usagelog.FieldHostingPoolName)
+}
+
+// SetHostingRoute sets the "hosting_route" field.
+func (m *UsageLogMutation) SetHostingRoute(s string) {
+	m.hosting_route = &s
+}
+
+// HostingRoute returns the value of the "hosting_route" field in the mutation.
+func (m *UsageLogMutation) HostingRoute() (r string, exists bool) {
+	v := m.hosting_route
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldHostingRoute returns the old "hosting_route" field's value of the UsageLog entity.
+// If the UsageLog object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UsageLogMutation) OldHostingRoute(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldHostingRoute is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldHostingRoute requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldHostingRoute: %w", err)
+	}
+	return oldValue.HostingRoute, nil
+}
+
+// ClearHostingRoute clears the value of the "hosting_route" field.
+func (m *UsageLogMutation) ClearHostingRoute() {
+	m.hosting_route = nil
+	m.clearedFields[usagelog.FieldHostingRoute] = struct{}{}
+}
+
+// HostingRouteCleared returns if the "hosting_route" field was cleared in this mutation.
+func (m *UsageLogMutation) HostingRouteCleared() bool {
+	_, ok := m.clearedFields[usagelog.FieldHostingRoute]
+	return ok
+}
+
+// ResetHostingRoute resets all changes to the "hosting_route" field.
+func (m *UsageLogMutation) ResetHostingRoute() {
+	m.hosting_route = nil
+	delete(m.clearedFields, usagelog.FieldHostingRoute)
+}
+
+// SetHostingFallbackReason sets the "hosting_fallback_reason" field.
+func (m *UsageLogMutation) SetHostingFallbackReason(s string) {
+	m.hosting_fallback_reason = &s
+}
+
+// HostingFallbackReason returns the value of the "hosting_fallback_reason" field in the mutation.
+func (m *UsageLogMutation) HostingFallbackReason() (r string, exists bool) {
+	v := m.hosting_fallback_reason
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldHostingFallbackReason returns the old "hosting_fallback_reason" field's value of the UsageLog entity.
+// If the UsageLog object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UsageLogMutation) OldHostingFallbackReason(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldHostingFallbackReason is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldHostingFallbackReason requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldHostingFallbackReason: %w", err)
+	}
+	return oldValue.HostingFallbackReason, nil
+}
+
+// ClearHostingFallbackReason clears the value of the "hosting_fallback_reason" field.
+func (m *UsageLogMutation) ClearHostingFallbackReason() {
+	m.hosting_fallback_reason = nil
+	m.clearedFields[usagelog.FieldHostingFallbackReason] = struct{}{}
+}
+
+// HostingFallbackReasonCleared returns if the "hosting_fallback_reason" field was cleared in this mutation.
+func (m *UsageLogMutation) HostingFallbackReasonCleared() bool {
+	_, ok := m.clearedFields[usagelog.FieldHostingFallbackReason]
+	return ok
+}
+
+// ResetHostingFallbackReason resets all changes to the "hosting_fallback_reason" field.
+func (m *UsageLogMutation) ResetHostingFallbackReason() {
+	m.hosting_fallback_reason = nil
+	delete(m.clearedFields, usagelog.FieldHostingFallbackReason)
 }
 
 // SetUserID sets the "user_id" field.
@@ -47668,7 +48445,19 @@ func (m *UsageLogMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *UsageLogMutation) Fields() []string {
-	fields := make([]string, 0, 47)
+	fields := make([]string, 0, 51)
+	if m.hosting_pool_id != nil {
+		fields = append(fields, usagelog.FieldHostingPoolID)
+	}
+	if m.hosting_pool_name != nil {
+		fields = append(fields, usagelog.FieldHostingPoolName)
+	}
+	if m.hosting_route != nil {
+		fields = append(fields, usagelog.FieldHostingRoute)
+	}
+	if m.hosting_fallback_reason != nil {
+		fields = append(fields, usagelog.FieldHostingFallbackReason)
+	}
 	if m.user != nil {
 		fields = append(fields, usagelog.FieldUserID)
 	}
@@ -47818,6 +48607,14 @@ func (m *UsageLogMutation) Fields() []string {
 // schema.
 func (m *UsageLogMutation) Field(name string) (ent.Value, bool) {
 	switch name {
+	case usagelog.FieldHostingPoolID:
+		return m.HostingPoolID()
+	case usagelog.FieldHostingPoolName:
+		return m.HostingPoolName()
+	case usagelog.FieldHostingRoute:
+		return m.HostingRoute()
+	case usagelog.FieldHostingFallbackReason:
+		return m.HostingFallbackReason()
 	case usagelog.FieldUserID:
 		return m.UserID()
 	case usagelog.FieldAPIKeyID:
@@ -47921,6 +48718,14 @@ func (m *UsageLogMutation) Field(name string) (ent.Value, bool) {
 // database failed.
 func (m *UsageLogMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
 	switch name {
+	case usagelog.FieldHostingPoolID:
+		return m.OldHostingPoolID(ctx)
+	case usagelog.FieldHostingPoolName:
+		return m.OldHostingPoolName(ctx)
+	case usagelog.FieldHostingRoute:
+		return m.OldHostingRoute(ctx)
+	case usagelog.FieldHostingFallbackReason:
+		return m.OldHostingFallbackReason(ctx)
 	case usagelog.FieldUserID:
 		return m.OldUserID(ctx)
 	case usagelog.FieldAPIKeyID:
@@ -48024,6 +48829,34 @@ func (m *UsageLogMutation) OldField(ctx context.Context, name string) (ent.Value
 // type.
 func (m *UsageLogMutation) SetField(name string, value ent.Value) error {
 	switch name {
+	case usagelog.FieldHostingPoolID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetHostingPoolID(v)
+		return nil
+	case usagelog.FieldHostingPoolName:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetHostingPoolName(v)
+		return nil
+	case usagelog.FieldHostingRoute:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetHostingRoute(v)
+		return nil
+	case usagelog.FieldHostingFallbackReason:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetHostingFallbackReason(v)
+		return nil
 	case usagelog.FieldUserID:
 		v, ok := value.(int64)
 		if !ok {
@@ -48361,6 +49194,9 @@ func (m *UsageLogMutation) SetField(name string, value ent.Value) error {
 // this mutation.
 func (m *UsageLogMutation) AddedFields() []string {
 	var fields []string
+	if m.addhosting_pool_id != nil {
+		fields = append(fields, usagelog.FieldHostingPoolID)
+	}
 	if m.addchannel_id != nil {
 		fields = append(fields, usagelog.FieldChannelID)
 	}
@@ -48432,6 +49268,8 @@ func (m *UsageLogMutation) AddedFields() []string {
 // was not set, or was not defined in the schema.
 func (m *UsageLogMutation) AddedField(name string) (ent.Value, bool) {
 	switch name {
+	case usagelog.FieldHostingPoolID:
+		return m.AddedHostingPoolID()
 	case usagelog.FieldChannelID:
 		return m.AddedChannelID()
 	case usagelog.FieldInputTokens:
@@ -48483,6 +49321,13 @@ func (m *UsageLogMutation) AddedField(name string) (ent.Value, bool) {
 // type.
 func (m *UsageLogMutation) AddField(name string, value ent.Value) error {
 	switch name {
+	case usagelog.FieldHostingPoolID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddHostingPoolID(v)
+		return nil
 	case usagelog.FieldChannelID:
 		v, ok := value.(int64)
 		if !ok {
@@ -48638,6 +49483,18 @@ func (m *UsageLogMutation) AddField(name string, value ent.Value) error {
 // mutation.
 func (m *UsageLogMutation) ClearedFields() []string {
 	var fields []string
+	if m.FieldCleared(usagelog.FieldHostingPoolID) {
+		fields = append(fields, usagelog.FieldHostingPoolID)
+	}
+	if m.FieldCleared(usagelog.FieldHostingPoolName) {
+		fields = append(fields, usagelog.FieldHostingPoolName)
+	}
+	if m.FieldCleared(usagelog.FieldHostingRoute) {
+		fields = append(fields, usagelog.FieldHostingRoute)
+	}
+	if m.FieldCleared(usagelog.FieldHostingFallbackReason) {
+		fields = append(fields, usagelog.FieldHostingFallbackReason)
+	}
 	if m.FieldCleared(usagelog.FieldRequestedModel) {
 		fields = append(fields, usagelog.FieldRequestedModel)
 	}
@@ -48718,6 +49575,18 @@ func (m *UsageLogMutation) FieldCleared(name string) bool {
 // error if the field is not defined in the schema.
 func (m *UsageLogMutation) ClearField(name string) error {
 	switch name {
+	case usagelog.FieldHostingPoolID:
+		m.ClearHostingPoolID()
+		return nil
+	case usagelog.FieldHostingPoolName:
+		m.ClearHostingPoolName()
+		return nil
+	case usagelog.FieldHostingRoute:
+		m.ClearHostingRoute()
+		return nil
+	case usagelog.FieldHostingFallbackReason:
+		m.ClearHostingFallbackReason()
+		return nil
 	case usagelog.FieldRequestedModel:
 		m.ClearRequestedModel()
 		return nil
@@ -48792,6 +49661,18 @@ func (m *UsageLogMutation) ClearField(name string) error {
 // It returns an error if the field is not defined in the schema.
 func (m *UsageLogMutation) ResetField(name string) error {
 	switch name {
+	case usagelog.FieldHostingPoolID:
+		m.ResetHostingPoolID()
+		return nil
+	case usagelog.FieldHostingPoolName:
+		m.ResetHostingPoolName()
+		return nil
+	case usagelog.FieldHostingRoute:
+		m.ResetHostingRoute()
+		return nil
+	case usagelog.FieldHostingFallbackReason:
+		m.ResetHostingFallbackReason()
+		return nil
 	case usagelog.FieldUserID:
 		m.ResetUserID()
 		return nil

@@ -86,6 +86,31 @@ func (s *APIKeyRepoSuite) TestGetByKey_NotFound() {
 	s.Require().Error(err, "expected error for non-existent key")
 }
 
+func (s *APIKeyRepoSuite) TestGetByKeyForAuth_PreservesHostingRoute() {
+	user := s.mustCreateUser("hosting-auth@test.com")
+	group := s.mustCreateGroup("hosting-auth-fallback")
+	rows, err := s.repo.sql.QueryContext(s.ctx, "INSERT INTO hosting_pools (user_id,name) VALUES ($1,'Auth pool') RETURNING id", user.ID)
+	s.Require().NoError(err)
+	var poolID int64
+	s.Require().True(rows.Next())
+	s.Require().NoError(rows.Scan(&poolID))
+	s.Require().NoError(rows.Close())
+	for _, key := range []*service.APIKey{
+		{Key: "sk-hosted-default", RouteMode: service.RouteModeHosted},
+		{Key: "sk-hosted-pool", RouteMode: service.RouteModeHosted, HostingPoolID: &poolID, HostingFallbackGroupID: &group.ID},
+		{Key: "sk-public-group", RouteMode: "group", GroupID: &group.ID},
+	} {
+		key.UserID, key.Name, key.Status = user.ID, key.Key, service.StatusActive
+		s.Require().NoError(s.repo.Create(s.ctx, key))
+		got, err := s.repo.GetByKeyForAuth(s.ctx, key.Key)
+		s.Require().NoError(err)
+		s.Require().Equal(key.RouteMode, got.RouteMode)
+		s.Require().Equal(key.HostingPoolID, got.HostingPoolID)
+		s.Require().Equal(key.HostingFallbackGroupID, got.HostingFallbackGroupID)
+		s.Require().Equal(key.GroupID, got.GroupID)
+	}
+}
+
 func (s *APIKeyRepoSuite) TestGetByKeyForAuth_PreservesMessagesDispatchModelConfig() {
 	user := s.mustCreateUser("getbykey-auth-dispatch@test.com")
 	group, err := s.client.Group.Create().

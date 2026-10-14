@@ -1,5 +1,5 @@
 <template>
-  <div v-if="!isDesktopViewport" class="space-y-3">
+  <div v-if="!showTable" class="space-y-3">
     <template v-if="loading">
       <div v-for="i in 5" :key="i" class="rounded-lg border border-gray-200 bg-white p-4 dark:border-dark-700 dark:bg-dark-900">
         <div class="space-y-3">
@@ -461,6 +461,8 @@ interface Props {
   columns: Column[]
   data: any[]
   loading?: boolean
+  /** Keep dense account lists in a horizontally scrollable table on small screens. */
+  mobileLayout?: 'cards' | 'table'
   stickyFirstColumn?: boolean
   stickyActionsColumn?: boolean
   expandableActions?: boolean
@@ -503,6 +505,7 @@ interface Props {
 
 const props = withDefaults(defineProps<Props>(), {
   loading: false,
+  mobileLayout: 'cards',
   stickyFirstColumn: true,
   stickyActionsColumn: true,
   expandableActions: true,
@@ -512,6 +515,7 @@ const props = withDefaults(defineProps<Props>(), {
   selectedKeys: () => []
 })
 
+const showTable = computed(() => isDesktopViewport.value || props.mobileLayout === 'table')
 const sortKey = ref<string>('')
 const sortOrder = ref<'asc' | 'desc'>('asc')
 const actionsExpanded = ref(false)
@@ -670,7 +674,7 @@ const columnsSignature = computed(() =>
 )
 
 watch(
-  isDesktopViewport,
+  showTable,
   async (isDesktop) => {
     detachDesktopTableTracking()
     if (!isDesktop) return

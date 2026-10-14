@@ -129,7 +129,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		)
 	}
 
-	stateStore := s.getOpenAIWSStateStore()
+	stateStore := s.getOpenAIWSStateStoreForContext(ctx)
 	groupID, enforceGroup := openAITurnAdmissionGroupFromContext(c)
 	sessionHash := s.GenerateSessionHash(c, nil)
 	if sessionHash == "" {

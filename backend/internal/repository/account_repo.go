@@ -43,8 +43,9 @@ import (
 //   - sql: 原生 SQL 执行器，用于复杂查询和批量操作
 //   - schedulerCache: 调度器缓存，用于在账号状态变更时同步快照
 type accountRepository struct {
-	client *dbent.Client // Ent ORM 客户端
-	sql    sqlExecutor   // 原生 SQL 执行接口
+	hostingEncryptor service.OpenAICredentialEncryptor
+	client           *dbent.Client // Ent ORM 客户端
+	sql              sqlExecutor   // 原生 SQL 执行接口
 	// schedulerCache 用于在账号状态变更时主动同步快照到缓存，
 	// 确保粘性会话能及时感知账号不可用状态。
 	// Used to proactively sync account snapshot to cache when status changes,
@@ -163,6 +164,9 @@ func createAccountRecord(ctx context.Context, client *dbent.Client, account *ser
 	}
 
 	builder := client.Account.Create().
+		SetNillableOwnerUserID(account.OwnerUserID).
+		SetNillableHostingPoolID(account.HostingPoolID).
+		SetNillableHostingIdentity(account.HostingIdentity).
 		SetName(account.Name).
 		SetNillableNotes(account.Notes).
 		SetPlatform(account.Platform).
@@ -555,7 +559,7 @@ func (r *accountRepository) updateLockedAccount(
 	explicitRateSyncEnabled *bool,
 	explicitRateMultiplier *float64,
 ) (*dbent.Account, error) {
-	extra, err := lockAndMergeAccountProbeExtra(ctx, client, account, explicitProbeEnabled, explicitRateSyncEnabled)
+	extra, err := lockAndMergeAccountProbeExtra(ctx, client, account, explicitProbeEnabled, explicitRateSyncEnabled, r.hostingEncryptor)
 	if err != nil {
 		return nil, err
 	}
@@ -651,8 +655,13 @@ func lockAndMergeAccountProbeExtra(
 	account *service.Account,
 	explicitProbeEnabled *bool,
 	explicitRateSyncEnabled *bool,
+	encryptors ...service.OpenAICredentialEncryptor,
 ) (map[string]any, error) {
-	credentials, err := json.Marshal(normalizeJSONMap(account.Credentials))
+	var enc service.OpenAICredentialEncryptor
+	if len(encryptors) > 0 {
+		enc = encryptors[0]
+	}
+	credentials, err := accountCredentialsSnapshot(ctx, client, enc, account)
 	if err != nil {
 		return nil, err
 	}
@@ -943,6 +952,18 @@ func decodeAccountExtraJSON(raw []byte) (any, bool, error) {
 }
 
 func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, credentials map[string]any) error {
+	if r.hostingEncryptor != nil {
+		owned, err := r.client.Account.Query().Where(dbaccount.IDEQ(id), dbaccount.OwnerUserIDNotNil()).Exist(ctx)
+		if err != nil {
+			return err
+		}
+		if owned {
+			credentials, err = encryptHostedTokens(r.hostingEncryptor, credentials)
+			if err != nil {
+				return err
+			}
+		}
+	}
 	payload, err := json.Marshal(normalizeJSONMap(credentials))
 	if err != nil {
 		return err
@@ -1279,7 +1300,9 @@ func accountStatusPredicate(status string) dbpredicate.Account {
 }
 
 func (r *accountRepository) accountListFilteredQuery(platform, accountType, status, search string, groupID int64, privacyMode string) *dbent.AccountQuery {
-	q := r.client.Account.Query()
+	// User-owned accounts are managed through the dedicated hosting directory.
+	// Apply the scope before counting/pagination and to bulk/filter list paths.
+	q := r.client.Account.Query().Where(dbaccount.OwnerUserIDIsNil())
 
 	if platform != "" {
 		q = q.Where(dbaccount.PlatformEQ(platform))
@@ -2340,6 +2363,7 @@ func (r *accountRepository) schedulableAccountsQuery(now time.Time) *dbent.Accou
 		Where(
 			dbaccount.StatusEQ(service.StatusActive),
 			dbaccount.SchedulableEQ(true),
+			dbaccount.OwnerUserIDIsNil(),
 			tempUnschedulablePredicate(),
 			notExpiredPredicate(now),
 			dbaccount.Or(dbaccount.OverloadUntilIsNil(), dbaccount.OverloadUntilLTE(now)),
@@ -2398,6 +2422,7 @@ func (r *accountRepository) ListSchedulableCapacityByGroupIDs(ctx context.Contex
 			AND a.deleted_at IS NULL
 			AND a.status = $2
 			AND a.schedulable = TRUE
+            AND a.owner_user_id IS NULL
 			AND (a.temp_unschedulable_until IS NULL OR a.temp_unschedulable_until <= $3)
 			AND (a.expires_at IS NULL OR a.expires_at > $3 OR a.auto_pause_on_expired = FALSE)
 			AND (a.overload_until IS NULL OR a.overload_until <= $3)
@@ -2446,6 +2471,7 @@ func (r *accountRepository) ListSchedulableByPlatform(ctx context.Context, platf
 			dbaccount.PlatformEQ(platform),
 			dbaccount.StatusEQ(service.StatusActive),
 			dbaccount.SchedulableEQ(true),
+			dbaccount.OwnerUserIDIsNil(),
 			tempUnschedulablePredicate(),
 			notExpiredPredicate(now),
 			dbaccount.Or(dbaccount.OverloadUntilIsNil(), dbaccount.OverloadUntilLTE(now)),
@@ -2480,6 +2506,7 @@ func (r *accountRepository) ListSchedulableByPlatforms(ctx context.Context, plat
 			dbaccount.PlatformIn(platforms...),
 			dbaccount.StatusEQ(service.StatusActive),
 			dbaccount.SchedulableEQ(true),
+			dbaccount.OwnerUserIDIsNil(),
 			tempUnschedulablePredicate(),
 			notExpiredPredicate(now),
 			dbaccount.Or(dbaccount.OverloadUntilIsNil(), dbaccount.OverloadUntilLTE(now)),
@@ -2500,6 +2527,7 @@ func (r *accountRepository) ListSchedulableUngroupedByPlatform(ctx context.Conte
 			dbaccount.PlatformEQ(platform),
 			dbaccount.StatusEQ(service.StatusActive),
 			dbaccount.SchedulableEQ(true),
+			dbaccount.OwnerUserIDIsNil(),
 			dbaccount.Not(dbaccount.HasAccountGroups()),
 			tempUnschedulablePredicate(),
 			notExpiredPredicate(now),
@@ -2524,6 +2552,7 @@ func (r *accountRepository) ListSchedulableUngroupedByPlatforms(ctx context.Cont
 			dbaccount.PlatformIn(platforms...),
 			dbaccount.StatusEQ(service.StatusActive),
 			dbaccount.SchedulableEQ(true),
+			dbaccount.OwnerUserIDIsNil(),
 			dbaccount.Not(dbaccount.HasAccountGroups()),
 			tempUnschedulablePredicate(),
 			notExpiredPredicate(now),
@@ -2575,6 +2604,7 @@ func (r *accountRepository) ListModelAvailabilityCandidates(
 	preds := []dbpredicate.Account{
 		dbaccount.StatusEQ(service.StatusActive),
 		dbaccount.SchedulableEQ(true),
+		dbaccount.OwnerUserIDIsNil(),
 		dbaccount.PlatformIn(platforms...),
 	}
 	if !includeGrouped {
@@ -3174,7 +3204,7 @@ func (r *accountRepository) updateUpstreamBillingProbeSnapshotInTx(
 	if err != nil {
 		return err
 	}
-	credentials, err := json.Marshal(account.Credentials)
+	credentials, err := accountCredentialsSnapshot(ctx, clientFromContext(ctx, r.client), r.hostingEncryptor, account)
 	if err != nil {
 		return err
 	}
@@ -3666,7 +3696,7 @@ func (r *accountRepository) queryAccountsByGroup(ctx context.Context, groupID in
 
 	// 通过 account_groups 中间表查询账号，并按需叠加状态/平台/调度能力过滤。
 	preds := make([]dbpredicate.Account, 0, 6)
-	preds = append(preds, dbaccount.DeletedAtIsNil())
+	preds = append(preds, dbaccount.DeletedAtIsNil(), dbaccount.OwnerUserIDIsNil())
 	if opts.status != "" {
 		preds = append(preds, dbaccount.StatusEQ(opts.status))
 	}
@@ -3980,6 +4010,9 @@ func accountEntityToService(m *dbent.Account) *service.Account {
 
 	return &service.Account{
 		ID:                      m.ID,
+		OwnerUserID:             m.OwnerUserID,
+		HostingPoolID:           m.HostingPoolID,
+		HostingIdentity:         m.HostingIdentity,
 		Name:                    m.Name,
 		Notes:                   m.Notes,
 		Platform:                m.Platform,

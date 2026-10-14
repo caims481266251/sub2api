@@ -64,6 +64,7 @@
                   'sidebar-link-collapsed': sidebarCollapsed
                 }"
                 :title="sidebarCollapsed ? item.label : undefined"
+                :aria-expanded="!sidebarCollapsed && isGroupExpanded(item)"
                 @click="handleGroupClick(item)"
               >
                 <component :is="item.icon" class="h-5 w-5 flex-shrink-0" />
@@ -209,6 +210,7 @@
 </template>
 
 <script setup lang="ts">
+import { hostingAPI } from '@/api/hosting'
 import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
@@ -773,6 +775,8 @@ const supportTicketStore = useSupportTicketStore()
 const flagOpsMonitoring = () => adminSettingsStore.opsMonitoringEnabled
 const flagAdminPayment = () => adminSettingsStore.paymentEnabled
 const flagBatchImageAccess = () => canUseBatchImage.value
+const hostingEnabled = ref(false)
+const flagHosting = () => hostingEnabled.value
 
 // buildSelfNavItems 构造用户自己的导航项（用户端主菜单和管理员的"我的账户"子菜单共享这组声明）。
 // withDashboard=true 时包含仪表盘（用户端），false 时不含（管理员的个人区已经有独立仪表盘入口）。
@@ -786,6 +790,7 @@ function buildSelfNavItems(withDashboard: boolean): NavItem[] {
   }
   items.push(
     { path: '/keys', label: t('nav.apiKeys'), icon: KeyIcon },
+    { path: '/hosting', label: t('hosting.title'), icon: GlobeIcon, hideInSimpleMode: true, featureFlag: flagHosting },
     { path: '/batch-image', label: t('nav.batchImage'), icon: BatchImageIcon, hideInSimpleMode: true, featureFlag: flagBatchImageAccess },
     { path: '/usage', label: t('nav.usage'), icon: ChartIcon, hideInSimpleMode: !authStore.isObserver },
     { path: '/available-channels', label: t('nav.availableChannels'), icon: ChannelIcon, hideInSimpleMode: true, featureFlag: flagAvailableChannels },
@@ -857,6 +862,11 @@ const adminNavItems = computed((): NavItem[] => {
     // 「仅充值」站点连管理端的「订阅管理」入口也一并收起（路由本身不拦截）。
     { path: '/admin/subscriptions', label: t('nav.subscriptions'), icon: CreditCardIcon, hideInSimpleMode: true, featureFlag: flagSubscription },
     { path: '/admin/accounts', label: t('nav.accounts'), icon: GlobeIcon },
+    { path: '/admin/hosting', label: t('hosting.adminTitle'), icon: GlobeIcon, hideInSimpleMode: true, expandOnly: true, children: [
+      { path: '/admin/hosting/accounts', label: t('hosting.adminAccountsNav'), icon: GlobeIcon },
+      { path: '/admin/hosting/users', label: t('hosting.adminUsersNav'), icon: UsersIcon },
+      { path: '/admin/hosting/settings', label: t('hosting.adminSettingsNav'), icon: CogIcon },
+    ] },
     { path: '/admin/smart-ops', label: t('accountOps.smartTitle'), icon: SmartOpsIcon, expandOnly: true, children: [
       { path: '/admin/auto-config', label: t('autoConfig.title'), icon: AccountOpsIcon },
       { path: '/admin/priority-scheduling', label: t('priorityScheduling.title'), icon: AccountOpsIcon },
@@ -1047,6 +1057,7 @@ watch(
 )
 
 onMounted(() => {
+  if (!authStore.isSimpleMode && !authStore.isObserver) void hostingAPI.status().then(s => { hostingEnabled.value = s.enabled }).catch(() => { hostingEnabled.value = false })
   void refreshBatchImageAccess()
   if (isAdmin.value) {
     adminSettingsStore.fetch()

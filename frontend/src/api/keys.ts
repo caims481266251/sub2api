@@ -67,9 +67,10 @@ export async function create(
   quota?: number,
   expiresInDays?: number,
   rateLimitData?: { rate_limit_5h?: number; rate_limit_1d?: number; rate_limit_7d?: number },
-  concurrencyLimit: number = 0
+  concurrencyLimit: number = 0,
+  hosting?: Pick<CreateApiKeyRequest, 'route_mode' | 'hosting_pool_id' | 'hosting_fallback_group_id' | 'hosting_fallback_enabled'>
 ): Promise<ApiKey> {
-  const payload: CreateApiKeyRequest = { name, concurrency_limit: concurrencyLimit }
+  const payload: CreateApiKeyRequest = { name, concurrency_limit: concurrencyLimit, ...hosting }
   if (groupId !== undefined) {
     payload.group_id = groupId
   }

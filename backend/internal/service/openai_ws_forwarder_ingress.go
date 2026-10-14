@@ -1123,7 +1123,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 
 	useHTTPBridge := forceHTTPBridge || s.shouldBridgeOpenAIWSHTTP(account, firstPayload.payloadBytes, firstPayload.previousResponseID)
 	turnState := strings.TrimSpace(c.GetHeader(openAIWSTurnStateHeader))
-	stateStore := s.getOpenAIWSStateStore()
+	stateStore := s.getOpenAIWSStateStoreForContext(ctx)
 	groupID, enforceGroup := openAITurnAdmissionGroupFromContext(c)
 	apiKeyID := getAPIKeyIDFromContext(c)
 	storeDisabledConnMode := s.openAIWSStoreDisabledConnMode()

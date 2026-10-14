@@ -47,7 +47,7 @@ func (s *OpenAIGatewayService) ListPluginAccounts(ctx context.Context, scope Plu
 		}
 		for i := range accounts {
 			account := accounts[i]
-			if account.IsShadow() {
+			if account.IsShadow() || account.OwnerUserID != nil {
 				continue
 			}
 			// Defense-in-depth: the contract exposes only active accounts (paused
@@ -111,6 +111,9 @@ func accountReadableSnapshotJSON(account *Account) []byte {
 	// Creation-only quality policy is not part of the plugin account directory.
 	clone.InitialQualityPlan = nil
 	clone.Credentials = nil
+	clone.OwnerUserID = nil
+	clone.HostingIdentity = nil
+	clone.HostingPoolID = nil
 	clone.Groups = nil
 	clone.AccountGroups = nil
 	clone.Extra = make(map[string]any, len(account.Extra))
@@ -138,7 +141,7 @@ func (s *OpenAIGatewayService) ResolvePluginOutboundIdentity(ctx context.Context
 	if err != nil {
 		return nil, err
 	}
-	if account == nil || account.IsShadow() {
+	if account == nil || account.IsShadow() || account.OwnerUserID != nil {
 		return nil, nil
 	}
 	// Scope is the authoritative permission boundary: refuse any account the

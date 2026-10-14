@@ -19,6 +19,11 @@ import { resolveRouteDocumentTitle } from './title'
  * Route definitions with lazy loading
  */
 const routes: RouteRecordRaw[] = [
+  { path: '/hosting', name: 'Hosting', component: () => import('@/views/user/HostingView.vue'), meta: { requiresAuth: true, title: 'Account hosting', titleKey: 'hosting.title' } },
+  { path: '/admin/hosting', redirect: route => ({ path: '/admin/hosting/accounts', query: route.query }) },
+  { path: '/admin/hosting/accounts', name: 'AdminHosting', component: () => import('@/views/admin/HostingAccountsView.vue'), meta: { requiresAuth: true, requiresAdmin: true, title: 'Hosted accounts', titleKey: 'hosting.adminAccountsNav' } },
+  { path: '/admin/hosting/users', name: 'AdminHostingUsers', component: () => import('@/views/admin/HostingUsersView.vue'), meta: { requiresAuth: true, requiresAdmin: true, title: 'Hosting user settings', titleKey: 'hosting.adminUsersNav' } },
+  { path: '/admin/hosting/settings', name: 'AdminHostingSettings', component: () => import('@/views/admin/HostingSettingsView.vue'), meta: { requiresAuth: true, requiresAdmin: true, title: 'Hosting configuration', titleKey: 'hosting.adminSettingsNav' } },
   // ==================== Setup Routes ====================
   {
     path: '/setup',

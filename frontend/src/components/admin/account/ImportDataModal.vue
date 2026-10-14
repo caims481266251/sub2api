@@ -20,40 +20,15 @@
         {{ t('admin.accounts.dataImportWarning') }}
       </div>
 
-      <div>
-        <label class="input-label">{{ t('admin.accounts.dataImportFile') }}</label>
-        <div
-          class="flex items-center justify-between gap-3 rounded-lg border border-dashed px-4 py-3 transition-colors"
-          :class="dragActive
-            ? 'border-primary-400 bg-primary-50/70 dark:border-primary-500 dark:bg-primary-900/20'
-            : 'border-gray-300 bg-gray-50 dark:border-dark-600 dark:bg-dark-800'"
-          @dragenter.prevent="handleDragEnter"
-          @dragover.prevent
-          @dragleave.prevent="handleDragLeave"
-          @drop.prevent="handleDrop"
-        >
-          <div class="min-w-0">
-            <div class="truncate text-sm text-gray-700 dark:text-dark-200" :title="fileListTitle">
-              {{ selectedFilesLabel || t('admin.accounts.dataImportSelectFile') }}
-            </div>
-            <div class="text-xs text-gray-500 dark:text-dark-400">
-              JSON (.json)
-              <span v-if="files.length > 1"> · {{ fileListTitle }}</span>
-            </div>
-          </div>
-          <button type="button" class="btn btn-secondary shrink-0" @click="openFilePicker">
-            {{ t('common.chooseFile') }}
-          </button>
-        </div>
-        <input
-          ref="fileInput"
-          type="file"
-          class="hidden"
-          accept="application/json,.json"
-          multiple
-          @change="handleFileChange"
-        />
-      </div>
+      <JsonFilePicker
+        v-if="show"
+        :label="t('admin.accounts.dataImportFile')"
+        :empty-label="t('admin.accounts.dataImportSelectFile')"
+        :selected-label="selectedFilesLabel"
+        :files="files"
+        :disabled="importing"
+        @select="setSelectedFiles"
+      />
 
       <div
         v-if="result"
@@ -103,6 +78,7 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
+import JsonFilePicker from '@/components/common/JsonFilePicker.vue'
 import { adminAPI } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
@@ -136,18 +112,14 @@ watch(() => props.show, async (show) => {
 
 const importing = ref(false)
 const files = ref<File[]>([])
-const dragDepth = ref(0)
-const dragActive = computed(() => dragDepth.value > 0)
 const hasCreatedData = ref(false)
 const result = ref<AdminDataImportResult | null>(null)
 
-const fileInput = ref<HTMLInputElement | null>(null)
 const selectedFilesLabel = computed(() => {
   if (files.value.length === 0) return ''
   if (files.value.length === 1) return files.value[0]?.name || ''
   return t('admin.accounts.selectedCount', { count: files.value.length })
 })
-const fileListTitle = computed(() => files.value.map((item) => item.name).join(', '))
 
 const errorItems = computed(() => result.value?.errors || [])
 
@@ -156,25 +128,11 @@ watch(
   (open) => {
     if (open) {
       files.value = []
-      dragDepth.value = 0
       hasCreatedData.value = false
       result.value = null
-      if (fileInput.value) {
-        fileInput.value.value = ''
-      }
     }
   }
 )
-
-const openFilePicker = () => {
-  fileInput.value?.click()
-}
-
-const handleFileChange = (event: Event) => {
-  const target = event.target as HTMLInputElement
-  setSelectedFiles(target.files)
-  target.value = ''
-}
 
 const handleClose = () => {
   if (importing.value) return
@@ -205,21 +163,6 @@ const setSelectedFiles = (sourceFiles: FileList | File[] | null | undefined) => 
   }
   files.value = picked
   result.value = null
-}
-
-const handleDragEnter = () => {
-  if (importing.value) return
-  dragDepth.value += 1
-}
-
-const handleDragLeave = () => {
-  dragDepth.value = Math.max(0, dragDepth.value - 1)
-}
-
-const handleDrop = (event: DragEvent) => {
-  dragDepth.value = 0
-  if (importing.value) return
-  setSelectedFiles(event.dataTransfer?.files)
 }
 
 const readFileAsText = async (sourceFile: File): Promise<string> => {

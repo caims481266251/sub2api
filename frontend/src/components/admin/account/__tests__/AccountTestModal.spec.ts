@@ -119,6 +119,21 @@ describe('AccountTestModal', () => {
     vi.restoreAllMocks()
   })
 
+  it('uses the hosted endpoint and a fixed diagnostic prompt', async () => {
+    const loadModels = vi.fn().mockResolvedValue([{ id: 'gpt-5', display_name: 'GPT-5' }])
+    const wrapper = mountModal({ id: 25, name: 'Hosted Codex', platform: 'openai', type: 'oauth', status: 'active' })
+    await wrapper.setProps({ diagnosticOnly: true, loadModels, testPath: '/hosting/accounts/25/operations/test', show: true })
+    await flushPromises()
+    expect(wrapper.find('textarea').exists()).toBe(false)
+    expect(wrapper.text()).toContain('hosting.diagnosticPrompt')
+    await wrapper.findAll('button').find(button => button.text().includes('admin.accounts.startTest'))!.trigger('click')
+    await flushPromises()
+    const [url, request] = (global.fetch as any).mock.calls[0]
+    expect(url).toContain('/hosting/accounts/25/operations/test')
+    expect(JSON.parse(request.body)).toEqual({ model_id: 'gpt-5', prompt: 'Reply with OK only.', mode: 'default' })
+    expect(loadModels).toHaveBeenCalledWith(25)
+  })
+
   it('gemini 图片模型测试会携带提示词并渲染图片预览', async () => {
     const wrapper = mountModal()
     await wrapper.setProps({ show: true })

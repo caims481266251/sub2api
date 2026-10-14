@@ -32,7 +32,7 @@
               : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400'
           ]"
         >
-          {{ account.status }}
+          {{ hosting ? t(`hosting.states.${account.status}`) : account.status }}
         </span>
       </div>
 
@@ -50,22 +50,22 @@
           >
             <div class="mb-2 flex items-center justify-between">
               <span class="text-xs font-medium text-gray-500 dark:text-gray-400">{{
-                t('admin.accounts.stats.totalCost')
+                hosting ? t('hosting.statsTotalBase') : t('admin.accounts.stats.totalCost')
               }}</span>
               <div class="rounded-lg bg-emerald-100 p-1.5 dark:bg-emerald-900/30">
                 <Icon name="dollar" size="sm" class="text-emerald-600 dark:text-emerald-400" />
               </div>
             </div>
-            <p class="text-2xl font-bold text-gray-900 dark:text-white">
+            <p class="break-all text-2xl font-bold text-gray-900 dark:text-white">
               ${{ formatCost(stats.summary.total_cost) }}
             </p>
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              {{ t('admin.accounts.stats.accumulatedCost') }}
+              {{ hosting ? baseCostLabel : t('admin.accounts.stats.accumulatedCost') }}
               <span class="text-gray-400 dark:text-gray-500">
-                ({{ t('usage.userBilled') }}: ${{ formatCost(stats.summary.total_user_cost) }} ·
+                ({{ userCostLabel }}: ${{ formatCost(stats.summary.total_user_cost) }}<template v-if="!hosting"> ·
                 {{ t('admin.accounts.stats.standardCost') }}: ${{
                   formatCost(stats.summary.total_standard_cost)
-                }})
+                }}</template>)
               </span>
             </p>
           </div>
@@ -82,7 +82,7 @@
                 <Icon name="bolt" size="sm" class="text-blue-600 dark:text-blue-400" />
               </div>
             </div>
-            <p class="text-2xl font-bold text-gray-900 dark:text-white">
+            <p class="break-all text-2xl font-bold text-gray-900 dark:text-white">
               {{ formatNumber(stats.summary.total_requests) }}
             </p>
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
@@ -106,7 +106,7 @@
                 />
               </div>
             </div>
-            <p class="text-2xl font-bold text-gray-900 dark:text-white">
+            <p class="break-all text-2xl font-bold text-gray-900 dark:text-white">
               ${{ formatCost(stats.summary.avg_daily_cost) }}
             </p>
              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
@@ -116,7 +116,7 @@
                 })
               }}
               <span class="text-gray-400 dark:text-gray-500">
-                ({{ t('usage.userBilled') }}: ${{ formatCost(stats.summary.avg_daily_user_cost) }})
+                ({{ userCostLabel }}: ${{ formatCost(stats.summary.avg_daily_user_cost) }})
               </span>
             </p>
           </div>
@@ -145,7 +145,7 @@
                 </svg>
               </div>
             </div>
-            <p class="text-2xl font-bold text-gray-900 dark:text-white">
+            <p class="break-all text-2xl font-bold text-gray-900 dark:text-white">
               {{ formatNumber(Math.round(stats.summary.avg_daily_requests)) }}
             </p>
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
@@ -168,13 +168,13 @@
             </div>
             <div class="space-y-2">
               <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.accountBilled') }}</span>
+                <span class="text-xs text-gray-500 dark:text-gray-400">{{ baseCostLabel }}</span>
                 <span class="text-sm font-semibold text-gray-900 dark:text-white"
                   >${{ formatCost(stats.summary.today?.cost || 0) }}</span
                 >
               </div>
               <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.userBilled') }}</span>
+                <span class="text-xs text-gray-500 dark:text-gray-400">{{ userCostLabel }}</span>
                 <span class="text-sm font-semibold text-gray-900 dark:text-white"
                   >${{ formatCost(stats.summary.today?.user_cost || 0) }}</span
                 >
@@ -218,13 +218,13 @@
                 }}</span>
               </div>
               <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.accountBilled') }}</span>
+                <span class="text-xs text-gray-500 dark:text-gray-400">{{ baseCostLabel }}</span>
                 <span class="text-sm font-semibold text-orange-600 dark:text-orange-400"
                   >${{ formatCost(stats.summary.highest_cost_day?.cost || 0) }}</span
                 >
               </div>
               <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.userBilled') }}</span>
+                <span class="text-xs text-gray-500 dark:text-gray-400">{{ userCostLabel }}</span>
                 <span class="text-sm font-semibold text-gray-900 dark:text-white"
                   >${{ formatCost(stats.summary.highest_cost_day?.user_cost || 0) }}</span
                 >
@@ -272,13 +272,13 @@
                 }}</span>
               </div>
               <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.accountBilled') }}</span>
+                <span class="text-xs text-gray-500 dark:text-gray-400">{{ baseCostLabel }}</span>
                 <span class="text-sm font-semibold text-gray-900 dark:text-white"
                   >${{ formatCost(stats.summary.highest_request_day?.cost || 0) }}</span
                 >
               </div>
               <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.userBilled') }}</span>
+                <span class="text-xs text-gray-500 dark:text-gray-400">{{ userCostLabel }}</span>
                 <span class="text-sm font-semibold text-gray-900 dark:text-white"
                   >${{ formatCost(stats.summary.highest_request_day?.user_cost || 0) }}</span
                 >
@@ -409,21 +409,29 @@
         </div>
 
         <!-- Model Distribution -->
-        <ModelDistributionChart :model-stats="stats.models" :loading="false" />
+        <ModelDistributionChart :model-stats="stats.models" :loading="false" :enable-breakdown="!hosting" :show-account-cost="!hosting" :cost-precision="hosting ? 8 : undefined" />
 
         <EndpointDistributionChart
+          :enable-breakdown="!hosting"
+          :cost-precision="hosting ? 8 : undefined"
           :endpoint-stats="stats.endpoints || []"
           :loading="false"
           :title="t('usage.inboundEndpoint')"
         />
 
         <EndpointDistributionChart
+          :enable-breakdown="!hosting"
+          :cost-precision="hosting ? 8 : undefined"
           :endpoint-stats="stats.upstream_endpoints || []"
           :loading="false"
           :title="t('usage.upstreamEndpoint')"
         />
       </template>
 
+      <div v-else-if="error" role="alert" class="py-12 text-center text-red-600">
+        {{ t('hosting.statsLoadFailed') }}
+        <button class="btn btn-secondary ml-3" @click="loadStats">{{ t('common.refresh') }}</button>
+      </div>
       <!-- No Data State -->
       <div
         v-else-if="!loading"
@@ -435,7 +443,8 @@
     </div>
 
     <template #footer>
-      <div class="flex justify-end">
+      <div class="flex justify-end gap-3">
+        <slot name="actions" />
         <button
           @click="handleClose"
           class="rounded-lg bg-gray-100 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-200 dark:bg-dark-600 dark:text-gray-300 dark:hover:bg-dark-500"
@@ -485,13 +494,19 @@ const { t } = useI18n()
 
 const props = defineProps<{
   show: boolean
-  account: Account | null
+  account: Pick<Account, 'id' | 'name'> & { status: string } | null
+  hosting?: boolean
+  loadAccountStats?: (id: number, days: number) => Promise<AccountUsageStatsResponse>
 }>()
 
 const emit = defineEmits<{
   (e: 'close'): void
 }>()
 
+const baseCostLabel = computed(() => props.hosting ? t('hosting.statsBase') : t('usage.accountBilled'))
+const userCostLabel = computed(() => props.hosting ? t('hosting.statsFee') : t('usage.userBilled'))
+const error = ref(false)
+let requestVersion = 0
 const loading = ref(false)
 const stats = ref<AccountUsageStatsResponse | null>(null)
 
@@ -514,7 +529,7 @@ const trendChartData = computed(() => {
     labels: stats.value.history.map((h) => h.label),
     datasets: [
       {
-        label: t('usage.accountBilled') + ' (USD)',
+        label: baseCostLabel.value + ' (USD)',
         data: stats.value.history.map((h) => h.actual_cost),
         borderColor: '#3b82f6',
         backgroundColor: 'rgba(59, 130, 246, 0.1)',
@@ -523,7 +538,7 @@ const trendChartData = computed(() => {
         yAxisID: 'y'
       },
       {
-        label: t('usage.userBilled') + ' (USD)',
+        label: userCostLabel.value + ' (USD)',
         data: stats.value.history.map((h) => h.user_cost),
         borderColor: '#10b981',
         backgroundColor: 'rgba(16, 185, 129, 0.08)',
@@ -609,7 +624,7 @@ const lineChartOptions = computed(() => ({
       },
       title: {
         display: true,
-        text: t('usage.accountBilled') + ' (USD)',
+        text: baseCostLabel.value + ' (USD)',
         color: '#3b82f6',
         font: {
           size: 11
@@ -642,31 +657,24 @@ const lineChartOptions = computed(() => ({
   }
 }))
 
-// Load stats when modal opens
-watch(
-  () => props.show,
-  async (newVal) => {
-    if (newVal && props.account) {
-      await loadStats()
-    } else {
-      stats.value = null
-    }
-  }
-)
-
 const loadStats = async () => {
-  if (!props.account) return
-
+  const version = ++requestVersion
+  stats.value = null
+  error.value = false
+  loading.value = false
+  if (!props.show || !props.account) return
   loading.value = true
   try {
-    stats.value = await adminAPI.accounts.getStats(props.account.id, 30)
-  } catch (error) {
-    console.error('Failed to load account stats:', error)
-    stats.value = null
+    const result = await (props.loadAccountStats ?? adminAPI.accounts.getStats)(props.account.id, 30)
+    if (version === requestVersion) stats.value = result
+  } catch {
+    if (version === requestVersion) error.value = true
   } finally {
-    loading.value = false
+    if (version === requestVersion) loading.value = false
   }
 }
+
+watch(() => [props.show, props.account?.id, props.loadAccountStats], loadStats, { immediate: true })
 
 const handleClose = () => {
   emit('close')
@@ -674,6 +682,7 @@ const handleClose = () => {
 
 // Format helpers
 const formatCost = (value: number): string => {
+  if (props.hosting) return value.toFixed(8)
   if (value >= 1000) {
     return (value / 1000).toFixed(2) + 'K'
   } else if (value >= 1) {

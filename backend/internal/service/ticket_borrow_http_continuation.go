@@ -60,7 +60,7 @@ func (s *OpenAIGatewayService) PrepareBorrowHTTPContinuation(ctx context.Context
 	if previous == "" || s.borrowRoutes == nil || strings.TrimSpace(model) == "" || borrowInternal(ctx) {
 		return ctx, body, false, nil
 	}
-	id, err := s.getOpenAIWSStateStore().GetResponseAccount(ctx, derefGroupID(groupID), previous)
+	id, err := s.getOpenAIWSStateStoreForContext(ctx).GetResponseAccount(ctx, derefGroupID(groupID), previous)
 	if err != nil {
 		return ctx, body, false, borrowAdmissionError(err)
 	}
@@ -71,7 +71,7 @@ func (s *OpenAIGatewayService) PrepareBorrowHTTPContinuation(ctx context.Context
 	if err != nil {
 		return ctx, body, false, borrowAdmissionError(err)
 	}
-	if a == nil || !a.IsOpenAI() || !a.UsesOpenAICodexProtocol() {
+	if a == nil || !HostingAccountAllowed(ctx, a) || !a.IsOpenAI() || !a.UsesOpenAICodexProtocol() {
 		return ctx, body, false, nil
 	}
 	enabled, err := s.borrowRoutes.Enabled(ctx, id)

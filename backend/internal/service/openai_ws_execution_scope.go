@@ -146,10 +146,16 @@ func resolveOpenAIWSExecutionScope(c *gin.Context, body []byte, apiKeyID int64) 
 	lane := resolveOpenAIWSExecutionLane(c, body)
 	if threadID = resolveOpenAIWSClientThreadID(c, body); threadID != "" {
 		scope, _ = deriveOpenAISessionHashes(openAIWSExecutionScopeSeed(apiKeyID, "thread", threadID, lane))
+		if c != nil {
+			scope = scopeHostingSessionHash(c.Request.Context(), scope)
+		}
 		return scope, threadID
 	}
 	if sessionID := strings.TrimSpace(explicitOpenAIRequestSessionID(c, body)); sessionID != "" {
 		scope, _ = deriveOpenAISessionHashes(openAIWSExecutionScopeSeed(apiKeyID, "session", sessionID, lane))
+		if c != nil {
+			scope = scopeHostingSessionHash(c.Request.Context(), scope)
+		}
 		return scope, ""
 	}
 	return "", ""

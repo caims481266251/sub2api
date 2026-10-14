@@ -133,6 +133,7 @@ deploy/docker-compose.override.yml
 .gocache/
 vite.config.js
 docs/*
+!docs/hosting-openai-parity.md
 !docs/openai-ws-sse-acceleration.md
 !docs/openai-outbound-identity.md
 !docs/openai-session-affinity.md
@@ -177,6 +178,7 @@ issues/
 !docs/codex-ticket-pinning.md
 
 !docs/account-auto-config.md
+!docs/account-hosting.md
 !docs/screenshots/auto-config/
 
 # Runtime credential encryption keys must never enter source control.

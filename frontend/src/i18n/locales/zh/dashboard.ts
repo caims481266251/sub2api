@@ -66,6 +66,8 @@ export default {
 
   // API Keys
   keys: {
+    formUsageLimits: '用量与有效期',
+    formSecurity: '安全与自定义',
     title: 'API 密钥',
     description: '管理您的 API 密钥和访问令牌',
     searchPlaceholder: '搜索名称或Key...',

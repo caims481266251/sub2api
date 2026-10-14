@@ -43,6 +43,17 @@ func queueAuthTestKey(status string, limit int) *service.APIKey {
 	return apiKey
 }
 
+func TestHostingPoolQueueIdentityCapturesChanges(t *testing.T) {
+	pool := int64(31)
+	key := &service.APIKey{ID: 1, UserID: 7, RouteMode: service.RouteModeHosted, HostingPoolID: &pool}
+	identity := captureAPIKeyQueueIdentity(key)
+	require.False(t, apiKeyQueueCoreIdentityChanged(identity, key))
+	pool = 32
+	require.True(t, apiKeyQueueCoreIdentityChanged(identity, key), "pool binding is captured by value before a queue or WS turn")
+	key.HostingPoolID = nil
+	require.True(t, apiKeyQueueCoreIdentityChanged(identity, key))
+}
+
 func TestNewAPIKeyQueueAuthRevalidatorRejectsDisabledKey(t *testing.T) {
 	current := queueAuthTestKey(service.StatusActive, 1)
 	repo := &stubApiKeyRepo{getByKey: func(context.Context, string) (*service.APIKey, error) {

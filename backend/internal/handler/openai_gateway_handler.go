@@ -19,6 +19,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/requestmodel"
@@ -987,7 +988,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		}
 		// Select account supporting the requested model
 		reqLog.Debug("openai.account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
-		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
+		selection, scheduleDecision, err := h.selectHostedAccount(apiKey, switchCount, maxAccountSwitches,
 			openAIModelFailoverSelectionContext(c.Request.Context(), lastFailoverErr),
 			apiKey.GroupID,
 			previousResponseID,
@@ -1007,6 +1008,28 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			}
 			if borrowContinuationUnsent && h.finishBorrowHTTPContinuationFailure(c, err, streamStarted) {
 				return
+			}
+			if switched, fallbackErr := h.tryHostedFallback(c, c.Request.Context(), err, reqModel, reqStream, streamStarted, false); fallbackErr != nil {
+				status, code, message := hostingGatewayError(fallbackErr)
+				h.handleStreamingAwareError(c, status, code, message, streamStarted)
+				return
+			} else if switched {
+				channelMapping, _ = h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
+				fallbackCtx, fallbackAt := h.gatewayService.WithOpenAITurnPricingContext(c.Request.Context(), apiKey.GroupID)
+				pricingAt = fallbackAt
+				c.Request = c.Request.WithContext(fallbackCtx)
+				forwardModel = openAIChannelForwardModel(channelMapping, reqModel)
+				c.Request = c.Request.WithContext(service.WithOpenAIForwardModel(c.Request.Context(), forwardModel, legacyCompact))
+				forwardBody = openAIModelMappedBody(body, channelMapping.Mapped, channelMapping.MappedModel, h.gatewayService.ReplaceModelInBody)
+				if capped, changed, policyErr := applyOpenAIReasoningEffortPolicyForRequest(c, apiKey, forwardBody); policyErr != nil {
+					respondOpenAIReasoningEffortPolicyError(c, policyErr, h.errorResponse)
+					return
+				} else if changed {
+					forwardBody = capped
+				}
+				failedAccountIDs = make(map[int64]struct{})
+				switchCount = 0
+				continue
 			}
 			if borrowBusinessSelectionFallback(c, err, failedAccountIDs) {
 				continue
@@ -1195,10 +1218,11 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
 			sessionID := service.ExtractOpenAIClientSessionID(c, sessionHashBody)
 			cyberBlocked := service.GetOpsCyberPolicy(c) != nil
+			billingKeySnapshot := snapshotHostedKey(apiKey)
 			h.submitOpenAIUsageRecordTask(c.Request.Context(), res, func(ctx context.Context) {
 				if err := h.gatewayService.RecordUsage(ctx, &service.OpenAIRecordUsageInput{
 					Result:             res,
-					APIKey:             apiKey,
+					APIKey:             billingKeySnapshot,
 					User:               apiKey.User,
 					Account:            account,
 					Subscription:       subscription,
@@ -1319,12 +1343,12 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					h.gatewayService.RecordOpenAIAccountSwitch()
 					failedAccountIDs[account.ID] = struct{}{}
 					lastFailoverErr = failoverErr
-					if switchCount >= maxAccountSwitches {
+					if switchCount >= maxAccountSwitches && !canTryHostedFallback(apiKey) {
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
 					switchCount++
-					if h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount, &oauth429FailoverState) {
+					if h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount, &oauth429FailoverState) && markHostedPoolExhausted(apiKey, &switchCount, maxAccountSwitches) {
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
@@ -1700,7 +1724,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			currentRoutingModel = effectiveMappedModel
 		}
 		reqLog.Debug("openai_messages.account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
-		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
+		selection, scheduleDecision, err := h.selectHostedAccount(apiKey, switchCount, maxAccountSwitches,
 			openAIModelFailoverSelectionContext(c.Request.Context(), lastFailoverErr),
 			apiKey.GroupID,
 			"", // no previous_response_id
@@ -1715,6 +1739,21 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			requestPlatform,
 		)
 		if err != nil {
+			if switched, fallbackErr := h.tryHostedFallback(c, c.Request.Context(), err, reqModel, reqStream, streamStarted, false); fallbackErr != nil {
+				status, code, message := hostingGatewayError(fallbackErr)
+				h.anthropicStreamingAwareError(c, status, code, message, streamStarted)
+				return
+			} else if switched {
+				channelMappingMsg, _ = h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
+				fallbackCtx, fallbackAt := h.gatewayService.WithOpenAITurnPricingContext(c.Request.Context(), apiKey.GroupID)
+				pricingAt = fallbackAt
+				c.Request = c.Request.WithContext(fallbackCtx)
+				effectiveMappedModel = channelMappingMsg.MappedModel
+				bindOpenAIReasoningEffortPolicyForMessagesRequest(c, apiKey, body)
+				failedAccountIDs = make(map[int64]struct{})
+				switchCount = 0
+				continue
+			}
 			if borrowBusinessSelectionFallback(c, err, failedAccountIDs) {
 				continue
 			}
@@ -1855,10 +1894,11 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
 			sessionID := service.ExtractOpenAIClientSessionID(c, body)
 			cyberBlocked := service.GetOpsCyberPolicy(c) != nil
+			billingKeySnapshot := snapshotHostedKey(apiKey)
 			h.submitOpenAIUsageRecordTask(c.Request.Context(), res, func(ctx context.Context) {
 				if err := h.gatewayService.RecordUsage(ctx, &service.OpenAIRecordUsageInput{
 					Result:             res,
-					APIKey:             apiKey,
+					APIKey:             billingKeySnapshot,
 					User:               apiKey.User,
 					Account:            account,
 					Subscription:       subscription,
@@ -1953,12 +1993,12 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 					h.gatewayService.RecordOpenAIAccountSwitch()
 					failedAccountIDs[account.ID] = struct{}{}
 					lastFailoverErr = failoverErr
-					if switchCount >= maxAccountSwitches {
+					if switchCount >= maxAccountSwitches && !canTryHostedFallback(apiKey) {
 						h.handleAnthropicFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
 					switchCount++
-					if h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount, &oauth429FailoverState) {
+					if h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount, &oauth429FailoverState) && markHostedPoolExhausted(apiKey, &switchCount, maxAccountSwitches) {
 						h.handleAnthropicFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
@@ -3075,6 +3115,12 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	// Restrict this extra check to the opt-in mode so standard-mode RPM checks
 	// are not charged a second time for the same request.
 	checkSimpleModeTurnBilling := func() error {
+		if apiKey.RouteMode == service.RouteModeHosted {
+			if err := h.billingCacheService.CheckHostingTurnEligibility(ctx, apiKey.User, apiKey, apiKey.Group); err != nil {
+				return service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, infraerrors.Message(err), err)
+			}
+			return nil
+		}
 		if h.cfg == nil || h.cfg.RunMode != config.RunModeSimple || !h.cfg.SimpleModeKeyRateLimitEnabled {
 			return nil
 		}
@@ -3147,12 +3193,12 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		h.gatewayService.RecordOpenAIAccountSwitch()
 		failedAccountIDs[account.ID] = struct{}{}
 		lastFailoverErr = failoverErr
-		if switchCount >= maxAccountSwitches {
+		if switchCount >= maxAccountSwitches && !canTryHostedFallback(apiKey) {
 			closeOpenAIWSFailoverExhausted(c, wsConn, failoverErr)
 			return false
 		}
 		switchCount++
-		if h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount, &oauth429FailoverState) {
+		if h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount, &oauth429FailoverState) && markHostedPoolExhausted(apiKey, &switchCount, maxAccountSwitches) {
 			closeOpenAIWSFailoverExhausted(c, wsConn, failoverErr)
 			return false
 		}
@@ -3189,7 +3235,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			return
 		}
 		reqLog.Debug("openai.websocket_account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
-		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
+		selection, scheduleDecision, err := h.selectHostedAccount(apiKey, switchCount, maxAccountSwitches,
 			ctx,
 			apiKey.GroupID,
 			previousResponseID,
@@ -3204,6 +3250,17 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			requestPlatform,
 		)
 		if err != nil {
+			if switched, fallbackErr := h.tryHostedFallback(c, ctx, err, reqModel, true, false, true); fallbackErr != nil {
+				closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, infraerrors.Message(fallbackErr))
+				return
+			} else if switched {
+				ctx = c.Request.Context()
+				mapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(ctx, apiKey.GroupID, reqModel)
+				wsForwardModel = openAIChannelForwardModel(mapping, reqModel)
+				failedAccountIDs = make(map[int64]struct{})
+				switchCount = 0
+				continue
+			}
 			err = rpmAdmission.selectionError(err)
 			if errors.Is(err, service.ErrOpenAIRPMExhausted) {
 				closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "All eligible OpenAI OAuth accounts are at their per-minute request limit; retry after the current minute resets")
@@ -3513,6 +3570,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				return mapping.MappedModel, nil
 			},
 			BeforeTurn: func(turn int) error {
+				if err := h.apiKeyService.RefreshHostedTurnRate(ctx, apiKey); err != nil {
+					return service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "hosting policy changed; reconnect", err)
+				}
 				// turn==1 的会话屏蔽已由握手层检查覆盖；连接内 flag 只拦截后续 turn。
 				if cyberBlockedThisConn && !h.cyberPolicyLogOnly(c, apiKey) {
 					return newOpenAIWSLocalAdmissionCloseError(cyberSessionBlockedClientMsg)
@@ -3623,7 +3683,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					turnErr,
 				)
 				if turnErr != nil {
-					if result == nil || result.ImageCount <= 0 {
+					if result == nil || result.ImageCount <= 0 && !shouldRecordHostedPartialUsage(apiKey, result) {
 						return
 					}
 					// cyber 命中时该 turn 的用量已由 recordCyberPolicyIfMarked(forwardErrored=true)
@@ -3662,10 +3722,11 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				sessionID := service.ExtractOpenAIClientSessionID(c, cyberBlockBody)
 				turnRecordPricingAt := turnPricing.currentOr(turnStart)
 				cyberBlocked := service.GetOpsCyberPolicy(c) != nil
+				billingKeySnapshot := snapshotHostedKey(apiKey)
 				h.submitOpenAIUsageRecordTask(ctx, result, func(taskCtx context.Context) {
 					if err := h.gatewayService.RecordUsage(taskCtx, &service.OpenAIRecordUsageInput{
 						Result:             result,
-						APIKey:             apiKey,
+						APIKey:             billingKeySnapshot,
 						User:               apiKey.User,
 						Account:            account,
 						Subscription:       subscription,
@@ -5123,6 +5184,7 @@ func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarkedWithIdentity(c *gin.Cont
 			cancel()
 		}
 	}
+	billingKeySnapshot := snapshotHostedKey(apiKey)
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -5147,7 +5209,7 @@ func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarkedWithIdentity(c *gin.Cont
 		}
 		if forwardErrored && gwSvc != nil {
 			gwSvc.RecordCyberPolicyUsageLog(ctx, service.CyberPolicyUsageInput{
-				APIKey:             apiKey,
+				APIKey:             billingKeySnapshot,
 				Account:            account,
 				Subscription:       subscription,
 				RequestID:          requestID,

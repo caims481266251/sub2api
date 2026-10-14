@@ -21,7 +21,10 @@ import requestTiming from './requestTiming'
 
 import autoConfig from './autoConfig'
 
+import hosting from './hosting'
+
 export default {
+  hosting,
   ticketBorrowing,
   proxyPool,
   autoConfig,

@@ -412,6 +412,28 @@ func TestCodexModelsUnmappedParentAndSparkShadowHonorCustomListAndETag(t *testin
 	require.Empty(t, upstream.calls())
 }
 
+type emptyHostedManifestAccounts struct{ hostedGatewayAccounts }
+
+func (*emptyHostedManifestAccounts) ListOwned(context.Context, int64) ([]service.Account, error) {
+	return nil, nil
+}
+
+func TestHostedCodexManifestWithoutGroupDoesNotSelectPublicAccounts(t *testing.T) {
+	handler, upstream, _ := newCodexModelsFailoverTestHandler(http.StatusOK)
+	hosting := service.NewHostingService(&emptyHostedManifestAccounts{}, &hostedGatewaySettings{}, nil, nil, nil, nil)
+	handler.gatewayService.SetHostingService(hosting)
+	ctx, key, err := hosting.PrepareRequest(context.Background(), &service.APIKey{ID: 1, UserID: 7, RouteMode: service.RouteModeHosted})
+	require.NoError(t, err)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/models?client_version=0.144.0", nil).WithContext(ctx)
+	c.Set(string(middleware2.ContextKeyAPIKey), key)
+	handler.CodexModels(c)
+	require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+	require.Contains(t, recorder.Body.String(), "No available OpenAI accounts")
+	require.Empty(t, upstream.accountIDs, "an empty private pool must not use public credentials")
+}
+
 func TestCompositeCodexModelsReusesExistingManifestSelection(t *testing.T) {
 	handler, upstream, groupID := newCodexModelsFailoverTestHandler(http.StatusServiceUnavailable)
 

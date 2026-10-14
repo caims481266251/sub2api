@@ -48,7 +48,7 @@ func (r *accountRepository) ClaimExcelBPS403Probe(ctx context.Context, account *
 	if !account.ExcelBPS403RecoveryDue(now) {
 		return false, nil
 	}
-	args, err := excelBPSRecoveryArgs(account)
+	args, err := r.hostedExcelBPSRecoveryArgs(ctx, account)
 	if err != nil {
 		return false, err
 	}
@@ -77,7 +77,7 @@ func (r *accountRepository) RestoreExcelBPSAfter403(ctx context.Context, account
 	}
 	defer func() { _ = tx.Rollback() }()
 	txCtx := dbent.NewTxContext(ctx, tx)
-	args, err := excelBPSRecoveryArgs(account)
+	args, err := r.hostedExcelBPSRecoveryArgs(ctx, account)
 	if err != nil {
 		return false, err
 	}
@@ -105,4 +105,17 @@ SET extra = jsonb_set(extra, '{openai_excel_bps}', 'true'::jsonb)
 		r.syncSchedulerAccountSnapshot(ctx, account.ID)
 	}
 	return affected > 0, nil
+}
+
+func (r *accountRepository) hostedExcelBPSRecoveryArgs(ctx context.Context, account *service.Account) ([]any, error) {
+	args, err := excelBPSRecoveryArgs(account)
+	if err != nil || account.OwnerUserID == nil {
+		return args, err
+	}
+	raw, err := accountCredentialsSnapshot(ctx, clientFromContext(ctx, r.client), r.hostingEncryptor, account)
+	if err != nil {
+		return nil, err
+	}
+	args[1] = string(raw)
+	return args, nil
 }

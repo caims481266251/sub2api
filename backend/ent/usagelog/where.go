@@ -55,6 +55,26 @@ func IDLTE(id int64) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldLTE(FieldID, id))
 }
 
+// HostingPoolID applies equality check predicate on the "hosting_pool_id" field. It's identical to HostingPoolIDEQ.
+func HostingPoolID(v int64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldHostingPoolID, v))
+}
+
+// HostingPoolName applies equality check predicate on the "hosting_pool_name" field. It's identical to HostingPoolNameEQ.
+func HostingPoolName(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldHostingPoolName, v))
+}
+
+// HostingRoute applies equality check predicate on the "hosting_route" field. It's identical to HostingRouteEQ.
+func HostingRoute(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldHostingRoute, v))
+}
+
+// HostingFallbackReason applies equality check predicate on the "hosting_fallback_reason" field. It's identical to HostingFallbackReasonEQ.
+func HostingFallbackReason(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldHostingFallbackReason, v))
+}
+
 // UserID applies equality check predicate on the "user_id" field. It's identical to UserIDEQ.
 func UserID(v int64) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldEQ(FieldUserID, v))
@@ -283,6 +303,281 @@ func CacheTTLOverridden(v bool) predicate.UsageLog {
 // CreatedAt applies equality check predicate on the "created_at" field. It's identical to CreatedAtEQ.
 func CreatedAt(v time.Time) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldEQ(FieldCreatedAt, v))
+}
+
+// HostingPoolIDEQ applies the EQ predicate on the "hosting_pool_id" field.
+func HostingPoolIDEQ(v int64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldHostingPoolID, v))
+}
+
+// HostingPoolIDNEQ applies the NEQ predicate on the "hosting_pool_id" field.
+func HostingPoolIDNEQ(v int64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNEQ(FieldHostingPoolID, v))
+}
+
+// HostingPoolIDIn applies the In predicate on the "hosting_pool_id" field.
+func HostingPoolIDIn(vs ...int64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIn(FieldHostingPoolID, vs...))
+}
+
+// HostingPoolIDNotIn applies the NotIn predicate on the "hosting_pool_id" field.
+func HostingPoolIDNotIn(vs ...int64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotIn(FieldHostingPoolID, vs...))
+}
+
+// HostingPoolIDGT applies the GT predicate on the "hosting_pool_id" field.
+func HostingPoolIDGT(v int64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGT(FieldHostingPoolID, v))
+}
+
+// HostingPoolIDGTE applies the GTE predicate on the "hosting_pool_id" field.
+func HostingPoolIDGTE(v int64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGTE(FieldHostingPoolID, v))
+}
+
+// HostingPoolIDLT applies the LT predicate on the "hosting_pool_id" field.
+func HostingPoolIDLT(v int64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLT(FieldHostingPoolID, v))
+}
+
+// HostingPoolIDLTE applies the LTE predicate on the "hosting_pool_id" field.
+func HostingPoolIDLTE(v int64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLTE(FieldHostingPoolID, v))
+}
+
+// HostingPoolIDIsNil applies the IsNil predicate on the "hosting_pool_id" field.
+func HostingPoolIDIsNil() predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIsNull(FieldHostingPoolID))
+}
+
+// HostingPoolIDNotNil applies the NotNil predicate on the "hosting_pool_id" field.
+func HostingPoolIDNotNil() predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotNull(FieldHostingPoolID))
+}
+
+// HostingPoolNameEQ applies the EQ predicate on the "hosting_pool_name" field.
+func HostingPoolNameEQ(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldHostingPoolName, v))
+}
+
+// HostingPoolNameNEQ applies the NEQ predicate on the "hosting_pool_name" field.
+func HostingPoolNameNEQ(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNEQ(FieldHostingPoolName, v))
+}
+
+// HostingPoolNameIn applies the In predicate on the "hosting_pool_name" field.
+func HostingPoolNameIn(vs ...string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIn(FieldHostingPoolName, vs...))
+}
+
+// HostingPoolNameNotIn applies the NotIn predicate on the "hosting_pool_name" field.
+func HostingPoolNameNotIn(vs ...string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotIn(FieldHostingPoolName, vs...))
+}
+
+// HostingPoolNameGT applies the GT predicate on the "hosting_pool_name" field.
+func HostingPoolNameGT(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGT(FieldHostingPoolName, v))
+}
+
+// HostingPoolNameGTE applies the GTE predicate on the "hosting_pool_name" field.
+func HostingPoolNameGTE(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGTE(FieldHostingPoolName, v))
+}
+
+// HostingPoolNameLT applies the LT predicate on the "hosting_pool_name" field.
+func HostingPoolNameLT(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLT(FieldHostingPoolName, v))
+}
+
+// HostingPoolNameLTE applies the LTE predicate on the "hosting_pool_name" field.
+func HostingPoolNameLTE(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLTE(FieldHostingPoolName, v))
+}
+
+// HostingPoolNameContains applies the Contains predicate on the "hosting_pool_name" field.
+func HostingPoolNameContains(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldContains(FieldHostingPoolName, v))
+}
+
+// HostingPoolNameHasPrefix applies the HasPrefix predicate on the "hosting_pool_name" field.
+func HostingPoolNameHasPrefix(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldHasPrefix(FieldHostingPoolName, v))
+}
+
+// HostingPoolNameHasSuffix applies the HasSuffix predicate on the "hosting_pool_name" field.
+func HostingPoolNameHasSuffix(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldHasSuffix(FieldHostingPoolName, v))
+}
+
+// HostingPoolNameIsNil applies the IsNil predicate on the "hosting_pool_name" field.
+func HostingPoolNameIsNil() predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIsNull(FieldHostingPoolName))
+}
+
+// HostingPoolNameNotNil applies the NotNil predicate on the "hosting_pool_name" field.
+func HostingPoolNameNotNil() predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotNull(FieldHostingPoolName))
+}
+
+// HostingPoolNameEqualFold applies the EqualFold predicate on the "hosting_pool_name" field.
+func HostingPoolNameEqualFold(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEqualFold(FieldHostingPoolName, v))
+}
+
+// HostingPoolNameContainsFold applies the ContainsFold predicate on the "hosting_pool_name" field.
+func HostingPoolNameContainsFold(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldContainsFold(FieldHostingPoolName, v))
+}
+
+// HostingRouteEQ applies the EQ predicate on the "hosting_route" field.
+func HostingRouteEQ(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldHostingRoute, v))
+}
+
+// HostingRouteNEQ applies the NEQ predicate on the "hosting_route" field.
+func HostingRouteNEQ(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNEQ(FieldHostingRoute, v))
+}
+
+// HostingRouteIn applies the In predicate on the "hosting_route" field.
+func HostingRouteIn(vs ...string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIn(FieldHostingRoute, vs...))
+}
+
+// HostingRouteNotIn applies the NotIn predicate on the "hosting_route" field.
+func HostingRouteNotIn(vs ...string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotIn(FieldHostingRoute, vs...))
+}
+
+// HostingRouteGT applies the GT predicate on the "hosting_route" field.
+func HostingRouteGT(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGT(FieldHostingRoute, v))
+}
+
+// HostingRouteGTE applies the GTE predicate on the "hosting_route" field.
+func HostingRouteGTE(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGTE(FieldHostingRoute, v))
+}
+
+// HostingRouteLT applies the LT predicate on the "hosting_route" field.
+func HostingRouteLT(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLT(FieldHostingRoute, v))
+}
+
+// HostingRouteLTE applies the LTE predicate on the "hosting_route" field.
+func HostingRouteLTE(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLTE(FieldHostingRoute, v))
+}
+
+// HostingRouteContains applies the Contains predicate on the "hosting_route" field.
+func HostingRouteContains(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldContains(FieldHostingRoute, v))
+}
+
+// HostingRouteHasPrefix applies the HasPrefix predicate on the "hosting_route" field.
+func HostingRouteHasPrefix(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldHasPrefix(FieldHostingRoute, v))
+}
+
+// HostingRouteHasSuffix applies the HasSuffix predicate on the "hosting_route" field.
+func HostingRouteHasSuffix(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldHasSuffix(FieldHostingRoute, v))
+}
+
+// HostingRouteIsNil applies the IsNil predicate on the "hosting_route" field.
+func HostingRouteIsNil() predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIsNull(FieldHostingRoute))
+}
+
+// HostingRouteNotNil applies the NotNil predicate on the "hosting_route" field.
+func HostingRouteNotNil() predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotNull(FieldHostingRoute))
+}
+
+// HostingRouteEqualFold applies the EqualFold predicate on the "hosting_route" field.
+func HostingRouteEqualFold(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEqualFold(FieldHostingRoute, v))
+}
+
+// HostingRouteContainsFold applies the ContainsFold predicate on the "hosting_route" field.
+func HostingRouteContainsFold(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldContainsFold(FieldHostingRoute, v))
+}
+
+// HostingFallbackReasonEQ applies the EQ predicate on the "hosting_fallback_reason" field.
+func HostingFallbackReasonEQ(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldHostingFallbackReason, v))
+}
+
+// HostingFallbackReasonNEQ applies the NEQ predicate on the "hosting_fallback_reason" field.
+func HostingFallbackReasonNEQ(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNEQ(FieldHostingFallbackReason, v))
+}
+
+// HostingFallbackReasonIn applies the In predicate on the "hosting_fallback_reason" field.
+func HostingFallbackReasonIn(vs ...string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIn(FieldHostingFallbackReason, vs...))
+}
+
+// HostingFallbackReasonNotIn applies the NotIn predicate on the "hosting_fallback_reason" field.
+func HostingFallbackReasonNotIn(vs ...string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotIn(FieldHostingFallbackReason, vs...))
+}
+
+// HostingFallbackReasonGT applies the GT predicate on the "hosting_fallback_reason" field.
+func HostingFallbackReasonGT(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGT(FieldHostingFallbackReason, v))
+}
+
+// HostingFallbackReasonGTE applies the GTE predicate on the "hosting_fallback_reason" field.
+func HostingFallbackReasonGTE(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGTE(FieldHostingFallbackReason, v))
+}
+
+// HostingFallbackReasonLT applies the LT predicate on the "hosting_fallback_reason" field.
+func HostingFallbackReasonLT(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLT(FieldHostingFallbackReason, v))
+}
+
+// HostingFallbackReasonLTE applies the LTE predicate on the "hosting_fallback_reason" field.
+func HostingFallbackReasonLTE(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLTE(FieldHostingFallbackReason, v))
+}
+
+// HostingFallbackReasonContains applies the Contains predicate on the "hosting_fallback_reason" field.
+func HostingFallbackReasonContains(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldContains(FieldHostingFallbackReason, v))
+}
+
+// HostingFallbackReasonHasPrefix applies the HasPrefix predicate on the "hosting_fallback_reason" field.
+func HostingFallbackReasonHasPrefix(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldHasPrefix(FieldHostingFallbackReason, v))
+}
+
+// HostingFallbackReasonHasSuffix applies the HasSuffix predicate on the "hosting_fallback_reason" field.
+func HostingFallbackReasonHasSuffix(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldHasSuffix(FieldHostingFallbackReason, v))
+}
+
+// HostingFallbackReasonIsNil applies the IsNil predicate on the "hosting_fallback_reason" field.
+func HostingFallbackReasonIsNil() predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIsNull(FieldHostingFallbackReason))
+}
+
+// HostingFallbackReasonNotNil applies the NotNil predicate on the "hosting_fallback_reason" field.
+func HostingFallbackReasonNotNil() predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotNull(FieldHostingFallbackReason))
+}
+
+// HostingFallbackReasonEqualFold applies the EqualFold predicate on the "hosting_fallback_reason" field.
+func HostingFallbackReasonEqualFold(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEqualFold(FieldHostingFallbackReason, v))
+}
+
+// HostingFallbackReasonContainsFold applies the ContainsFold predicate on the "hosting_fallback_reason" field.
+func HostingFallbackReasonContainsFold(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldContainsFold(FieldHostingFallbackReason, v))
 }
 
 // UserIDEQ applies the EQ predicate on the "user_id" field.

@@ -22,6 +22,12 @@ const (
 	FieldUpdatedAt = "updated_at"
 	// FieldDeletedAt holds the string denoting the deleted_at field in the database.
 	FieldDeletedAt = "deleted_at"
+	// FieldOwnerUserID holds the string denoting the owner_user_id field in the database.
+	FieldOwnerUserID = "owner_user_id"
+	// FieldHostingPoolID holds the string denoting the hosting_pool_id field in the database.
+	FieldHostingPoolID = "hosting_pool_id"
+	// FieldHostingIdentity holds the string denoting the hosting_identity field in the database.
+	FieldHostingIdentity = "hosting_identity"
 	// FieldName holds the string denoting the name field in the database.
 	FieldName = "name"
 	// FieldNotes holds the string denoting the notes field in the database.
@@ -136,6 +142,9 @@ var Columns = []string{
 	FieldCreatedAt,
 	FieldUpdatedAt,
 	FieldDeletedAt,
+	FieldOwnerUserID,
+	FieldHostingPoolID,
+	FieldHostingIdentity,
 	FieldName,
 	FieldNotes,
 	FieldPlatform,
@@ -197,6 +206,8 @@ var (
 	DefaultUpdatedAt func() time.Time
 	// UpdateDefaultUpdatedAt holds the default value on update for the "updated_at" field.
 	UpdateDefaultUpdatedAt func() time.Time
+	// HostingIdentityValidator is a validator for the "hosting_identity" field. It is called by the builders before save.
+	HostingIdentityValidator func(string) error
 	// NameValidator is a validator for the "name" field. It is called by the builders before save.
 	NameValidator func(string) error
 	// PlatformValidator is a validator for the "platform" field. It is called by the builders before save.
@@ -274,6 +285,21 @@ func ByUpdatedAt(opts ...sql.OrderTermOption) OrderOption {
 // ByDeletedAt orders the results by the deleted_at field.
 func ByDeletedAt(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldDeletedAt, opts...).ToFunc()
+}
+
+// ByOwnerUserID orders the results by the owner_user_id field.
+func ByOwnerUserID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldOwnerUserID, opts...).ToFunc()
+}
+
+// ByHostingPoolID orders the results by the hosting_pool_id field.
+func ByHostingPoolID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldHostingPoolID, opts...).ToFunc()
+}
+
+// ByHostingIdentity orders the results by the hosting_identity field.
+func ByHostingIdentity(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldHostingIdentity, opts...).ToFunc()
 }
 
 // ByName orders the results by the name field.

@@ -97,6 +97,9 @@ func (s *OpenAIGatewayService) openAISessionCacheKey(sessionHash string) string 
 }
 
 func (s *OpenAIGatewayService) openAILegacySessionCacheKey(ctx context.Context, sessionHash string) string {
+	if hostingKeyFromContext(ctx) != nil {
+		return ""
+	}
 	legacyHash := openAILegacySessionHashFromContext(ctx)
 	if legacyHash == "" {
 		return ""
@@ -130,7 +133,7 @@ func (s *OpenAIGatewayService) getStickySessionAccountID(ctx context.Context, gr
 		return 0, nil
 	}
 
-	primaryKey := s.openAISessionCacheKey(sessionHash)
+	primaryKey := s.openAISessionCacheKey(scopeHostingSessionHash(ctx, sessionHash))
 	if primaryKey == "" {
 		return 0, nil
 	}
@@ -167,7 +170,7 @@ func (s *OpenAIGatewayService) setStickySessionAccountID(ctx context.Context, gr
 	if s == nil || s.cache == nil || accountID <= 0 {
 		return nil
 	}
-	primaryKey := s.openAISessionCacheKey(sessionHash)
+	primaryKey := s.openAISessionCacheKey(scopeHostingSessionHash(ctx, sessionHash))
 	if primaryKey == "" {
 		return nil
 	}
@@ -197,7 +200,7 @@ func (s *OpenAIGatewayService) refreshStickySessionTTL(ctx context.Context, grou
 	if s == nil || s.cache == nil {
 		return nil
 	}
-	primaryKey := s.openAISessionCacheKey(sessionHash)
+	primaryKey := s.openAISessionCacheKey(scopeHostingSessionHash(ctx, sessionHash))
 	if primaryKey == "" {
 		return nil
 	}
@@ -224,7 +227,7 @@ func (s *OpenAIGatewayService) deleteStickySessionAccountID(ctx context.Context,
 	if s == nil || s.cache == nil {
 		return nil
 	}
-	primaryKey := s.openAISessionCacheKey(sessionHash)
+	primaryKey := s.openAISessionCacheKey(scopeHostingSessionHash(ctx, sessionHash))
 	if primaryKey == "" {
 		return nil
 	}

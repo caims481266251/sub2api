@@ -25,7 +25,7 @@ func nextWithAPIKeyAdmissionOwner(c *gin.Context, apiKeyService *service.APIKeyS
 		if isResponsesWebSocketRoute(c) && apiKeyService != nil {
 			// WS sessions must observe revocation even when an auth-cache
 			// invalidation is delayed or lost on this instance.
-			revalidate = newAPIKeyAuthRevalidator(apiKeyService.GetByKeyUncached, credential, trustedClientIP, key)
+			revalidate = newAPIKeyAuthRevalidator(hostedAuthLookup(apiKeyService, apiKeyService.GetByKeyUncached), credential, trustedClientIP, key)
 		}
 		base := service.WithAPIKeyQueueAuthRevalidator(
 			c.Request.Context(),
@@ -60,9 +60,19 @@ func nextWithAPIKeyAdmissionOwner(c *gin.Context, apiKeyService *service.APIKeyS
 func newAPIKeyQueueAuthRevalidator(apiKeyService *service.APIKeyService, credential string, trustedClientIP string, initial *service.APIKey) service.APIKeyQueueAuthRevalidator {
 	var lookup func(context.Context, string) (*service.APIKey, error)
 	if apiKeyService != nil {
-		lookup = apiKeyService.GetByKey
+		lookup = hostedAuthLookup(apiKeyService, apiKeyService.GetByKey)
 	}
 	return newAPIKeyAuthRevalidator(lookup, credential, trustedClientIP, initial)
+}
+
+func hostedAuthLookup(s *service.APIKeyService, lookup func(context.Context, string) (*service.APIKey, error)) func(context.Context, string) (*service.APIKey, error) {
+	return func(ctx context.Context, credential string) (*service.APIKey, error) {
+		key, err := lookup(ctx, credential)
+		if err != nil {
+			return nil, err
+		}
+		return s.HostedAuthorizationView(ctx, key)
+	}
 }
 
 // Share all identity, permission and expiry gates between cached HTTP queue
@@ -149,12 +159,24 @@ type apiKeyQueueInitialIdentity struct {
 	groupID          *int64
 	platform         string
 	subscriptionType string
+	routeMode        string
+	fallbackGroupID  *int64
+	hostingPoolID    *int64
 }
 
 func captureAPIKeyQueueIdentity(initial *service.APIKey) apiKeyQueueInitialIdentity {
 	identity := apiKeyQueueInitialIdentity{}
 	if initial == nil {
 		return identity
+	}
+	identity.routeMode = initial.RouteMode
+	if initial.HostingPoolID != nil {
+		v := *initial.HostingPoolID
+		identity.hostingPoolID = &v
+	}
+	if initial.HostingFallbackGroupID != nil {
+		v := *initial.HostingFallbackGroupID
+		identity.fallbackGroupID = &v
 	}
 	identity.keyID = initial.ID
 	identity.userID = initial.UserID
@@ -179,6 +201,15 @@ func apiKeyQueueCoreIdentityChanged(initial apiKeyQueueInitialIdentity, latest *
 	}
 	if initial.userID != 0 && latest.UserID != initial.userID {
 		return true
+	}
+	if initial.routeMode != latest.RouteMode {
+		return true
+	}
+	if initial.routeMode == service.RouteModeHosted {
+		if (initial.hostingPoolID == nil) != (latest.HostingPoolID == nil) || (initial.hostingPoolID != nil && *initial.hostingPoolID != *latest.HostingPoolID) {
+			return true
+		}
+		return (initial.fallbackGroupID == nil) != (latest.HostingFallbackGroupID == nil) || (initial.fallbackGroupID != nil && *initial.fallbackGroupID != *latest.HostingFallbackGroupID)
 	}
 	if (initial.groupID == nil) != (latest.GroupID == nil) {
 		return true

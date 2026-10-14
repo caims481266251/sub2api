@@ -82,7 +82,7 @@ func (s *OpenAIGatewayService) invalidateOpenAIWSTurnStateAfterAdmissionFailure(
 
 	sessionHash = strings.TrimSpace(sessionHash)
 	responseID = strings.TrimSpace(responseID)
-	stateStore := s.getOpenAIWSStateStore()
+	stateStore := s.getOpenAIWSStateStoreForContext(ctx)
 	if stateStore != nil {
 		if responseID != "" {
 			// Delete both routing and connection affinity for the exact response
@@ -297,6 +297,9 @@ func (s *OpenAIGatewayService) latestOpenAITurnAccountForGroup(
 	}
 	if latest.Platform != selected.Platform || latest.Type != selected.Type {
 		return nil, denyOpenAITurn("account_binding_changed")
+	}
+	if !HostingAccountAllowed(ctx, latest) {
+		return nil, denyOpenAITurn("account_owner_mismatch")
 	}
 	if authoritativeRead && !latest.IsSchedulable() {
 		return nil, denyOpenAITurn("account_ineligible")

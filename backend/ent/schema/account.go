@@ -50,6 +50,9 @@ func (Account) Mixin() []ent.Mixin {
 // Fields 定义账户实体的所有字段。
 func (Account) Fields() []ent.Field {
 	return []ent.Field{
+		field.Int64("owner_user_id").Optional().Nillable(),
+		field.Int64("hosting_pool_id").Optional().Nillable(),
+		field.String("hosting_identity").Optional().Nillable().MaxLen(64),
 		// name: 账户显示名称，用于在界面中标识账户
 		field.String("name").
 			MaxLen(100).

@@ -2,7 +2,6 @@ package repository
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"time"
 
@@ -43,7 +42,7 @@ func (r *accountRepository) DisableExcelBPSOn403(ctx context.Context, account *s
 }
 
 func (r *accountRepository) disableExcelBPSOn403InTx(ctx context.Context, account *service.Account) (bool, error) {
-	credentials, err := json.Marshal(account.Credentials)
+	credentials, err := accountCredentialsSnapshot(ctx, clientFromContext(ctx, r.client), r.hostingEncryptor, account)
 	if err != nil {
 		return false, err
 	}

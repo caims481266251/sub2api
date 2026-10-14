@@ -10,6 +10,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
@@ -166,7 +167,13 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 		if abortIfAPIKeyGroupNotAllowed(c, apiKey) {
 			return
 		}
-		ctx := context.WithValue(c.Request.Context(), ctxkey.UserID, apiKey.User.ID)
+		hostedCtx, hostedKey, hostingErr := apiKeyService.PrepareHostedRequest(c.Request.Context(), apiKey)
+		if hostingErr != nil {
+			AbortWithError(c, infraerrors.Code(hostingErr), infraerrors.Reason(hostingErr), infraerrors.Message(hostingErr))
+			return
+		}
+		apiKey = hostedKey
+		ctx := context.WithValue(hostedCtx, ctxkey.UserID, apiKey.User.ID)
 		c.Request = c.Request.WithContext(ctx)
 		billingInfoRequest := c.Request.URL.Path == "/v1/sub2api/billing"
 		pelicanReadRequest := (c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead) &&

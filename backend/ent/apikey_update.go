@@ -58,6 +58,74 @@ func (_u *APIKeyUpdate) ClearDeletedAt() *APIKeyUpdate {
 	return _u
 }
 
+// SetRouteMode sets the "route_mode" field.
+func (_u *APIKeyUpdate) SetRouteMode(v string) *APIKeyUpdate {
+	_u.mutation.SetRouteMode(v)
+	return _u
+}
+
+// SetNillableRouteMode sets the "route_mode" field if the given value is not nil.
+func (_u *APIKeyUpdate) SetNillableRouteMode(v *string) *APIKeyUpdate {
+	if v != nil {
+		_u.SetRouteMode(*v)
+	}
+	return _u
+}
+
+// SetHostingFallbackGroupID sets the "hosting_fallback_group_id" field.
+func (_u *APIKeyUpdate) SetHostingFallbackGroupID(v int64) *APIKeyUpdate {
+	_u.mutation.ResetHostingFallbackGroupID()
+	_u.mutation.SetHostingFallbackGroupID(v)
+	return _u
+}
+
+// SetNillableHostingFallbackGroupID sets the "hosting_fallback_group_id" field if the given value is not nil.
+func (_u *APIKeyUpdate) SetNillableHostingFallbackGroupID(v *int64) *APIKeyUpdate {
+	if v != nil {
+		_u.SetHostingFallbackGroupID(*v)
+	}
+	return _u
+}
+
+// AddHostingFallbackGroupID adds value to the "hosting_fallback_group_id" field.
+func (_u *APIKeyUpdate) AddHostingFallbackGroupID(v int64) *APIKeyUpdate {
+	_u.mutation.AddHostingFallbackGroupID(v)
+	return _u
+}
+
+// ClearHostingFallbackGroupID clears the value of the "hosting_fallback_group_id" field.
+func (_u *APIKeyUpdate) ClearHostingFallbackGroupID() *APIKeyUpdate {
+	_u.mutation.ClearHostingFallbackGroupID()
+	return _u
+}
+
+// SetHostingPoolID sets the "hosting_pool_id" field.
+func (_u *APIKeyUpdate) SetHostingPoolID(v int64) *APIKeyUpdate {
+	_u.mutation.ResetHostingPoolID()
+	_u.mutation.SetHostingPoolID(v)
+	return _u
+}
+
+// SetNillableHostingPoolID sets the "hosting_pool_id" field if the given value is not nil.
+func (_u *APIKeyUpdate) SetNillableHostingPoolID(v *int64) *APIKeyUpdate {
+	if v != nil {
+		_u.SetHostingPoolID(*v)
+	}
+	return _u
+}
+
+// AddHostingPoolID adds value to the "hosting_pool_id" field.
+func (_u *APIKeyUpdate) AddHostingPoolID(v int64) *APIKeyUpdate {
+	_u.mutation.AddHostingPoolID(v)
+	return _u
+}
+
+// ClearHostingPoolID clears the value of the "hosting_pool_id" field.
+func (_u *APIKeyUpdate) ClearHostingPoolID() *APIKeyUpdate {
+	_u.mutation.ClearHostingPoolID()
+	return _u
+}
+
 // SetUserID sets the "user_id" field.
 func (_u *APIKeyUpdate) SetUserID(v int64) *APIKeyUpdate {
 	_u.mutation.SetUserID(v)
@@ -566,6 +634,11 @@ func (_u *APIKeyUpdate) defaults() error {
 
 // check runs all checks and user-defined validators on the builder.
 func (_u *APIKeyUpdate) check() error {
+	if v, ok := _u.mutation.RouteMode(); ok {
+		if err := apikey.RouteModeValidator(v); err != nil {
+			return &ValidationError{Name: "route_mode", err: fmt.Errorf(`ent: validator failed for field "APIKey.route_mode": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.ConcurrencyLimit(); ok {
 		if err := apikey.ConcurrencyLimitValidator(v); err != nil {
 			return &ValidationError{Name: "concurrency_limit", err: fmt.Errorf(`ent: validator failed for field "APIKey.concurrency_limit": %w`, err)}
@@ -612,6 +685,27 @@ func (_u *APIKeyUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.DeletedAtCleared() {
 		_spec.ClearField(apikey.FieldDeletedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.RouteMode(); ok {
+		_spec.SetField(apikey.FieldRouteMode, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.HostingFallbackGroupID(); ok {
+		_spec.SetField(apikey.FieldHostingFallbackGroupID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedHostingFallbackGroupID(); ok {
+		_spec.AddField(apikey.FieldHostingFallbackGroupID, field.TypeInt64, value)
+	}
+	if _u.mutation.HostingFallbackGroupIDCleared() {
+		_spec.ClearField(apikey.FieldHostingFallbackGroupID, field.TypeInt64)
+	}
+	if value, ok := _u.mutation.HostingPoolID(); ok {
+		_spec.SetField(apikey.FieldHostingPoolID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedHostingPoolID(); ok {
+		_spec.AddField(apikey.FieldHostingPoolID, field.TypeInt64, value)
+	}
+	if _u.mutation.HostingPoolIDCleared() {
+		_spec.ClearField(apikey.FieldHostingPoolID, field.TypeInt64)
 	}
 	if value, ok := _u.mutation.ConcurrencyLimit(); ok {
 		_spec.SetField(apikey.FieldConcurrencyLimit, field.TypeInt, value)
@@ -874,6 +968,74 @@ func (_u *APIKeyUpdateOne) SetNillableDeletedAt(v *time.Time) *APIKeyUpdateOne {
 // ClearDeletedAt clears the value of the "deleted_at" field.
 func (_u *APIKeyUpdateOne) ClearDeletedAt() *APIKeyUpdateOne {
 	_u.mutation.ClearDeletedAt()
+	return _u
+}
+
+// SetRouteMode sets the "route_mode" field.
+func (_u *APIKeyUpdateOne) SetRouteMode(v string) *APIKeyUpdateOne {
+	_u.mutation.SetRouteMode(v)
+	return _u
+}
+
+// SetNillableRouteMode sets the "route_mode" field if the given value is not nil.
+func (_u *APIKeyUpdateOne) SetNillableRouteMode(v *string) *APIKeyUpdateOne {
+	if v != nil {
+		_u.SetRouteMode(*v)
+	}
+	return _u
+}
+
+// SetHostingFallbackGroupID sets the "hosting_fallback_group_id" field.
+func (_u *APIKeyUpdateOne) SetHostingFallbackGroupID(v int64) *APIKeyUpdateOne {
+	_u.mutation.ResetHostingFallbackGroupID()
+	_u.mutation.SetHostingFallbackGroupID(v)
+	return _u
+}
+
+// SetNillableHostingFallbackGroupID sets the "hosting_fallback_group_id" field if the given value is not nil.
+func (_u *APIKeyUpdateOne) SetNillableHostingFallbackGroupID(v *int64) *APIKeyUpdateOne {
+	if v != nil {
+		_u.SetHostingFallbackGroupID(*v)
+	}
+	return _u
+}
+
+// AddHostingFallbackGroupID adds value to the "hosting_fallback_group_id" field.
+func (_u *APIKeyUpdateOne) AddHostingFallbackGroupID(v int64) *APIKeyUpdateOne {
+	_u.mutation.AddHostingFallbackGroupID(v)
+	return _u
+}
+
+// ClearHostingFallbackGroupID clears the value of the "hosting_fallback_group_id" field.
+func (_u *APIKeyUpdateOne) ClearHostingFallbackGroupID() *APIKeyUpdateOne {
+	_u.mutation.ClearHostingFallbackGroupID()
+	return _u
+}
+
+// SetHostingPoolID sets the "hosting_pool_id" field.
+func (_u *APIKeyUpdateOne) SetHostingPoolID(v int64) *APIKeyUpdateOne {
+	_u.mutation.ResetHostingPoolID()
+	_u.mutation.SetHostingPoolID(v)
+	return _u
+}
+
+// SetNillableHostingPoolID sets the "hosting_pool_id" field if the given value is not nil.
+func (_u *APIKeyUpdateOne) SetNillableHostingPoolID(v *int64) *APIKeyUpdateOne {
+	if v != nil {
+		_u.SetHostingPoolID(*v)
+	}
+	return _u
+}
+
+// AddHostingPoolID adds value to the "hosting_pool_id" field.
+func (_u *APIKeyUpdateOne) AddHostingPoolID(v int64) *APIKeyUpdateOne {
+	_u.mutation.AddHostingPoolID(v)
+	return _u
+}
+
+// ClearHostingPoolID clears the value of the "hosting_pool_id" field.
+func (_u *APIKeyUpdateOne) ClearHostingPoolID() *APIKeyUpdateOne {
+	_u.mutation.ClearHostingPoolID()
 	return _u
 }
 
@@ -1398,6 +1560,11 @@ func (_u *APIKeyUpdateOne) defaults() error {
 
 // check runs all checks and user-defined validators on the builder.
 func (_u *APIKeyUpdateOne) check() error {
+	if v, ok := _u.mutation.RouteMode(); ok {
+		if err := apikey.RouteModeValidator(v); err != nil {
+			return &ValidationError{Name: "route_mode", err: fmt.Errorf(`ent: validator failed for field "APIKey.route_mode": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.ConcurrencyLimit(); ok {
 		if err := apikey.ConcurrencyLimitValidator(v); err != nil {
 			return &ValidationError{Name: "concurrency_limit", err: fmt.Errorf(`ent: validator failed for field "APIKey.concurrency_limit": %w`, err)}
@@ -1461,6 +1628,27 @@ func (_u *APIKeyUpdateOne) sqlSave(ctx context.Context) (_node *APIKey, err erro
 	}
 	if _u.mutation.DeletedAtCleared() {
 		_spec.ClearField(apikey.FieldDeletedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.RouteMode(); ok {
+		_spec.SetField(apikey.FieldRouteMode, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.HostingFallbackGroupID(); ok {
+		_spec.SetField(apikey.FieldHostingFallbackGroupID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedHostingFallbackGroupID(); ok {
+		_spec.AddField(apikey.FieldHostingFallbackGroupID, field.TypeInt64, value)
+	}
+	if _u.mutation.HostingFallbackGroupIDCleared() {
+		_spec.ClearField(apikey.FieldHostingFallbackGroupID, field.TypeInt64)
+	}
+	if value, ok := _u.mutation.HostingPoolID(); ok {
+		_spec.SetField(apikey.FieldHostingPoolID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedHostingPoolID(); ok {
+		_spec.AddField(apikey.FieldHostingPoolID, field.TypeInt64, value)
+	}
+	if _u.mutation.HostingPoolIDCleared() {
+		_spec.ClearField(apikey.FieldHostingPoolID, field.TypeInt64)
 	}
 	if value, ok := _u.mutation.ConcurrencyLimit(); ok {
 		_spec.SetField(apikey.FieldConcurrencyLimit, field.TypeInt, value)

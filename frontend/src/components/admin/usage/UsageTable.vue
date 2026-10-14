@@ -119,10 +119,16 @@
         </template>
 
         <template #cell-group="{ row }">
-          <span v-if="row.group" class="inline-flex items-center rounded px-2 py-0.5 text-xs font-medium bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200">
-            {{ row.group.name }}
-          </span>
-          <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
+          <div class="flex flex-col items-start gap-1">
+            <template v-if="row.hosting_route">
+              <span class="inline-flex rounded bg-teal-100 px-2 py-0.5 text-xs text-teal-800 dark:bg-teal-900 dark:text-teal-200" :title="row.hosting_fallback_reason ?? undefined">{{ t(row.hosting_route === 'hosted' ? 'hosting.hostedUsage' : 'hosting.fallbackUsage') }}</span>
+              <span class="max-w-48 truncate text-xs text-gray-700 dark:text-gray-200" data-testid="usage-hosting-pool" :title="usagePoolName(row)">{{ t('hosting.pool') }}：{{ usagePoolName(row) }}</span>
+            </template>
+            <span v-if="row.group" class="inline-flex items-center rounded bg-indigo-100 px-2 py-0.5 text-xs font-medium text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200">
+              <span v-if="row.hosting_route === 'fallback'">{{ t('hosting.fallbackUsage') }}： </span>{{ row.group.name }}
+            </span>
+            <span v-else-if="!row.hosting_route" class="text-sm text-gray-400 dark:text-gray-500">-</span>
+          </div>
         </template>
 
         <template #cell-stream="{ row }">
@@ -208,8 +214,15 @@
 
         <template #cell-cost="{ row }">
           <div class="text-sm">
+            <div v-if="row.hosting_route === 'hosted'" class="mb-1 flex items-center gap-1.5 whitespace-nowrap" data-testid="hosted-usage-base">
+              <span class="inline-block w-28 shrink-0 text-xs text-gray-500 dark:text-gray-400">{{ t('hosting.usageAccountCost') }}</span>
+              <button type="button" class="flex cursor-help items-center gap-1.5 rounded font-medium tabular-nums text-gray-700 focus-visible:outline focus-visible:outline-primary-500 dark:text-gray-200" @mouseenter="showTooltip($event, row)" @mouseleave="hideTooltip" @focus="showTooltip($event, row)" @blur="hideTooltip" :aria-label="t('hosting.usageAccountCost') + ': ' + t('usage.costDetails')">
+                <span>${{ row.total_cost?.toFixed(8) || '0.00000000' }}</span><Icon name="infoCircle" size="xs" class="text-gray-400" />
+              </button>
+            </div>
             <div class="flex items-center gap-1.5">
-              <span class="font-medium text-green-600 dark:text-green-400">${{ row.actual_cost?.toFixed(6) || '0.000000' }}</span>
+              <span v-if="row.hosting_route" class="inline-block w-28 shrink-0 whitespace-nowrap text-xs text-gray-500 dark:text-gray-400">{{ t(row.hosting_route === 'hosted' ? 'hosting.usageWalletCharge' : 'hosting.fallbackDebit') }}</span>
+              <span class="font-medium tabular-nums text-green-600 dark:text-green-400">${{ row.actual_cost?.toFixed(row.hosting_route ? 8 : 6) || (row.hosting_route ? '0.00000000' : '0.000000') }}</span>
               <span
                 v-if="showLongContextBadge && row.long_context_billing_applied"
                 data-testid="long-context-billing-marker"
@@ -226,7 +239,8 @@
                 </div>
               </div>
             </div>
-            <div v-if="showAccountBilling && row.account_rate_multiplier != null" class="mt-0.5 text-[11px] text-orange-500 dark:text-orange-400">
+            <div v-if="row.hosting_route === 'hosted'" class="mt-0.5 text-[11px] text-gray-400 dark:text-gray-500">{{ t('hosting.keyServiceRate', { rate: formatMultiplier(row.rate_multiplier ?? 1) }) }}</div>
+            <div v-else-if="showAccountBilling && row.account_rate_multiplier != null" class="mt-0.5 text-[11px] text-orange-500 dark:text-orange-400">
               A ${{ accountBilled(row).toFixed(6) }}
             </div>
           </div>
@@ -406,6 +420,8 @@
   <Teleport to="body">
     <div
       v-if="tooltipVisible"
+      ref="costTooltip"
+      role="tooltip"
       class="fixed z-[9999] pointer-events-none -translate-y-1/2"
       :style="{
         left: tooltipPosition.x + 'px',
@@ -500,24 +516,27 @@
             </div>
           </div>
           <!-- Rate and Summary -->
+          <p v-if="tooltipData?.hosting_route === 'hosted'" class="text-teal-300" data-testid="hosting-charge-formula">${{ tooltipData.total_cost.toFixed(8) }} × {{ formatMultiplier(tooltipData.rate_multiplier) }} = ${{ tooltipData.actual_cost.toFixed(8) }}</p>
+          <p v-if="tooltipData?.hosting_fallback_reason" class="max-w-xs whitespace-normal text-amber-300">{{ tooltipData.hosting_fallback_reason }}</p>
           <div class="flex items-center justify-between gap-6">
             <span class="text-gray-400">{{ t('usage.serviceTier') }}</span>
             <span class="font-semibold text-cyan-300">{{ getUsageServiceTierLabel(tooltipData?.service_tier, t) }}</span>
           </div>
           <div class="flex items-center justify-between gap-6">
             <span class="text-gray-400">{{ t('usage.rate') }}</span>
-            <span class="font-semibold text-blue-400">{{ formatMultiplier(tooltipData?.rate_multiplier || 1) }}x</span>
+            <span class="font-semibold text-blue-400">{{ formatMultiplier(tooltipData?.rate_multiplier ?? 1) }}x</span>
           </div>
           <div class="flex items-center justify-between gap-6">
-            <span class="text-gray-400">{{ t('usage.original') }}</span>
+            <span class="text-gray-400">{{ t(tooltipData?.hosting_route === 'hosted' ? 'hosting.usageAccountCost' : 'usage.original') }}</span>
             <span class="font-medium text-white">${{ tooltipData?.total_cost?.toFixed(8) || '0.00000000' }}</span>
           </div>
           <div class="flex items-center justify-between gap-6">
-            <span class="text-gray-400">{{ t('usage.userBilled') }}</span>
+            <span class="text-gray-400">{{ t(tooltipData?.hosting_route === 'hosted' ? 'hosting.usageWalletCharge' : tooltipData?.hosting_route === 'fallback' ? 'hosting.fallbackDebit' : 'usage.userBilled') }}</span>
             <span class="font-semibold text-green-400">${{ tooltipData?.actual_cost?.toFixed(8) || '0.00000000' }}</span>
           </div>
           <!-- Account billing (separated from user billing) -->
-          <template v-if="showAccountBilling">
+          <p v-if="tooltipData?.hosting_route === 'hosted'" class="max-w-xs whitespace-normal text-gray-400">{{ t('hosting.usageBaseHint') }}</p>
+          <template v-if="showAccountBilling && tooltipData?.hosting_route !== 'hosted'">
             <div class="flex items-center justify-between gap-6 border-t border-gray-700 pt-1.5">
               <span class="text-gray-400">{{ t('usage.accountMultiplier') }}</span>
               <span class="font-semibold text-blue-400">{{ formatMultiplier(tooltipData?.account_rate_multiplier ?? 1) }}x</span>
@@ -534,7 +553,7 @@
             </div>
           </template>
         </div>
-        <div class="absolute right-full top-1/2 h-0 w-0 -translate-y-1/2 border-b-[6px] border-r-[6px] border-t-[6px] border-b-transparent border-r-gray-900 border-t-transparent dark:border-r-gray-800"></div>
+        <div v-if="tooltipHasArrow" class="absolute right-full top-1/2 h-0 w-0 -translate-y-1/2 border-b-[6px] border-r-[6px] border-t-[6px] border-b-transparent border-r-gray-900 border-t-transparent dark:border-r-gray-800"></div>
       </div>
     </div>
   </Teleport>
@@ -542,7 +561,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, inject } from 'vue'
+function usagePoolName(row: { hosting_pool_id?: number | null; hosting_pool_name?: string | null }) {
+  if (row.hosting_pool_id === 0) return t('hosting.defaultPool')
+  return row.hosting_pool_name || t('hosting.poolNotRecorded')
+}
+
+import { computed, ref, inject, nextTick } from 'vue'
 import UsageTimingDialog from './UsageTimingDialog.vue'
 import { observerUsageContext } from './observerUsageContext'
 import { useI18n } from 'vue-i18n'
@@ -712,6 +736,8 @@ const copyUpstreamRequestId = (upstreamRequestId: string) =>
   copyIdentifier(upstreamRequestId, t('admin.usage.upstreamRequestIdCopied'))
 
 // Tooltip state - cost
+const costTooltip = ref<HTMLElement | null>(null)
+const tooltipHasArrow = ref(true)
 const tooltipVisible = ref(false)
 const tooltipPosition = ref({ x: 0, y: 0 })
 const tooltipData = ref<AdminUsageLog | null>(null)
@@ -770,13 +796,24 @@ const latencyBarClasses = (row: AdminUsageLog): string[] => {
 }
 
 // Cost tooltip functions
-const showTooltip = (event: MouseEvent, row: AdminUsageLog) => {
+const showTooltip = (event: MouseEvent | FocusEvent, row: AdminUsageLog) => {
   const target = event.currentTarget as HTMLElement
   const rect = target.getBoundingClientRect()
   tooltipData.value = row
   tooltipPosition.value.x = rect.right + 8
   tooltipPosition.value.y = rect.top + rect.height / 2
   tooltipVisible.value = true
+  tooltipHasArrow.value = true
+  void nextTick(() => {
+    if (!tooltipVisible.value || tooltipData.value !== row || !costTooltip.value) return
+    const box = costTooltip.value.getBoundingClientRect()
+    const x = Math.max(8, Math.min(rect.right + 8, window.innerWidth - box.width - 8))
+    tooltipPosition.value = {
+      x,
+      y: Math.max(box.height / 2 + 8, Math.min(rect.top + rect.height / 2, window.innerHeight - box.height / 2 - 8)),
+    }
+    tooltipHasArrow.value = x === rect.right + 8
+  })
 }
 
 const hideTooltip = () => {

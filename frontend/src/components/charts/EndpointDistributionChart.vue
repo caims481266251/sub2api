@@ -161,6 +161,7 @@ const props = withDefaults(
     showMetricToggle?: boolean
     showSourceToggle?: boolean
     enableBreakdown?: boolean
+    costPrecision?: number
     startDate?: string
     endDate?: string
     filters?: Record<string, any>
@@ -294,6 +295,7 @@ const formatNumber = (value: number): string => {
 }
 
 const formatCost = (value: number): string => {
+  if (props.costPrecision !== undefined) return value.toFixed(props.costPrecision)
   if (value >= 1000) {
     return (value / 1000).toFixed(2) + 'K'
   } else if (value >= 1) {
