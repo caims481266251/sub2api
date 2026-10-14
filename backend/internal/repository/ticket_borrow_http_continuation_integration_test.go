@@ -19,7 +19,6 @@ func TestBorrowHTTPContinuationLifecycleAndLineage(t *testing.T) {
 		t.Run(invalidation, func(t *testing.T) {
 			r, id, routes := borrowRouteLoadFixture(t)
 			rotationExec(t, `UPDATE accounts SET concurrency=64 WHERE id=$1`, id)
-			rotationExec(t, `UPDATE ticket_borrow_routes SET dispatch_limit=32 WHERE target_id=$1`, id)
 			ctx := t.Context()
 			_, err := r.BindSession(ctx, id, "original-response", routes[0].ID)
 			require.NoError(t, err)
@@ -78,7 +77,6 @@ func TestBorrowHTTPContinuationNoGenericFallback(t *testing.T) {
 		t.Run(block, func(t *testing.T) {
 			r, id, routes := borrowRouteLoadFixture(t)
 			rotationExec(t, `UPDATE accounts SET concurrency=64 WHERE id=$1`, id)
-			rotationExec(t, `UPDATE ticket_borrow_routes SET dispatch_limit=32 WHERE target_id=$1`, id)
 			ctx := t.Context()
 			_, err := r.BindSession(ctx, id, "response", routes[0].ID)
 			require.NoError(t, err)
@@ -117,7 +115,6 @@ func TestBorrowHTTPContinuationNoGenericFallback(t *testing.T) {
 func TestBorrowHTTPContinuationPrefersLatestWithOrdinaryReservations(t *testing.T) {
 	r, id, routes := borrowRouteLoadFixture(t)
 	rotationExec(t, `UPDATE accounts SET concurrency=64 WHERE id=$1`, id)
-	rotationExec(t, `UPDATE ticket_borrow_routes SET dispatch_limit=32 WHERE target_id=$1`, id)
 	ctx := t.Context()
 	_, err := r.BindSession(ctx, id, "response", routes[0].ID)
 	require.NoError(t, err)

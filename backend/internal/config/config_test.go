@@ -422,6 +422,22 @@ func TestLoadDefaultOpenAIFirstOutputTimeoutsDisabled(t *testing.T) {
 	require.Zero(t, cfg.Gateway.OpenAIHighEffortFirstOutputTimeoutSeconds)
 }
 
+func TestLoadOpenAISessionAffinity(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.True(t, cfg.Gateway.OpenAISessionAffinityEnabled)
+	require.Empty(t, cfg.Gateway.OpenAISessionAffinityGroupIDs)
+	t.Setenv("GATEWAY_OPENAI_SESSION_AFFINITY_ENABLED", "false")
+	viper.Set("gateway.openai_session_affinity_group_ids", []int64{0, 9})
+	cfg, err = Load()
+	require.NoError(t, err)
+	require.False(t, cfg.Gateway.OpenAISessionAffinityEnabled)
+	require.Equal(t, []int64{0, 9}, cfg.Gateway.OpenAISessionAffinityGroupIDs)
+	cfg.Gateway.OpenAISessionAffinityGroupIDs = []int64{-1}
+	require.ErrorContains(t, cfg.Validate(), "openai_session_affinity_group_ids")
+}
+
 func TestLoadOpenAIFirstOutputTimeoutsFromEnv(t *testing.T) {
 	resetViperWithJWTSecret(t)
 	t.Setenv("GATEWAY_OPENAI_FIRST_OUTPUT_TIMEOUT_SECONDS", "90")

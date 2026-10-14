@@ -355,6 +355,10 @@ func (s *OpenAIGatewayService) bindOpenAIStickySessionDuringSelection(ctx contex
 // remains sticky and becomes eligible again automatically after its rate
 // recovers.
 func (s *OpenAIGatewayService) BindStickySessionAfterProfitAdmission(ctx context.Context, groupID *int64, sessionHash string, accountID int64) error {
+	if a := managedOpenAISessionAffinity(ctx, groupID, sessionHash); a != nil {
+		s.admitOpenAISessionAffinity(ctx, a, accountID)
+		return nil
+	}
 	if sessionHash == "" || accountID <= 0 {
 		return nil
 	}

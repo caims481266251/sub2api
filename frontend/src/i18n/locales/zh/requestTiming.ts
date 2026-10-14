@@ -1,4 +1,12 @@
 export default {
+  "affinity": {
+    "title": "会话归属与缓存路由", "decision": "本次调度", "reason": "选择原因",
+    "owner": "原归属帐号", "provisionalOwner": "待确认的归属帐号", "execution": "本次执行帐号",
+    "committed": "业务成功，已确认或续期会话归属。", "notCommitted": "本次未更新会话归属；临时分流、失败或其他请求已更新归属时会保留现有记录。",
+    "cacheUnavailable": "会话归属存储暂不可用，本次沿用可用帐号调度。",
+    "decisions": { "new_session": "新会话", "owner_hit": "复用原归属", "temporary_spillover": "临时分流，保留归属", "takeover": "尝试由新帐号接管" },
+    "reasons": { "unbound": "尚未建立归属", "owner_available": "原归属可用", "owner_unavailable": "原归属无法承接本次请求", "account_busy": "帐号并发已满", "route_busy": "路由容量暂时不足", "rpm_busy": "请求频率暂时达到限制", "profit_gate": "暂未满足费用准入", "owner_state_unavailable": "暂时无法确认原归属状态", "owner_lookup_failed": "原归属查询暂时失败", "rpm_lookup_failed": "请求频率查询暂时失败", "concurrent_owner": "其他并发请求已确定归属" }
+  },
   "transportScope": "各区间以请求开始对齐，可能重叠，不能相加。连接获取包含排队和建连；SOCKS 包含连接代理。标识仅用于对比配置，不代表实际公网 IP。未采集不等于零耗时。",
   "tlsHandshake": {"full": "完整握手", "resumed": "恢复会话"},
   "borrowAttempts": "借票与兜底请求尝试",

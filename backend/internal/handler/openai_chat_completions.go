@@ -149,6 +149,11 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 
 	sessionHash := h.gatewayService.GenerateSessionHash(c, body)
 	promptCacheKey := h.gatewayService.ExtractSessionID(c, body)
+	c.Request = c.Request.WithContext(h.gatewayService.BeginOpenAISessionAffinity(c.Request.Context(), service.OpenAISessionAffinityRequest{
+		UserID: subject.UserID, APIKeyID: apiKey.ID, GroupID: apiKey.GroupID,
+		SessionHash: sessionHash, Model: reqModel, Platform: requestPlatform,
+	}))
+	defer func() { h.gatewayService.FinishOpenAISessionAffinity(c.Request.Context(), nil, nil) }()
 
 	c.Request = c.Request.WithContext(service.WithBorrowBusinessBinding(c.Request.Context(), c.Request.Header, ""))
 	// Borrowing uses the same retry, timeout and cancellation policy as ordinary traffic.
@@ -287,6 +292,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 			}()
 			return h.gatewayService.ForwardAsChatCompletions(rpmAdmission.forwardContext(c.Request.Context(), account), c, account, forwardBody, promptCacheKey, "")
 		}()
+		service.ObserveOpenAISessionAffinityFailure(c.Request.Context(), account.ID, err)
 		if retryOpenAIInitialAdmission(c, err, result, body, account.ID, failedAccountIDs, &switchCount, maxAccountSwitches) {
 			lastAdmissionErr = err
 			reqLog.Info("openai_chat_completions.admission_reselecting", zap.Int64("account_id", account.ID), zap.Int("switch_count", switchCount))
@@ -464,6 +470,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, reqModel, false, result), true, nil)
 		}
 
+		h.gatewayService.FinishOpenAISessionAffinity(c.Request.Context(), account, result)
 		submitChatUsage(result)
 		reqLog.Debug("openai_chat_completions.request_completed",
 			zap.Int64("account_id", account.ID),

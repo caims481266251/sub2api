@@ -28,7 +28,8 @@
         <td :data-label="t('ticketBorrowing.management.businessInflight')">
           <strong class="tabular-nums">{{ t('ticketBorrowing.statusSummary.inflight', { count: target.business_inflight ?? 0 }) }}</strong>
           <p v-if="(target.business_inflight ?? 0) > 0 && !ready(target)" class="mt-1 text-xs leading-5 text-blue-700 dark:text-blue-300" data-testid="target-natural-drain">{{ t('ticketBorrowing.statusSummary.existingContinue') }}</p>
-          <span class="borrow-subline !whitespace-normal">{{ t('ticketBorrowing.management.accountConcurrency', { count: target.business_concurrency ?? '—' }) }}</span>
+          <span class="borrow-subline !whitespace-normal" data-testid="target-account-load">{{ t('ticketBorrowing.routes.load', { count: borrowAccountCapacity(target).occupied, limit: borrowAccountCapacity(target).limit ?? '—' }) }}</span>
+          <span class="borrow-subline !whitespace-normal" data-testid="target-account-remaining">{{ t('ticketBorrowing.routes.sharedRemaining', { count: borrowAccountCapacity(target).remaining ?? '—' }) }}</span>
         </td>
         <td :data-label="t('ticketBorrowing.management.probing')">
           <BorrowTargetStatus :target="target" :running="running" :now="now" :source-budget="sourceBudget" />
@@ -53,7 +54,7 @@ import { useBorrowPreference } from '@/composables/useBorrowPreference'
 import { useI18n } from 'vue-i18n'
 import BorrowTargetStatus from './BorrowTargetStatus.vue'
 import BorrowBusinessRoutes from './BorrowBusinessRoutes.vue'
-import { borrowProbeState, borrowSeconds, borrowReady, borrowRouteCounts, borrowTargetAdmissionState, borrowAdmissionDeadline } from '@/composables/borrowStatus'
+import { borrowAccountCapacity, borrowProbeState, borrowSeconds, borrowReady, borrowRouteCounts, borrowTargetAdmissionState, borrowAdmissionDeadline } from '@/composables/borrowStatus'
 import type { BorrowTarget, BorrowSettings } from '@/api/admin/ticketBorrowing'
 import Select from '@/components/common/Select.vue'
 import BorrowListPagination from './BorrowListPagination.vue'

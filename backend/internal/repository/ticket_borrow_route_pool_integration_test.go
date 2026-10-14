@@ -34,7 +34,6 @@ func completedPoolQuality(t *testing.T, r *ticketBorrowRepository, job *service.
 func TestBorrowRoutePoolCooldownGenerationAndNaturalDrain(t *testing.T) {
 	r, id, routes := borrowRouteLoadFixture(t)
 	rotationExec(t, `UPDATE accounts SET concurrency=10 WHERE id=$1`, id)
-	rotationExec(t, `UPDATE ticket_borrow_routes SET dispatch_limit=3 WHERE id=$1`, routes[0].ID)
 	a, la := poolReserve(t, r, id, routes[0].ID)
 	b, lb := poolReserve(t, r, id, routes[0].ID)
 	c, lc := poolReserve(t, r, id, routes[0].ID)
@@ -82,58 +81,90 @@ func TestBorrowRoutePoolCooldownGenerationAndNaturalDrain(t *testing.T) {
 	require.NoError(t, r.FinishRouteHealth(t.Context(), job, completedPoolQuality(t, r, job)))
 	resumed, lr := poolReserve(t, r, id, a.ID)
 	require.EqualValues(t, 3, resumed.Generation)
-	_, second := poolReserve(t, r, id, a.ID)
-	_, third := poolReserve(t, r, id, a.ID)
+	leases := []string{lr}
+	for range 9 {
+		_, lease := poolReserve(t, r, id, a.ID)
+		leases = append(leases, lease)
+	}
 	_, err = r.ReserveRoute(t.Context(), id, "identity", a.ID, "", uuid.NewString())
-	require.Equal(t, "route_busy", service.BorrowAdmissionReason(err), "recovered routes start with three slots")
-	require.NoError(t, r.ReleaseRoute(t.Context(), second))
-	require.NoError(t, r.ReleaseRoute(t.Context(), third))
+	require.Equal(t, "account_busy", service.BorrowAdmissionReason(err), "a recovered route immediately shares the full account capacity")
 	require.NoError(t, r.ObserveRouteOutcome(t.Context(), service.BorrowRouteOutcome{Route: resumed, Lease: lr, Success: true}))
-	var limit int
-	require.NoError(t, integrationDB.QueryRow(`SELECT dispatch_limit FROM ticket_borrow_routes WHERE id=$1`, a.ID).Scan(&limit))
-	require.Equal(t, 4, limit)
-	require.NoError(t, r.ReleaseRoute(t.Context(), lr))
+	for _, lease := range leases {
+		require.NoError(t, r.ReleaseRoute(t.Context(), lease))
+	}
 }
-func TestBorrowRoutePoolInitialThreeSlotsRespectAccountCapacity(t *testing.T) {
+func TestBorrowRoutePoolSharedAccountCapacityAcrossInstances(t *testing.T) {
 	for _, capacity := range []int{2, 10} {
-		t.Run(fmt.Sprint(capacity), func(t *testing.T) {
-			r, id, routes := borrowRouteLoadFixture(t)
-			rotationExec(t, `UPDATE accounts SET concurrency=$2 WHERE id=$1`, id, capacity)
-			type result struct {
-				lease string
-				err   error
+		for _, background := range []int{0, 2} {
+			for _, multipleRoutes := range []bool{false, true} {
+				t.Run(fmt.Sprintf("capacity=%d/background=%d/multiple=%t", capacity, background, multipleRoutes), func(t *testing.T) {
+					r, id, routes := borrowRouteLoadFixture(t)
+					rotationExec(t, `UPDATE accounts SET concurrency=$2 WHERE id=$1`, id, capacity)
+					for range background {
+						probe := uuid.NewString()
+						rotationExec(t, `INSERT INTO ticket_borrow_requests(id,target_id,kind,batch_id,phase,lease_until) VALUES($1,$2,'probe',$1,'quality',clock_timestamp()+INTERVAL '60 seconds')`, probe, id)
+					}
+					fresh := NewTicketBorrowRepository(integrationDB, r.encryptor).(*ticketBorrowRepository)
+					type result struct {
+						lease string
+						err   error
+					}
+					results := make(chan result, 16)
+					for i := range 16 {
+						go func() {
+							repo := r
+							if i%2 == 0 {
+								repo = fresh
+							}
+							preferred := routes[0].ID
+							if multipleRoutes {
+								preferred = ""
+							}
+							lease := uuid.NewString()
+							_, err := repo.ReserveRoute(t.Context(), id, "identity", preferred, "", lease)
+							results <- result{lease, err}
+						}()
+					}
+					var leases []string
+					for range 16 {
+						got := <-results
+						if got.err == nil {
+							leases = append(leases, got.lease)
+						} else {
+							require.ErrorIs(t, got.err, service.ErrBorrowNoEligibleRoute)
+							require.Equal(t, "account_busy", service.BorrowAdmissionReason(got.err))
+						}
+					}
+					require.Len(t, leases, capacity-background)
+					states, err := r.RouteStatuses(t.Context(), id, "identity")
+					require.NoError(t, err)
+					require.Len(t, states, len(routes))
+					total := 0
+					for _, state := range states {
+						total += state.Inflight
+						require.Zero(t, state.AvailableSlots)
+						require.False(t, state.Usable)
+						require.Equal(t, "account_busy", state.UnavailableReason)
+						if !multipleRoutes && state.ID == routes[0].ID {
+							require.Equal(t, capacity-background, state.Inflight)
+						}
+					}
+					require.Equal(t, capacity-background, total)
+					if len(leases) > 0 {
+						require.NoError(t, r.ReleaseRoute(t.Context(), leases[0]))
+						states, err = r.RouteStatuses(t.Context(), id, "identity")
+						require.NoError(t, err)
+						for _, state := range states {
+							require.True(t, state.Usable)
+							require.Equal(t, 1, state.AvailableSlots, "one released account slot is shared by all routes")
+						}
+					}
+					for _, lease := range leases {
+						require.NoError(t, r.ReleaseRoute(t.Context(), lease))
+					}
+				})
 			}
-			results := make(chan result, 6)
-			for range 6 {
-				go func() {
-					lease := uuid.NewString()
-					_, err := r.ReserveRoute(t.Context(), id, "identity", routes[0].ID, "", lease)
-					results <- result{lease, err}
-				}()
-			}
-			var leases []string
-			for range 6 {
-				got := <-results
-				if got.err == nil {
-					leases = append(leases, got.lease)
-				} else {
-					require.ErrorIs(t, got.err, service.ErrBorrowNoEligibleRoute)
-				}
-			}
-			require.Len(t, leases, min(3, capacity))
-			states, err := r.RouteStatuses(t.Context(), id, "identity")
-			require.NoError(t, err)
-			for _, state := range states {
-				if state.ID == routes[0].ID {
-					require.Equal(t, 3, state.DispatchLimit)
-					require.Zero(t, state.AvailableSlots)
-					require.False(t, state.Usable)
-				}
-			}
-			for _, lease := range leases {
-				require.NoError(t, r.ReleaseRoute(t.Context(), lease))
-			}
-		})
+		}
 	}
 }
 
@@ -497,10 +528,10 @@ func TestBorrowRoutePoolAbandonedProbeReclaimsWithoutRevival(t *testing.T) {
 	require.NoError(t, r.FinishRouteHealth(t.Context(), replacement, completedPoolQuality(t, r, replacement)))
 }
 
-func TestBorrowRoutePoolIdleReprobePreservesDispatchWindow(t *testing.T) {
+func TestBorrowRoutePoolIdleReprobeRestoresSharedCapacity(t *testing.T) {
 	r, id, routes := borrowRouteLoadFixture(t)
 	rotationExec(t, `UPDATE accounts SET concurrency=10 WHERE id=$1`, id)
-	rotationExec(t, `UPDATE ticket_borrow_routes SET dispatch_limit=7,quality_valid_until=clock_timestamp()-INTERVAL '1 second',checked_at=clock_timestamp()-INTERVAL '61 seconds',last_success_at=clock_timestamp()-INTERVAL '61 seconds' WHERE id=$1`, routes[0].ID)
+	rotationExec(t, `UPDATE ticket_borrow_routes SET quality_valid_until=clock_timestamp()-INTERVAL '1 second',checked_at=clock_timestamp()-INTERVAL '61 seconds',last_success_at=clock_timestamp()-INTERVAL '61 seconds' WHERE id=$1`, routes[0].ID)
 	rotationExec(t, `UPDATE ticket_borrow_route_health SET token='',lease_until=NULL,last_started_at=NULL`)
 	job, err := r.AcquireRouteHealth(t.Context(), uuid.NewString())
 	require.NoError(t, err)
@@ -508,7 +539,10 @@ func TestBorrowRoutePoolIdleReprobePreservesDispatchWindow(t *testing.T) {
 	_, err = r.ReserveRoute(t.Context(), id, "identity", job.Route.ID, "", uuid.NewString())
 	require.ErrorIs(t, err, service.ErrBorrowUnavailable)
 	require.NoError(t, r.FinishRouteHealth(t.Context(), job, completedPoolQuality(t, r, job)))
-	var limit int
-	require.NoError(t, integrationDB.QueryRow(`SELECT dispatch_limit FROM ticket_borrow_routes WHERE id=$1`, job.Route.ID).Scan(&limit))
-	require.Equal(t, 7, limit, "idle verification does not shrink or grow the business window")
+	states, err := r.RouteStatuses(t.Context(), id, "identity")
+	require.NoError(t, err)
+	for _, state := range states {
+		require.True(t, state.Usable)
+		require.Equal(t, 10, state.AvailableSlots, "quality recovery permits all shared account slots immediately")
+	}
 }

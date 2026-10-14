@@ -225,7 +225,7 @@ export default {
 },
   statusSummary: {
     accepting: "Accepting {count}",
-    busy: "Full {count}",
+    busy: "Waiting for account capacity {count}",
     pending: "Pending / checking {count}",
     cooling: "Cooling {count}",
     unavailable: "Unavailable {count}",
@@ -237,7 +237,6 @@ export default {
     inflight: "{count} in progress",
     noNewRequests: "Not accepting new requests",
     existingContinue: "Existing requests continue",
-    routeLimit: "Route concurrency limit {count}",
     routeLifetime: "Time until route expiry",
     deadlineAt: "Expires at {time}",
     minutesSeconds: "{minutes}m {seconds}s",
@@ -272,10 +271,13 @@ export default {
     ticketExpiry: "Ticket expires",
 
     title: 'Business routes', route: 'Route / gateway', state: 'Admission', remaining: 'Admission time left', inflight: 'In-flight requests',
-    load: '{count} route requests · Account concurrency limit {limit}', source: 'Source #{id}',
+    load: 'Account occupancy {count} / {limit}', source: 'Source #{id}',
+    sharedCapacity: 'Business {business} · Background {background} · Shared account slots remaining {remaining}',
+    sharedRemaining: 'Shared account slots remaining {count}',
+    sharedAdmission: 'Uses shared account concurrency',
     summary: '{count} available routes · {inflight} in-flight requests',
-    hint: 'Routes share the account concurrency limit. New sessions prefer routes with fewer requests, then the newer route. New or recovered routes start at three concurrent business requests and gradually increase after successes. Continuations retain existing session rules. Cooling and expiry do not interrupt sent requests.',
-    busy: 'At capacity', routeBusy: 'Route capacity is full', accountBusy: 'Account capacity is full (including background requests)', availableSlots: '{count} requests available now',
+    hint: 'All routes share the account concurrency limit, including business requests, probes and quality checks. One route can use all remaining account capacity. New sessions prefer routes with fewer requests, then the newer route. Continuations retain existing session rules. Cooling and expiry do not interrupt sent requests.',
+    busy: 'Account at capacity', accountBusy: 'Account capacity is full (including background requests)',
     accepting: 'Accepting requests', boundOnly: 'Retired from admission', draining: 'In-flight requests only', unavailable: 'Unavailable', empty: 'No stored routes yet; waiting for background probes.'
   },
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { borrowProbeState, borrowReady, borrowSeconds, borrowRouteState } from '../borrowStatus'
+import { borrowAccountCapacity, borrowProbeState, borrowReady, borrowSeconds, borrowRouteState } from '../borrowStatus'
 import { observeBorrowAvailability } from '../borrowAvailability'
 import type { BorrowTarget } from '@/api/admin/ticketBorrowing'
 
@@ -7,6 +7,14 @@ const now = Date.parse('2026-10-11T10:00:00Z')
 const target = (patch: Partial<BorrowTarget> = {}): BorrowTarget => ({ account_id: 1, name: 'target', enabled: true, revision: 1, ready: true, expires_at: new Date(now + 180000).toISOString(), usable_until: new Date(now + 60000).toISOString(), server_now: new Date(now).toISOString(), next_attempt_at: new Date(now - 1000).toISOString(), next_probe_at: new Date(now - 1000).toISOString(), phase: 'waiting', reason: 'target_ticket_changed', maintenance_state: 'search', ...patch })
 
 describe('borrowing status and availability presentation', () => {
+  it('keeps account capacity shared and never multiplies it by route count', () => {
+    const current = target({ business_concurrency: 10, inflight: 2, business_inflight: 6 })
+    expect(borrowAccountCapacity(current)).toEqual({ business: 6, background: 2, occupied: 8, limit: 10, remaining: 2 })
+    expect(borrowAccountCapacity({ ...current, business_inflight: 10 }).remaining).toBe(0)
+    expect(borrowAccountCapacity({ ...current, business_concurrency: 5 }).remaining).toBe(0)
+    expect(borrowAccountCapacity({ ...current, business_concurrency: undefined }).remaining).toBeUndefined()
+  })
+
   it('uses the same current route eligibility in target summaries and route details', () => {
     const current = target({ business_routes: [{ id: 'r', state: 'normal', usable: true, inventory_eligible: true, usable_until: new Date(now + 60000).toISOString(), quality_valid_until: new Date(now + 1000).toISOString(), inflight: 0 }] } as Partial<BorrowTarget>)
     expect(borrowReady(current, now)).toBe(true)

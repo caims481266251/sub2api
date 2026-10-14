@@ -225,7 +225,7 @@ export default {
 },
   statusSummary: {
     accepting: "可接单 {count} 条",
-    busy: "满载 {count} 条",
+    busy: "等待账号空位 {count} 条",
     pending: "待检测 / 检测中 {count} 条",
     cooling: "冷却 {count} 条",
     unavailable: "不可接单 {count} 条",
@@ -237,7 +237,6 @@ export default {
     inflight: "执行中 {count} 个",
     noNewRequests: "暂不接收新请求",
     existingContinue: "已有请求继续处理",
-    routeLimit: "本路由并发上限 {count}",
     routeLifetime: "距离路由到期",
     deadlineAt: "{time} 到期",
     minutesSeconds: "{minutes} 分 {seconds} 秒",
@@ -272,10 +271,13 @@ export default {
     ticketExpiry: "票据到期",
 
     title: '业务路由池', route: '路由 / 网关', state: '接单状态', remaining: '剩余可接单时间', inflight: '在途请求',
-    load: '路由在途 {count} · 账号并发上限 {limit}', source: '来源 #{id}',
+    load: '账号总占用 {count} / {limit}', source: '来源 #{id}',
+    sharedCapacity: '业务 {business} · 后台 {background} · 账号共享剩余 {remaining}',
+    sharedRemaining: '账号共享剩余 {count}',
+    sharedAdmission: '使用账号共享并发',
     summary: '{count} 条可接单路由 · {inflight} 个在途请求',
-    hint: '路由共用账号总并发。新会话优先选择在途较少的路由，同负荷选较新路由。新发布或恢复的路由从 3 个业务并发起步，随成功请求逐步放量；续接保留现有会话规则。冷却和到期不打断已发送请求。',
-    busy: '暂时满载', routeBusy: '该路由容量已满', accountBusy: '账号总容量已满（含后台请求）', availableSlots: '当前可接 {count} 个请求',
+    hint: '所有路由共享账号总并发，业务、探测和质量检查共同占用容量。单条路由可使用账号全部剩余容量。新会话优先选择在途较少的路由，同负荷选较新路由；续接保留现有会话规则。冷却和到期不打断已发送请求。',
+    busy: '账号并发已满', accountBusy: '账号总容量已满（含后台请求）',
     accepting: '可接单', boundOnly: '已退出接单', draining: '仅剩在途请求', unavailable: '不可接单', empty: '暂无已存储路由，等待后台探测获取。'
   },
 

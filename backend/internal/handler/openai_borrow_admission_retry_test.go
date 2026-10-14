@@ -225,7 +225,7 @@ func TestBorrowAdmissionUsesOrdinaryAccountReselection(t *testing.T) {
 						case "reserve":
 							borrow.reserveErr[1] = service.ErrBorrowUnavailable
 						case "capacity":
-							borrow.reserveErr[1] = &service.BorrowRouteAdmissionError{Reason: "route_busy"}
+							borrow.reserveErr[1] = &service.BorrowRouteAdmissionError{Reason: "account_busy"}
 						case "before_transport":
 							borrow.beforeSendErr[1] = service.ErrBorrowUnavailable
 						}
@@ -255,7 +255,7 @@ func TestBorrowAdmissionCapacityRaceWaitsWithoutAnotherAccount(t *testing.T) {
 		for _, outcome := range []string{"released", "timeout"} {
 			t.Run(endpoint+"/"+outcome, func(t *testing.T) {
 				borrow := newBorrowAdmissionRetryRepo()
-				borrow.reserveErr[1] = &service.BorrowRouteAdmissionError{Reason: "route_busy"}
+				borrow.reserveErr[1] = &service.BorrowRouteAdmissionError{Reason: "account_busy"}
 				upstream := &borrowAdmissionRetryUpstream{}
 				h, accounts := newBorrowAdmissionRetryHandler(t, borrow, upstream)
 				accounts.accounts = accounts.accounts[:1]

@@ -29,6 +29,9 @@ func borrowPreferredPass(ctx context.Context) bool {
 // The tier is a request-local preference, never a replacement for admission.
 // Checks of identity, model, route deadline and concurrency still run normally.
 func borrowSchedulingAllowsAccount(ctx context.Context, id int64) bool {
+	if !openAISessionAffinityAllowsAccount(ctx, id) {
+		return false
+	}
 	tier, restricted := ctx.Value(borrowSchedulingTierKey{}).(borrowSchedulingTier)
 	if !restricted {
 		return true

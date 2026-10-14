@@ -272,6 +272,11 @@ gateway:
   # Pre-output attempt staging is capped at 8 MiB; overflow fails over without exposing partial SSE data.
   # 首次输出前的单次尝试暂存上限为 8 MiB；溢出时切号且不暴露不完整 SSE 数据。
   openai_first_output_timeout_seconds: 0
+  # HTTP 文本会话优先复用健康归属帐号；临时满载分流不改归属，成功接管后不自动切回借票。
+  # 设为 false 恢复原选号策略，不删除响应续接记录。有效期沿用 openai_ws.sticky_session_ttl_seconds。
+  openai_session_affinity_enabled: true
+  # 灰度分组 ID；空列表对所有分组生效，0 表示无分组。
+  openai_session_affinity_group_ids: []
   # Optional high/xhigh/max override (seconds, 0=use the standard timeout)
   openai_high_effort_first_output_timeout_seconds: 0
   # Max request body size in bytes (default: 256MB)

@@ -163,9 +163,8 @@ func TestBorrowRouteQualityEarlyRefresh(t *testing.T) {
 			require.NoError(t, r.FinishRouteHealth(t.Context(), job, o))
 			var state string
 			var generation int64
-			var limit int
 			var remaining float64
-			require.NoError(t, r.db.QueryRowContext(t.Context(), `SELECT state,generation,dispatch_limit,COALESCE(EXTRACT(EPOCH FROM quality_valid_until-clock_timestamp()),0) FROM ticket_borrow_routes WHERE id=$1`, job.Route.ID).Scan(&state, &generation, &limit, &remaining))
+			require.NoError(t, r.db.QueryRowContext(t.Context(), `SELECT state,generation,COALESCE(EXTRACT(EPOCH FROM quality_valid_until-clock_timestamp()),0) FROM ticket_borrow_routes WHERE id=$1`, job.Route.ID).Scan(&state, &generation, &remaining))
 			if outcome == "failed" || outcome == "business_429" {
 				require.Equal(t, "cooling", state)
 				require.EqualValues(t, 2, generation)
@@ -181,9 +180,6 @@ func TestBorrowRouteQualityEarlyRefresh(t *testing.T) {
 				} else {
 					require.InDelta(t, 30, remaining, 2)
 				}
-				if outcome == "passed" {
-					require.Equal(t, 4, limit, "business growth survives an early health check")
-				}
 				_, next := poolReserve(t, r, id, job.Route.ID)
 				require.NoError(t, r.ReleaseRoute(t.Context(), next))
 			}
@@ -194,8 +190,6 @@ func TestBorrowRouteQualityEarlyRefresh(t *testing.T) {
 func TestBorrowRouteAdmissionStatusMatchesCapacity(t *testing.T) {
 	r, id, routes := borrowRouteLoadFixture(t)
 	rotationExec(t, `UPDATE accounts SET concurrency=2 WHERE id=$1`, id)
-	// Exercise a per-route window smaller than the account's shared capacity.
-	rotationExec(t, `UPDATE ticket_borrow_routes SET dispatch_limit=1 WHERE target_id=$1`, id)
 	assertStatus := func(routeID, reason string, slots int) {
 		t.Helper()
 		states, err := r.RouteStatuses(t.Context(), id, "identity")
@@ -216,9 +210,9 @@ func TestBorrowRouteAdmissionStatusMatchesCapacity(t *testing.T) {
 		}
 		t.Fatal("route missing from status")
 	}
-	assertStatus(routes[0].ID, "", 1)
+	assertStatus(routes[0].ID, "", 2)
 	first, lease := poolReserve(t, r, id, routes[0].ID)
-	assertStatus(first.ID, "route_busy", 0)
+	assertStatus(first.ID, "", 1)
 	assertStatus(routes[1].ID, "", 1)
 	require.NoError(t, r.CheckRouteReservation(t.Context(), first, lease))
 	probe := uuid.NewString()
@@ -228,7 +222,7 @@ func TestBorrowRouteAdmissionStatusMatchesCapacity(t *testing.T) {
 	rotationExec(t, `UPDATE ticket_borrow_requests SET finished_at=clock_timestamp() WHERE id=$1`, probe)
 	assertStatus(routes[1].ID, "", 1)
 	require.NoError(t, r.ReleaseRoute(t.Context(), lease))
-	assertStatus(first.ID, "", 1)
+	assertStatus(first.ID, "", 2)
 	rotationExec(t, `UPDATE ticket_borrow_targets SET upstream_wait_until=clock_timestamp()+INTERVAL '1 minute' WHERE account_id=$1`, id)
 	assertStatus(first.ID, "account_cooling", 0)
 	rotationExec(t, `UPDATE ticket_borrow_targets SET upstream_wait_until=NULL WHERE account_id=$1`, id)

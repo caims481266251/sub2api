@@ -6,22 +6,42 @@ import type { BorrowTarget } from '@/api/admin/ticketBorrowing'
 vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string, args?: Record<string, unknown>) => key + (args ? JSON.stringify(args) : ''), te: () => true }) }))
 
 describe('business route occupancy', () => {
+  it('shows one shared budget for multiple routes and no per-route capacity or fallback limit', () => {
+    const now = Date.now()
+    const target = {
+      enabled: true, business_concurrency: 10, business_inflight: 6, inflight: 2,
+      business_routes: [
+        { id: 'a', gateway: 'gw-a', state: 'normal', usable: true, inventory_eligible: true, usable_until: new Date(now + 60000).toISOString(), inflight: 5, available_slots: 2 },
+        { id: 'b', gateway: 'gw-b', state: 'normal', usable: true, inventory_eligible: true, usable_until: new Date(now + 60000).toISOString(), inflight: 1, available_slots: 2 }
+      ]
+    } as BorrowTarget
+    const w = mount(BorrowBusinessRoutes, { props: { target, now } })
+    expect(w.get('[data-testid="business-route-load"]').text()).toContain('{"count":8,"limit":10}')
+    expect(w.findAll('[data-testid="account-shared-capacity"]')).toHaveLength(1)
+    expect(w.get('[data-testid="account-shared-capacity"]').text()).toContain('{"business":6,"background":2,"remaining":2}')
+    for (const row of w.findAll('[data-business-route]')) {
+      expect(row.get('[data-testid="route-admission"] [data-tag-kind="route"]').attributes('data-tag-value')).toBe('accepting')
+      expect(row.get('[data-route-available]').text()).toBe('ticketBorrowing.routes.sharedAdmission')
+      expect(row.text()).not.toContain('routeLimit')
+    }
+    expect(w.get('[data-business-route="a"] [data-route-inflight]').text()).toContain('"count":5')
+  })
+
   it('separates full capacity from quality failure and permits early rechecks with a current pass', async () => {
     const now = Date.now()
-    const route = { id: 'r', gateway: 'gw', state: 'normal', usable: true, checking: true, inventory_eligible: true, usable_until: new Date(now + 60000).toISOString(), quality_valid_until: new Date(now + 10000).toISOString(), inflight: 1, dispatch_limit: 3, available_slots: 2 }
-    const target = { enabled: true, business_routes: [route] } as BorrowTarget
+    const route = { id: 'r', gateway: 'gw', state: 'normal', usable: true, checking: true, inventory_eligible: true, usable_until: new Date(now + 60000).toISOString(), quality_valid_until: new Date(now + 10000).toISOString(), inflight: 1, available_slots: 2 }
+    const target = { enabled: true, business_concurrency: 4, business_inflight: 1, inflight: 1, business_routes: [route] } as BorrowTarget
     const w = mount(BorrowBusinessRoutes, { props: { target, now } })
     expect(w.text()).toContain('routes.accepting')
     expect(w.text()).toContain('statusSummary.refreshingQuality')
-    expect(w.get('[data-route-available]').text()).toContain('"count":2')
+    expect(w.get('[data-route-available]').text()).toContain('routes.sharedAdmission')
+    expect(w.get('[data-testid="account-shared-capacity"]').text()).toContain('"remaining":2')
     await w.setProps({ target: { ...target, business_routes: [{ ...route, usable: false, available_slots: 0, unavailable_reason: 'account_busy' }] } })
     expect(w.text()).toContain('routes.busy')
     expect(w.text()).toContain('routes.accountBusy')
     expect(w.text()).not.toContain('statusSummary.existingContinue')
     expect(w.text()).not.toContain('routes.accepting')
     expect(w.get('[data-route-count="busy"]').text()).toContain('"count":1')
-    await w.setProps({ target: { ...target, business_routes: [{ ...route, usable: false, available_slots: 0, unavailable_reason: 'route_busy' }] } })
-    expect(w.text()).toContain('routes.routeBusy')
     await w.setProps({ now: now + 11000 })
     expect(w.get('[data-testid="route-admission"]').text()).toContain('routePool.checking')
     expect(w.text()).toContain('statusSummary.existingContinue')
@@ -66,7 +86,8 @@ describe('business route occupancy', () => {
       ]
     } as BorrowTarget
     const w = mount(BorrowBusinessRoutes, { props: { target, now } })
-    expect(w.get('[data-testid="business-route-load"]').text()).toContain('{"count":7,"limit":10}')
+    expect(w.get('[data-testid="business-route-load"]').text()).toContain('{"count":9,"limit":10}')
+    expect(w.get('[data-testid="account-shared-capacity"]').text()).toContain('{"business":7,"background":2,"remaining":1}')
     expect(w.get('[data-business-route="a"]').text()).toContain('routes.accepting')
     expect(w.get('[data-business-route="b"]').text()).toContain('routes.boundOnly')
     expect(w.get('[data-business-route="c"]').text()).toContain('statusSummary.existingContinue')
@@ -80,7 +101,7 @@ describe('business route occupancy', () => {
 describe('current admission and historical quality', () => {
   const now = Date.parse('2026-10-14T07:14:00Z')
   const until = new Date(now + 3000000).toISOString()
-  const base = { id: 'cooling', gateway: 'chat.gateway.unified-96.api.openai.com', source_account_id: 71, state: 'cooling', usable: false, inventory_eligible: true, usable_until: until, inflight: 2, dispatch_limit: 1, available_slots: 0, cooldown_until: new Date(now + 94000).toISOString(), last_error: 'route_upstream_error', quality: { status: 'passed', model: 'gpt-6-astra', reasoning_effort: 'medium', answer: '21', checked_at: new Date(now - 60000).toISOString() } }
+  const base = { id: 'cooling', gateway: 'chat.gateway.unified-96.api.openai.com', source_account_id: 71, state: 'cooling', usable: false, inventory_eligible: true, usable_until: until, inflight: 2, available_slots: 0, cooldown_until: new Date(now + 94000).toISOString(), last_error: 'route_upstream_error', quality: { status: 'passed', model: 'gpt-6-astra', reasoning_effort: 'medium', answer: '21', checked_at: new Date(now - 60000).toISOString() } }
   it('shows cooling, continuing work and an invalidated historical pass without implying admission', async () => {
     const w = mount(BorrowBusinessRoutes, { props: { target: { enabled: true, stored_inventory_count: 1, business_routes: [base] } as BorrowTarget, now } })
     expect(w.get('[data-testid="route-admission"]').text()).toContain('tags.cooling')

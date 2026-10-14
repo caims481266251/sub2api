@@ -2473,7 +2473,10 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerNoWait(
 		}
 		return selectOnce(selectionCtx)
 	}
-	selection, decision, err = selectPreferred(ctx)
+	selectWithAffinity := func(selectionCtx context.Context) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
+		return s.selectWithOpenAISessionAffinity(selectionCtx, selectOnce, selectPreferred, requestedModel, excludedIDs)
+	}
+	selection, decision, err = selectWithAffinity(ctx)
 	if err == nil || openAIProxyStreamQuarantineBypassed(ctx) {
 		return selection, decision, err
 	}
@@ -2489,7 +2492,7 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerNoWait(
 		return selection, decision, err
 	}
 	s.logOpenAIProxyStreamQuarantineFailOpen(requestedModel, blocked)
-	return selectPreferred(withOpenAIProxyStreamQuarantineBypass(ctx))
+	return selectWithAffinity(withOpenAIProxyStreamQuarantineBypass(ctx))
 }
 
 type openAIGroupPrivacyRequirementContextKey struct{}

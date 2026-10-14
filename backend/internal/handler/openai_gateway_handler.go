@@ -928,6 +928,12 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	c.Request = c.Request.WithContext(service.WithOpenAIGuardianParentAffinity(
 		c.Request.Context(), c, sessionHashBody, reqModel,
 	))
+	c.Request = c.Request.WithContext(h.gatewayService.BeginOpenAISessionAffinity(c.Request.Context(), service.OpenAISessionAffinityRequest{
+		UserID: subject.UserID, APIKeyID: apiKey.ID, GroupID: apiKey.GroupID,
+		SessionHash: sessionHash, Model: reqModel, Platform: requestPlatform,
+		PreviousResponseID: originalPreviousResponseID, Disabled: legacyCompact || nativeV2 || imageIntent,
+	}))
+	defer func() { h.gatewayService.FinishOpenAISessionAffinity(c.Request.Context(), nil, nil) }()
 	requireCompact := legacyCompact
 
 	c.Request = c.Request.WithContext(service.WithBorrowBusinessBinding(c.Request.Context(), c.Request.Header, originalPreviousResponseID))
@@ -1142,6 +1148,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			return h.gatewayService.Forward(rpmAdmission.forwardContext(c.Request.Context(), account), c, account, attemptBody)
 		}()
 		initialBorrowRejection := result == nil && service.IsOpenAIInitialAdmissionRejection(err)
+		service.ObserveOpenAISessionAffinityFailure(c.Request.Context(), account.ID, err)
 		borrowContinuationUnsent = borrowContinuationUnsent && initialBorrowRejection
 		if initialBorrowRejection && h.retryBorrowHTTPContinuation(c, err, apiKey.GroupID, &forwardBody, &sessionHash, failedAccountIDs, &switchCount, maxAccountSwitches, borrowContinuationUnsent) {
 			lastAdmissionErr = err
@@ -1373,6 +1380,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, forwardModel, requireCompact, result), openAIForwardSucceededForScheduling(result), nil)
 		}
 
+		h.gatewayService.FinishOpenAISessionAffinity(c.Request.Context(), account, result)
 		// 使用量记录通过有界 worker 池提交，避免请求热路径创建无界 goroutine。
 		submitResponsesUsage(result)
 		reqLog.Debug("openai.request_completed",
@@ -1655,6 +1663,11 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 	if h.rejectIfCyberSessionBlocked(c, apiKey, body, reqModel, cyberBlockFormatAnthropic) {
 		return
 	}
+	c.Request = c.Request.WithContext(h.gatewayService.BeginOpenAISessionAffinity(c.Request.Context(), service.OpenAISessionAffinityRequest{
+		UserID: subject.UserID, APIKeyID: apiKey.ID, GroupID: apiKey.GroupID,
+		SessionHash: sessionHash, Model: reqModel, Platform: requestPlatform,
+	}))
+	defer func() { h.gatewayService.FinishOpenAISessionAffinity(c.Request.Context(), nil, nil) }()
 
 	c.Request = c.Request.WithContext(service.WithBorrowBusinessBinding(c.Request.Context(), c.Request.Header, ""))
 	// Borrowing uses the same retry, timeout and cancellation policy as ordinary traffic.
@@ -1802,6 +1815,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			}()
 			return h.gatewayService.ForwardAsAnthropic(rpmAdmission.forwardContext(c.Request.Context(), account), c, account, forwardBody, promptCacheKey, defaultMappedModel)
 		}()
+		service.ObserveOpenAISessionAffinityFailure(c.Request.Context(), account.ID, err)
 		if retryOpenAIInitialAdmission(c, err, result, body, account.ID, failedAccountIDs, &switchCount, maxAccountSwitches) {
 			lastAdmissionErr = err
 			reqLog.Info("openai_messages.admission_reselecting", zap.Int64("account_id", account.ID), zap.Int("switch_count", switchCount))
@@ -1985,6 +1999,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, currentRoutingModel, false, result), true, nil)
 		}
 
+		h.gatewayService.FinishOpenAISessionAffinity(c.Request.Context(), account, result)
 		submitMessagesUsage(result)
 		reqLog.Debug("openai_messages.request_completed",
 			zap.Int64("account_id", account.ID),

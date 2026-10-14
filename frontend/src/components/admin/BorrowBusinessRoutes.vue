@@ -2,8 +2,9 @@
   <section class="rounded-lg border border-gray-100 p-3 dark:border-dark-700" data-testid="business-routes">
     <div class="flex flex-wrap items-center justify-between gap-2 text-sm">
       <h3 class="font-medium">{{ t('ticketBorrowing.routes.title') }}</h3>
-      <span class="tabular-nums" data-testid="business-route-load">{{ t('ticketBorrowing.routes.load', { count: target.business_inflight ?? 0, limit: target.business_concurrency ?? '—' }) }}</span>
+      <span class="tabular-nums" data-testid="business-route-load">{{ t('ticketBorrowing.routes.load', { count: capacity.occupied, limit: capacity.limit ?? '—' }) }}</span>
     </div>
+    <p class="mt-2 text-xs tabular-nums text-gray-500 dark:text-gray-400" data-testid="account-shared-capacity">{{ t('ticketBorrowing.routes.sharedCapacity', { business: capacity.business, background: capacity.background, remaining: capacity.remaining ?? '—' }) }}</p>
     <div class="mt-3 flex flex-wrap items-center gap-2 text-xs" data-testid="route-pool-summary">
       <span v-for="item in summary" :key="item.key" class="rounded-md px-2 py-1 tabular-nums" :class="item.key === 'accepting' && item.count > 0 ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/25 dark:text-emerald-300' : 'bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300'" :data-route-count="item.key">{{ t(`ticketBorrowing.statusSummary.${item.key}`, { count: item.count }) }}</span>
       <span class="text-gray-500 dark:text-gray-400">{{ t('ticketBorrowing.statusSummary.stored', counts) }}</span>
@@ -21,7 +22,7 @@
             <p class="text-gray-500 dark:text-gray-400">{{ t('ticketBorrowing.routes.state') }}</p>
             <BorrowTag kind="route" :value="row.state" />
             <p v-if="row.state === 'cooling'" class="text-amber-700 dark:text-amber-300">{{ seconds(row.route.cooldown_until) > 0 ? t('ticketBorrowing.statusSummary.recheckAfter', { time: duration(row.route.cooldown_until) }) : t('ticketBorrowing.routePool.checkDue') }}</p>
-            <p v-else-if="row.state === 'busy'" class="text-gray-500 dark:text-gray-400">{{ t(row.route.unavailable_reason === 'account_busy' ? 'ticketBorrowing.routes.accountBusy' : 'ticketBorrowing.routes.routeBusy') }}</p>
+            <p v-else-if="row.state === 'busy'" class="text-gray-500 dark:text-gray-400">{{ t('ticketBorrowing.routes.accountBusy') }}</p>
             <p v-else-if="['pending_quality', 'pending_probe', 'checking'].includes(row.state)" class="text-gray-500 dark:text-gray-400">{{ t('ticketBorrowing.statusSummary.checkToResume') }}</p>
             <p v-if="row.route.checking && !['checking', 'expired', 'invalid'].includes(row.state)" class="text-blue-700 dark:text-blue-300">{{ t('ticketBorrowing.statusSummary.refreshingQuality') }}</p>
             <p v-if="row.state === 'cooling' && row.route.last_error"><BorrowTag kind="reason" :value="row.route.last_error" /></p>
@@ -29,10 +30,9 @@
           <div class="min-w-0 space-y-1.5 tabular-nums">
             <p class="text-gray-500 dark:text-gray-400">{{ t('ticketBorrowing.statusSummary.businessRequests') }}</p>
             <p data-route-inflight class="font-medium">{{ t('ticketBorrowing.statusSummary.inflight', { count: row.route.inflight }) }}</p>
-            <p v-if="row.state === 'accepting'" data-route-available class="text-emerald-700 dark:text-emerald-300">{{ t('ticketBorrowing.routes.availableSlots', { count: row.route.available_slots ?? Math.max(0, (row.route.dispatch_limit ?? 3) - row.route.inflight) }) }}</p>
+            <p v-if="row.state === 'accepting'" data-route-available class="text-emerald-700 dark:text-emerald-300">{{ t('ticketBorrowing.routes.sharedAdmission') }}</p>
             <p v-else data-route-available class="text-gray-500 dark:text-gray-400">{{ t('ticketBorrowing.statusSummary.noNewRequests') }}</p>
-            <p v-if="['accepting', 'busy'].includes(row.state)" class="text-gray-500 dark:text-gray-400">{{ t('ticketBorrowing.statusSummary.routeLimit', { count: row.route.dispatch_limit ?? 3 }) }}</p>
-            <p v-else-if="row.route.inflight > 0" class="text-blue-700 dark:text-blue-300" data-testid="route-natural-drain">{{ t('ticketBorrowing.statusSummary.existingContinue') }}</p>
+            <p v-if="!['accepting', 'busy'].includes(row.state) && row.route.inflight > 0" class="text-blue-700 dark:text-blue-300" data-testid="route-natural-drain">{{ t('ticketBorrowing.statusSummary.existingContinue') }}</p>
           </div>
           <div class="min-w-0 space-y-1.5 tabular-nums">
             <p class="text-gray-500 dark:text-gray-400">{{ t('ticketBorrowing.statusSummary.routeLifetime') }}</p>
@@ -72,7 +72,7 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { BorrowTarget } from '@/api/admin/ticketBorrowing'
-import { borrowRouteCounts, borrowRouteQualityState, borrowRouteState, borrowSeconds } from '@/composables/borrowStatus'
+import { borrowAccountCapacity, borrowRouteCounts, borrowRouteQualityState, borrowRouteState, borrowSeconds } from '@/composables/borrowStatus'
 import BorrowTag from './BorrowTag.vue'
 
 const props = defineProps<{ target: BorrowTarget; now: number }>()
@@ -80,6 +80,7 @@ defineEmits<{ records: [routeId: string] }>()
 const { t } = useI18n()
 const seconds = (until?: string) => borrowSeconds(until, props.now)
 const counts = computed(() => borrowRouteCounts(props.target, props.now))
+const capacity = computed(() => borrowAccountCapacity(props.target))
 const summary = computed(() => (['accepting', 'busy', 'pending', 'cooling', 'unavailable', 'expired', 'invalid'] as const)
   .map(key => ({ key, count: counts.value[key] })).filter(item => item.key === 'accepting' || item.count > 0))
 const rows = computed(() => (props.target.business_routes ?? []).map(route => ({ route,

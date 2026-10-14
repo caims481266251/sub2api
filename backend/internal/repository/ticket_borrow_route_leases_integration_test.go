@@ -37,7 +37,6 @@ func borrowRouteLoadFixture(t *testing.T) (*ticketBorrowRepository, int64, []*se
 func TestTicketBorrowRoutesSpreadLoadAcrossInstances(t *testing.T) {
 	r, id, routes := borrowRouteLoadFixture(t)
 	rotationExec(t, `UPDATE accounts SET concurrency=64 WHERE id=$1`, id)
-	rotationExec(t, `UPDATE ticket_borrow_routes SET dispatch_limit=32 WHERE target_id=$1`, id)
 	fresh := NewTicketBorrowRepository(integrationDB, r.encryptor).(*ticketBorrowRepository)
 	var wg sync.WaitGroup
 	errors := make(chan error, 30)
@@ -84,7 +83,6 @@ func TestTicketBorrowRoutesSpreadLoadAcrossInstances(t *testing.T) {
 func TestTicketBorrowRoutesExactReservationRetainsBindingFence(t *testing.T) {
 	r, id, routes := borrowRouteLoadFixture(t)
 	rotationExec(t, `UPDATE accounts SET concurrency=64 WHERE id=$1`, id)
-	rotationExec(t, `UPDATE ticket_borrow_routes SET dispatch_limit=32 WHERE target_id=$1`, id)
 	var wg sync.WaitGroup
 	results := make(chan string, 12)
 	errors := make(chan error, 12)
@@ -128,7 +126,6 @@ func TestTicketBorrowRoutesExactReservationRetainsBindingFence(t *testing.T) {
 func TestTicketBorrowRoutesEligibilityAndOrphanLeases(t *testing.T) {
 	r, id, routes := borrowRouteLoadFixture(t)
 	rotationExec(t, `UPDATE accounts SET concurrency=64 WHERE id=$1`, id)
-	rotationExec(t, `UPDATE ticket_borrow_routes SET dispatch_limit=32 WHERE target_id=$1`, id)
 	ctx := t.Context()
 	lease := uuid.NewString()
 	_, err := r.ReserveRoute(ctx, id, "identity", "", "", lease)

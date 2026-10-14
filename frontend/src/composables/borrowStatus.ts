@@ -31,10 +31,17 @@ export function borrowRouteState(route: BorrowRouteStatus, now: number, enabled 
        (borrowSeconds(route.quality_valid_until, now) === 0 || (route.quality && route.quality.status !== 'passed')))) {
     return route.checking ? 'checking' : 'pending_quality'
   }
-  if (reason === 'route_busy' || reason === 'account_busy' || (route.usable && (route.available_slots === 0 ||
-      (route.dispatch_limit != null && route.inflight >= route.dispatch_limit)))) return 'busy'
+  if (reason === 'account_busy' || (route.usable && route.available_slots === 0)) return 'busy'
   if (!route.usable) return 'unavailable'
   return route.inventory_eligible ? 'accepting' : 'boundOnly'
+}
+
+export function borrowAccountCapacity(target: BorrowTarget) {
+  const business = target.business_inflight ?? (target.business_routes ?? []).reduce((sum, route) => sum + route.inflight, 0)
+  const background = target.inflight ?? 0
+  const occupied = business + background
+  const limit = target.business_concurrency == null ? undefined : Math.max(1, target.business_concurrency)
+  return { business, background, occupied, limit, remaining: limit == null ? undefined : Math.max(0, limit - occupied) }
 }
 
 export function borrowRouteQualityState(route: BorrowRouteStatus, now: number) {

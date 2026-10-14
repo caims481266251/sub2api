@@ -31,6 +31,17 @@
           <details class="mt-3 text-xs text-sky-800 dark:text-sky-300"><summary class="cursor-pointer">{{ t('requestTiming.health.thresholdTitle') }}</summary><p class="mt-2 leading-relaxed">{{ t('requestTiming.health.thresholds') }}</p></details>
         </div>
         <p class="text-xs leading-relaxed text-gray-500 dark:text-gray-400">{{ t('requestTiming.scope') }}</p>
+        <section v-if="trace.session_affinity" class="rounded-xl border border-gray-200 p-4 dark:border-dark-600" data-testid="session-affinity">
+          <h4 class="font-semibold">{{ t('requestTiming.affinity.title') }}</h4>
+          <dl class="mt-3 grid gap-3 text-sm sm:grid-cols-2">
+            <div><dt class="text-gray-500">{{ t('requestTiming.affinity.decision') }}</dt><dd>{{ affinityLabel('decisions', trace.session_affinity.decision) }}</dd></div>
+            <div><dt class="text-gray-500">{{ t('requestTiming.affinity.reason') }}</dt><dd>{{ affinityLabel('reasons', trace.session_affinity.reason) }}</dd></div>
+            <div><dt class="text-gray-500">{{ t(trace.session_affinity.owner_pending ? 'requestTiming.affinity.provisionalOwner' : 'requestTiming.affinity.owner') }}</dt><dd>{{ trace.session_affinity.owner_account_id > 0 ? `#${trace.session_affinity.owner_account_id}` : t('requestTiming.missing') }}</dd></div>
+            <div><dt class="text-gray-500">{{ t('requestTiming.affinity.execution') }}</dt><dd>{{ trace.session_affinity.execution_account_id > 0 ? `#${trace.session_affinity.execution_account_id}` : t('requestTiming.missing') }}</dd></div>
+          </dl>
+          <p class="mt-3 text-xs text-gray-500">{{ t(trace.session_affinity.owner_committed ? 'requestTiming.affinity.committed' : 'requestTiming.affinity.notCommitted') }}</p>
+          <p v-if="trace.session_affinity.cache_unavailable" class="mt-2 text-xs text-amber-600">{{ t('requestTiming.affinity.cacheUnavailable') }}</p>
+        </section>
         <p class="text-sm"><strong>{{ t('usage.latencyTps') }} {{ formatUsageOutputTps(record) ?? '—' }}</strong> · {{ t('requestTiming.tpsNote') }}</p>
         <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('requestTiming.health.attemptGuide') }}</p>
         <p v-if="trace.truncated" class="text-amber-600">{{ t('requestTiming.truncated') }}</p>
@@ -86,6 +97,7 @@ const traces = ref<RequestTiming[]>([]), selected = ref(0), loading = ref(false)
 let controller: AbortController | undefined
 const trace = computed(() => traces.value[selected.value])
 const label = (name: string) => t(`requestTiming.fields.${name}`)
+const affinityLabel = (kind: 'decisions' | 'reasons', value: string) => value ? t(`requestTiming.affinity.${kind}.${value}`) : t('requestTiming.missing')
 const ms = (value: number | null | undefined) => value == null ? t('requestTiming.missing') : value < 1 ? '<1ms' : value < 1000 ? `${value.toFixed(0)}ms` : `${(value / 1000).toFixed(2)}s`
 const bytes = (value: number) => value < 0 ? t('requestTiming.missing') : `${(value / 1048576).toFixed(3)} MiB`
 const yes = (value: boolean | null) => value == null ? t('requestTiming.missing') : t(value ? 'requestTiming.yes' : 'requestTiming.no')

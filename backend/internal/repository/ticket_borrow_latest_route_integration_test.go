@@ -16,7 +16,6 @@ var _ service.BorrowLatestRouteRepository = (*ticketBorrowRepository)(nil)
 func TestBorrowLatestRouteReplacesStillValidRoute(t *testing.T) {
 	r, id, routes := borrowRouteLoadFixture(t)
 	rotationExec(t, `UPDATE accounts SET concurrency=64 WHERE id=$1`, id)
-	rotationExec(t, `UPDATE ticket_borrow_routes SET dispatch_limit=32 WHERE target_id=$1`, id)
 	ctx := t.Context()
 	first, err := r.ReserveLatestRoute(ctx, id, "identity", "client-session", "unused", "old-stream")
 	require.NoError(t, err)
@@ -62,7 +61,6 @@ func TestBorrowLatestRouteReplacesStillValidRoute(t *testing.T) {
 func TestBorrowLatestRouteSessionChangesPreserveResponseLineageAcrossInstances(t *testing.T) {
 	r, id, routes := borrowRouteLoadFixture(t)
 	rotationExec(t, `UPDATE accounts SET concurrency=64 WHERE id=$1`, id)
-	rotationExec(t, `UPDATE ticket_borrow_routes SET dispatch_limit=32 WHERE target_id=$1`, id)
 	ctx := t.Context()
 	_, err := r.ReserveLatestRoute(ctx, id, "identity", "session", "first", uuid.NewString())
 	require.NoError(t, err)
@@ -115,7 +113,6 @@ func TestBorrowLatestRouteSkipsUnusableNewest(t *testing.T) {
 		t.Run(state, func(t *testing.T) {
 			r, id, routes := borrowRouteLoadFixture(t)
 			rotationExec(t, `UPDATE accounts SET concurrency=64 WHERE id=$1`, id)
-			rotationExec(t, `UPDATE ticket_borrow_routes SET dispatch_limit=32 WHERE target_id=$1`, id)
 			ctx := t.Context()
 			query := map[string]string{
 				"expired":         `UPDATE ticket_borrow_routes SET expires_at=clock_timestamp() WHERE id=$1`,

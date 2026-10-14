@@ -350,7 +350,6 @@ type BorrowRouteStatus struct {
 	QualityValidUntil     *time.Time                `json:"quality_valid_until,omitempty"`
 	State                 string                    `json:"state"`
 	Generation            int64                     `json:"generation"`
-	DispatchLimit         int                       `json:"dispatch_limit"`
 	CooldownUntil         *time.Time                `json:"cooldown_until,omitempty"`
 	LastSuccessAt         *time.Time                `json:"last_success_at,omitempty"`
 	LastBusinessSuccessAt *time.Time                `json:"last_business_success_at,omitempty"`
@@ -368,9 +367,11 @@ type BorrowRouteStatus struct {
 	UsableUntil           time.Time                 `json:"usable_until"`
 	InventoryEligible     bool                      `json:"inventory_eligible"`
 	Usable                bool                      `json:"usable"`
-	AvailableSlots        int                       `json:"available_slots"`
-	UnavailableReason     string                    `json:"unavailable_reason,omitempty"`
-	Inflight              int                       `json:"inflight"`
+	// AvailableSlots is the account's shared remaining capacity when this route
+	// is eligible. It must not be summed across routes.
+	AvailableSlots    int    `json:"available_slots"`
+	UnavailableReason string `json:"unavailable_reason,omitempty"`
+	Inflight          int    `json:"inflight"`
 }
 
 type BorrowRouteLeaseRepository interface {

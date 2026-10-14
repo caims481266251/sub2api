@@ -1,4 +1,12 @@
 export default {
+  "affinity": {
+    "title": "Session ownership and cache routing", "decision": "Scheduling decision", "reason": "Selection reason",
+    "owner": "Previous owner account", "provisionalOwner": "Provisional owner account", "execution": "Executing account",
+    "committed": "Business request succeeded; ownership was confirmed or renewed.", "notCommitted": "Ownership was not updated. Temporary spillover, failure, or a concurrent ownership change preserves the existing record.",
+    "cacheUnavailable": "Session ownership storage is temporarily unavailable; normal eligible-account scheduling applies.",
+    "decisions": { "new_session": "New session", "owner_hit": "Reused owner", "temporary_spillover": "Temporary spillover; owner retained", "takeover": "Attempted account takeover" },
+    "reasons": { "unbound": "No owner established", "owner_available": "Owner is available", "owner_unavailable": "Owner cannot serve this request", "account_busy": "Account concurrency is full", "route_busy": "Route capacity is temporarily full", "rpm_busy": "Request rate limit reached", "profit_gate": "Cost admission temporarily unmet", "owner_state_unavailable": "Owner state temporarily unavailable", "owner_lookup_failed": "Owner lookup temporarily failed", "rpm_lookup_failed": "Request rate lookup temporarily failed", "concurrent_owner": "Another concurrent request established an owner" }
+  },
   "transportScope": "Intervals align with request start and may overlap; do not add them. Connection acquisition includes waiting and dialing; SOCKS includes dialing the proxy. IDs compare configuration, not public IPs. Missing does not mean zero.",
   "tlsHandshake": {"full": "Full handshake", "resumed": "Resumed session"},
   "borrowAttempts": "Borrowed and fallback attempts",

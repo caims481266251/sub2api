@@ -70,28 +70,29 @@ func BorrowRecovery(ctx context.Context, state BorrowRecoverySnapshot) {
 }
 
 type Snapshot struct {
-	BorrowRecovery    *BorrowRecoverySnapshot `json:"borrow_recovery,omitempty"`
-	Outcome           string                  `json:"outcome,omitempty"`
-	ClientDisconnect  bool                    `json:"client_disconnect"`
-	Version           int                     `json:"version"`
-	TraceID           string                  `json:"trace_id"`
-	StartedAt         time.Time               `json:"started_at"`
-	TotalMS           float64                 `json:"total_ms"`
-	Status            int                     `json:"status"`
-	Canceled          bool                    `json:"canceled"`
-	Truncated         bool                    `json:"truncated"`
-	BodyBytes         int64                   `json:"body_bytes"`
-	BodyExpected      int64                   `json:"body_expected"`
-	BodyComplete      bool                    `json:"body_complete"`
-	BodyReadMS        float64                 `json:"body_read_ms"`
-	DownstreamBytes   int64                   `json:"downstream_bytes"`
-	DownstreamWriteMS float64                 `json:"downstream_write_ms"`
-	DownstreamError   bool                    `json:"downstream_error"`
-	TTFTMode          string                  `json:"ttft_mode,omitempty"`
-	Terminal          string                  `json:"terminal,omitempty"`
-	Events            map[string]float64      `json:"events"`
-	Spans             []Span                  `json:"spans"`
-	Attempts          []Attempt               `json:"attempts"`
+	SessionAffinity   *SessionAffinitySnapshot `json:"session_affinity,omitempty"`
+	BorrowRecovery    *BorrowRecoverySnapshot  `json:"borrow_recovery,omitempty"`
+	Outcome           string                   `json:"outcome,omitempty"`
+	ClientDisconnect  bool                     `json:"client_disconnect"`
+	Version           int                      `json:"version"`
+	TraceID           string                   `json:"trace_id"`
+	StartedAt         time.Time                `json:"started_at"`
+	TotalMS           float64                  `json:"total_ms"`
+	Status            int                      `json:"status"`
+	Canceled          bool                     `json:"canceled"`
+	Truncated         bool                     `json:"truncated"`
+	BodyBytes         int64                    `json:"body_bytes"`
+	BodyExpected      int64                    `json:"body_expected"`
+	BodyComplete      bool                     `json:"body_complete"`
+	BodyReadMS        float64                  `json:"body_read_ms"`
+	DownstreamBytes   int64                    `json:"downstream_bytes"`
+	DownstreamWriteMS float64                  `json:"downstream_write_ms"`
+	DownstreamError   bool                     `json:"downstream_error"`
+	TTFTMode          string                   `json:"ttft_mode,omitempty"`
+	Terminal          string                   `json:"terminal,omitempty"`
+	Events            map[string]float64       `json:"events"`
+	Spans             []Span                   `json:"spans"`
+	Attempts          []Attempt                `json:"attempts"`
 }
 type Collector struct {
 	mu        sync.Mutex
@@ -221,6 +222,10 @@ func Mode(ctx context.Context, mode string) {
 }
 func (c *Collector) snapshot() Snapshot {
 	d := c.data
+	if d.SessionAffinity != nil {
+		v := *d.SessionAffinity
+		d.SessionAffinity = &v
+	}
 	if d.BorrowRecovery != nil {
 		v := *d.BorrowRecovery
 		d.BorrowRecovery = &v

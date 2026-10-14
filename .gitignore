@@ -135,6 +135,7 @@ vite.config.js
 docs/*
 !docs/openai-ws-sse-acceleration.md
 !docs/openai-outbound-identity.md
+!docs/openai-session-affinity.md
 !docs/PAYMENT.md
 !docs/PAYMENT_CN.md
 !docs/ADMIN_PAYMENT_INTEGRATION_API.md

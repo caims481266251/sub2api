@@ -42,10 +42,9 @@ func updateBorrowRouteOutcome(ctx context.Context, tx *sql.Tx, o service.BorrowR
 	route := o.Route
 	if o.Success {
 		// Only a verified health result can restore pending routes; business can
-		// only grow the current normal generation.
+		// only record success for the current normal generation.
 		res, err := tx.ExecContext(ctx, `UPDATE ticket_borrow_routes r SET state='normal',cooldown_until=NULL,
  generation=r.generation,
- dispatch_limit=CASE WHEN $4 THEN GREATEST(3,r.dispatch_limit) ELSE LEAST(GREATEST(1,a.concurrency),r.dispatch_limit+1) END,
  last_success_at=clock_timestamp(),last_business_success_at=CASE WHEN $4 THEN r.last_business_success_at ELSE clock_timestamp() END
  FROM ticket_borrow_targets t,accounts a WHERE r.id=$1 AND r.generation=$2 AND r.target_id=$3 AND t.account_id=r.target_id AND a.id=t.account_id
  AND t.enabled AND t.revision=r.target_revision AND a.deleted_at IS NULL AND a.status='active' AND a.schedulable
@@ -68,7 +67,7 @@ func updateBorrowRouteOutcome(ctx context.Context, tx *sql.Tx, o service.BorrowR
 	// One state change per generation; late concurrent failures may only extend
 	// an explicit longer Retry-After within that same cooling generation.
 	_, err := tx.ExecContext(ctx, `WITH changed AS (
- UPDATE ticket_borrow_routes r SET state='cooling',generation=r.generation+1,dispatch_limit=3,quality_valid_until=NULL,
+ UPDATE ticket_borrow_routes r SET state='cooling',generation=r.generation+1,quality_valid_until=NULL,
  cooldown_until=GREATEST(clock_timestamp()+(CASE WHEN $8 THEN (s.route_quality->>'interval_seconds')::int ELSE s.route_cooldown_seconds END)*INTERVAL '1 second',$4::timestamptz,t.upstream_wait_until),
  last_error=$5,last_error_at=clock_timestamp()
  FROM ticket_borrow_settings s,ticket_borrow_targets t WHERE s.id=1 AND t.account_id=r.target_id

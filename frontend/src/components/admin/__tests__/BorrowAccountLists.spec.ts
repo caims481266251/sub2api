@@ -12,6 +12,14 @@ const target = (id: number): BorrowTarget => ({ account_id: id, name: `target ${
 beforeEach(() => sessionStorage.clear())
 
 describe('account management lists', () => {
+  it('shows total account occupancy including background work and the shared remainder', () => {
+    const current = { ...target(63), business_inflight: 6, business_concurrency: 10, inflight: 2 }
+    const w = mount(BorrowTargetList, { props: { targets: [current], running: true, now, dirtyIds: {} } })
+    expect(w.get('[data-testid="target-account-load"]').text()).toContain('{"count":8,"limit":10}')
+    expect(w.get('[data-testid="target-account-remaining"]').text()).toContain('"count":2')
+    w.unmount()
+  })
+
   it('explains continuing requests when all stored routes are cooling and keeps old probe results secondary', async () => {
     const current = { ...target(63), ready: false, business_inflight: 2, inventory_count: 0, stored_inventory_count: 1, reason: 'borrow_acquisition_paused',
       business_routes: [{ id: 'r', gateway: 'gw', source_account_id: 71, state: 'cooling', usable: false, inventory_eligible: true, inflight: 2, usable_until: new Date(now + 300000).toISOString() }] } as BorrowTarget
@@ -25,7 +33,7 @@ describe('account management lists', () => {
     expect(history.get('summary').text()).toContain('statusSummary.lastProbeHistory')
     await w.get('[data-expand-routes="63"]').trigger('click')
     expect(w.find('[data-testid="business-routes"]').exists()).toBe(true)
-    await w.setProps({ targets: [{ ...current, business_routes: [{ ...current.business_routes![0], state: 'normal', unavailable_reason: 'route_busy', dispatch_limit: 2 }] }] })
+    await w.setProps({ targets: [{ ...current, business_routes: [{ ...current.business_routes![0], state: 'normal', unavailable_reason: 'account_busy', available_slots: 0 }] }] })
     expect(w.get('[data-testid="target-admission"]').attributes('data-tag-value')).toBe('busy')
     w.unmount()
   })
@@ -78,7 +86,7 @@ describe('account management lists', () => {
     expect(w.emitted('update:selected')?.at(-1)?.[0]).toEqual([])
     expect(w.find('[data-probe-select="26"]').exists()).toBe(false)
     expect(w.text()).toContain('ticketBorrowing.management.selectionCleared')
-    expect(w.get('[data-target-row="26"]').text()).toContain('ticketBorrowing.management.accountConcurrency')
+    expect(w.get('[data-target-row="26"]').text()).toContain('ticketBorrowing.routes.load')
     w.unmount()
   })
   it('explains automatic random environments without manual rotation controls', () => {

@@ -337,7 +337,7 @@ func TestBorrowBusinessRouteWaitUsesRequestBudget(t *testing.T) {
 func TestBorrowBusinessRouteWaitExclusionsNeverAuthorizeReplay(t *testing.T) {
 	ctx, r := WithBorrowBusinessRecovery(t.Context(), nil)
 	defer r.Close()
-	err := &BorrowRouteAdmissionError{Reason: "route_busy"}
+	err := &BorrowRouteAdmissionError{Reason: "account_busy"}
 	require.False(t, r.RememberAdmissionRetry(11, fmt.Errorf("database unavailable")))
 	require.True(t, r.RememberAdmissionRetry(11, err))
 	excluded := map[int64]struct{}{11: {}, 12: {}}

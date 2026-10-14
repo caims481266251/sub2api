@@ -48,9 +48,10 @@ export interface BorrowTarget {
 export interface BorrowRouteQualityConfig { model: string; reasoning_effort: string; interval_seconds: number }
 export interface BorrowRouteQualityResult { status: string; model: string; reasoning_effort: string; answer?: string; reason?: string; http_status: number; checked_at: string; duration_ms: number }
 export interface BorrowRouteStatus {
+ // Remaining account capacity for an eligible route; shared, not additive.
  available_slots?: number; unavailable_reason?: string
  quality?: BorrowRouteQualityResult; quality_valid_until?: string
- state?: 'normal' | 'pending_quality' | 'pending_probe' | 'cooling' | 'expired' | 'invalid'; generation?: number; dispatch_limit?: number
+ state?: 'normal' | 'pending_quality' | 'pending_probe' | 'cooling' | 'expired' | 'invalid'; generation?: number
  cooldown_until?: string; last_success_at?: string; last_business_success_at?: string; last_error_at?: string; last_error?: string
  checking?: boolean; verification_model?: string; deadline_source?: string
  id: string; gateway: string; source_account_id: number; published_at?: string; checked_at?: string

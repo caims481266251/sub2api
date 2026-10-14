@@ -23,11 +23,11 @@ const borrowRouteEligibilityReason = `CASE
  WHEN r.state<>'normal' OR NOT COALESCE((` + borrowQualityEligible + `),false) THEN 'pending_quality'
  ELSE '' END`
 
-const borrowRouteSlots = `LEAST(GREATEST(0,r.dispatch_limit-load.inflight),account_load.available)`
+// Routes share the account's remaining capacity. Per-route load only affects
+// selection order; it never imposes a separate business concurrency limit.
 const borrowRouteAdmissionReason = `CASE WHEN r.identity_hash<>$2 THEN 'invalid'
  WHEN (` + borrowRouteEligibilityReason + `)<>'' THEN (` + borrowRouteEligibilityReason + `)
- WHEN account_load.available<=0 THEN 'account_busy'
- WHEN load.inflight>=r.dispatch_limit THEN 'route_busy' ELSE '' END`
+ WHEN account_load.available<=0 THEN 'account_busy' ELSE '' END`
 
 const borrowRouteAdmissionFrom = ` FROM ticket_borrow_routes r
  LEFT JOIN ticket_borrow_cookie_deadlines d ON d.cookie_hash=r.cookie_hash
@@ -63,7 +63,7 @@ func (r *ticketBorrowRepository) readRouteOrdered(ctx context.Context, db borrow
  AND r.revoked_at IS NULL AND r.inventory_eligible AND NOT r.validation_only
  AND r.identity_hash=$2 AND r.target_revision=t.revision
  AND LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at),r.admission_until)>clock_timestamp()
- ORDER BY CASE (`+borrowRouteAdmissionReason+`) WHEN '' THEN 0 WHEN 'route_busy' THEN 1 WHEN 'account_busy' THEN 2 WHEN 'pending_quality' THEN 3 WHEN 'pending_probe' THEN 4 WHEN 'cooling' THEN 5 ELSE 6 END LIMIT 1`, id, identity, preferred).Scan(&reason)
+ ORDER BY CASE (`+borrowRouteAdmissionReason+`) WHEN '' THEN 0 WHEN 'account_busy' THEN 1 WHEN 'pending_quality' THEN 2 WHEN 'pending_probe' THEN 3 WHEN 'cooling' THEN 4 ELSE 5 END LIMIT 1`, id, identity, preferred).Scan(&reason)
 		if errors.Is(err, sql.ErrNoRows) || (err == nil && reason == "") {
 			return nil, service.ErrBorrowNoEligibleRoute
 		}
@@ -167,12 +167,12 @@ func (r *ticketBorrowRepository) RouteStatuses(ctx context.Context, id int64, id
  LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at),r.admission_until),
  r.inventory_eligible,
  (`+borrowRouteAdmissionReason+`)='',
- CASE WHEN (`+borrowRouteAdmissionReason+`)='' THEN `+borrowRouteSlots+` ELSE 0 END,
+ CASE WHEN (`+borrowRouteAdmissionReason+`)='' THEN account_load.available ELSE 0 END,
  `+borrowRouteAdmissionReason+`,
  load.inflight,r.checked_at,r.checked_at,
  CASE WHEN r.revoked_at IS NOT NULL OR NOT r.inventory_eligible OR r.identity_hash<>$2 OR t.revision<>r.target_revision OR NOT t.enabled THEN 'invalid'
  WHEN LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at),r.admission_until)<=clock_timestamp() THEN 'expired' WHEN r.state='normal' AND NOT COALESCE((`+borrowQualityEligible+`),false) THEN 'pending_quality' ELSE r.state END,
- r.generation,r.dispatch_limit,r.cooldown_until,r.last_success_at,r.last_business_success_at,r.last_error_at,r.last_error,
+ r.generation,r.cooldown_until,r.last_success_at,r.last_business_success_at,r.last_error_at,r.last_error,
  COALESCE(r.health_until>clock_timestamp(),false),r.verification_model,r.deadline_source,r.quality_result,r.quality_valid_until
  `+borrowRouteAdmissionFrom+` LEFT JOIN ticket_borrow_sources src ON src.id=r.source_id
  WHERE r.target_id=$1 AND NOT r.validation_only
@@ -186,7 +186,7 @@ func (r *ticketBorrowRepository) RouteStatuses(ctx context.Context, id int64, id
 	for rows.Next() {
 		var status service.BorrowRouteStatus
 		var quality []byte
-		if err = rows.Scan(&status.ID, &status.Gateway, &status.SourceAccountID, &status.ExpiresAt, &status.UsableUntil, &status.InventoryEligible, &status.Usable, &status.AvailableSlots, &status.UnavailableReason, &status.Inflight, &status.PublishedAt, &status.CheckedAt, &status.State, &status.Generation, &status.DispatchLimit, &status.CooldownUntil, &status.LastSuccessAt, &status.LastBusinessSuccessAt, &status.LastErrorAt, &status.LastError, &status.Checking, &status.VerificationModel, &status.DeadlineSource, &quality, &status.QualityValidUntil); err != nil {
+		if err = rows.Scan(&status.ID, &status.Gateway, &status.SourceAccountID, &status.ExpiresAt, &status.UsableUntil, &status.InventoryEligible, &status.Usable, &status.AvailableSlots, &status.UnavailableReason, &status.Inflight, &status.PublishedAt, &status.CheckedAt, &status.State, &status.Generation, &status.CooldownUntil, &status.LastSuccessAt, &status.LastBusinessSuccessAt, &status.LastErrorAt, &status.LastError, &status.Checking, &status.VerificationModel, &status.DeadlineSource, &quality, &status.QualityValidUntil); err != nil {
 			return nil, err
 		}
 		if err = json.Unmarshal(quality, &status.Quality); err != nil {

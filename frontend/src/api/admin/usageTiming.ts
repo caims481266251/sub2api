@@ -10,6 +10,7 @@ export interface TimingAttempt {
   body_eof: boolean; events: Record<string, number>
 }
 export interface RequestTiming {
+  session_affinity?: { decision: string; reason: string; owner_account_id: number; execution_account_id: number; owner_pending: boolean; success: boolean; owner_committed: boolean; cache_unavailable: boolean }
  borrow_recovery?: BorrowRecovery
   outcome?: string; client_disconnect: boolean; version: number; trace_id: string; started_at: string; total_ms: number; status: number; canceled: boolean
   truncated: boolean; body_bytes: number; body_expected: number; body_complete: boolean; body_read_ms: number

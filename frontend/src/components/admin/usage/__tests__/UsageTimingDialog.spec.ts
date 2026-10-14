@@ -11,6 +11,28 @@ vi.mock('@/utils/format', () => ({ formatDateTime: (s: string) => s }))
 const row = (id: number) => ({ id, model: 'test', request_id: `r${id}`, first_token_ms: 6055, duration_ms: 6067, created_at: '2026-09-23' }) as AdminUsageLog
 const options = { global: { stubs: { BaseDialog: { template: '<section><slot /></section>' } } } }
 describe('Usage timing details', () => {
+  it('distinguishes temporary spillover from committed ownership and keeps old records compatible', async () => {
+    const trace = {
+      trace_id: 'affinity', started_at: '2026-10-14', total_ms: 100, status: 200,
+      body_bytes: 0, body_read_ms: 0, downstream_bytes: 2, downstream_write_ms: 0,
+      events: {}, spans: [], attempts: [],
+      session_affinity: { decision: 'temporary_spillover', reason: 'account_busy', owner_account_id: 11, execution_account_id: 12, owner_pending: false, success: true, owner_committed: false, cache_unavailable: false }
+    }
+    mocks.get.mockResolvedValueOnce({ traces: [trace], retention_days: 30 })
+    const wrapper = mount(UsageTimingDialog, { props: { record: row(1) }, ...options })
+    await flushPromises()
+    const details = wrapper.get('[data-testid="session-affinity"]')
+    expect(details.text()).toContain('requestTiming.affinity.decisions.temporary_spillover')
+    expect(details.text()).toContain('requestTiming.affinity.reasons.account_busy')
+    expect(details.text()).toContain('#11')
+    expect(details.text()).toContain('#12')
+    expect(details.text()).toContain('requestTiming.affinity.notCommitted')
+    expect(details.text()).not.toContain('requestTiming.affinity.committed')
+    mocks.get.mockResolvedValueOnce({ traces: [{ ...trace, session_affinity: undefined }], retention_days: 30 })
+    await wrapper.setProps({ record: row(2) }); await flushPromises()
+    expect(wrapper.find('[data-testid="session-affinity"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
   it('keeps historical values and marks missing details instead of inventing zeros', async () => {
     mocks.get.mockResolvedValue({ traces: [], retention_days: 30 })
     const wrapper = mount(UsageTimingDialog, { props: { record: row(1) }, ...options })

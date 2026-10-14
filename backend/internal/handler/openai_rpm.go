@@ -31,6 +31,7 @@ func (a *openAIRPMAdmission) acquire(ctx context.Context, gateway *service.OpenA
 		a.exhausted = true
 		a.resetAt = state.ResetAt
 		excluded[account.ID] = struct{}{}
+		service.ObserveOpenAISessionAffinityFailure(ctx, account.ID, service.ErrOpenAIRPMExhausted)
 		return true, nil
 	}
 	return false, err

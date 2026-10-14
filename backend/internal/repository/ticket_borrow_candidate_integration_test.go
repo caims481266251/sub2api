@@ -125,8 +125,8 @@ func TestBorrowCandidateAdmissionModeFencesAndInflightCompletion(t *testing.T) {
 		CookieHash: uuid.NewString(), ExpiresAt: time.Now().Add(time.Hour)}
 	require.NoError(t, r.Publish(ctx, route, a.Lease))
 	passBorrowFixtureQuality(t)
-	// Pin one slot so this test isolates preservation of the admitted lease.
-	rotationExec(t, `UPDATE ticket_borrow_routes SET dispatch_limit=1 WHERE id=$1`, route.ID)
+	// Use one account slot to isolate preservation of the admitted lease.
+	rotationExec(t, `UPDATE accounts SET concurrency=1 WHERE id=$1`, a.TargetID)
 	got, err := r.Route(ctx, a.TargetID, a.Identity, route.ID)
 	require.NoError(t, err)
 	require.WithinDuration(t, route.ExpiresAt, got.UsableUntil, time.Millisecond)
@@ -138,7 +138,7 @@ func TestBorrowCandidateAdmissionModeFencesAndInflightCompletion(t *testing.T) {
 	require.NoError(t, r.SetTargetIdentity(ctx, a.TargetID, true, target.Revision, target.AcquisitionRevision, service.BorrowAcquisitionSource))
 	require.Error(t, r.CheckAcquisition(ctx, a), "mode change fences the old candidate batch")
 	_, err = r.Route(ctx, a.TargetID, a.Identity, route.ID)
-	require.ErrorIs(t, err, service.ErrBorrowUnavailable, "route dispatch slot remains occupied; mode change does not cancel its lease")
+	require.ErrorIs(t, err, service.ErrBorrowUnavailable, "account capacity remains occupied; mode change does not cancel its lease")
 	require.ErrorIs(t, r.SetTargetIdentity(ctx, a.TargetID, true, target.Revision, target.AcquisitionRevision, service.BorrowAcquisitionSelf), service.ErrBorrowConflict)
 	rotationExec(t, `UPDATE ticket_borrow_routes SET expires_at=clock_timestamp()-INTERVAL '1 second' WHERE id=$1`, route.ID)
 	_, err = r.Route(ctx, a.TargetID, a.Identity, route.ID)
