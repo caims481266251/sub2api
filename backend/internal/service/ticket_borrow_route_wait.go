@@ -9,6 +9,14 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
 )
 
+type borrowRouteWaitDisabledKey struct{}
+
+// WithoutBorrowRouteWait still tries every currently available account/route.
+// It prevents an upstream model rejection from waiting for future inventory.
+func WithoutBorrowRouteWait(ctx context.Context) context.Context {
+	return context.WithValue(ctx, borrowRouteWaitDisabledKey{}, true)
+}
+
 // Subscribe before selecting to avoid losing a publication between the check
 // and the wait. One broadcast channel per service; no per-request goroutines.
 func (s *TicketBorrowService) routePublished() <-chan struct{} {
@@ -85,7 +93,7 @@ func (r *BorrowBusinessRecovery) admissionRetryExclusions(excluded map[int64]str
 // across reselections. Client/recovery cancellation can end it earlier. This
 // does not start or extend the separate upstream-failure/replay budget.
 func (r *BorrowBusinessRecovery) waitForRoute(ctx context.Context, published <-chan struct{}) bool {
-	if r == nil {
+	if disabled, _ := ctx.Value(borrowRouteWaitDisabledKey{}).(bool); r == nil || disabled {
 		return false
 	}
 	r.mu.Lock()

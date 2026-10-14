@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
 	utls "github.com/refraction-networking/utls"
 	"golang.org/x/net/proxy"
 )
@@ -22,6 +23,7 @@ import (
 // Profile contains TLS fingerprint configuration.
 // All slice fields use built-in defaults when empty.
 type Profile struct {
+	compiledHTTP2       *HTTP2Profile
 	Name                string // Profile name for identification
 	CipherSuites        []uint16
 	Curves              []uint16
@@ -178,7 +180,9 @@ func (d *SOCKS5ProxyDialer) DialTLSContext(ctx context.Context, network, addr st
 	if !ok {
 		return nil, fmt.Errorf("SOCKS5 proxy must support context cancellation")
 	}
+	setupDone := requesttiming.TransportStage(ctx, "socks_setup")
 	conn, err := contextDialer.DialContext(ctx, "tcp", addr)
+	setupDone()
 	if err != nil {
 		slog.Debug("tls_fingerprint_socks5_connect_failed", "error", err)
 		return nil, fmt.Errorf("SOCKS5 connect: %w", err)
@@ -237,7 +241,10 @@ func (d *HTTPProxyDialer) DialTLSContext(ctx context.Context, network, addr stri
 		cfg.ServerName = d.proxyURL.Hostname()
 		cfg.NextProtos = []string{"http/1.1"}
 		secure := tls.Client(conn, cfg)
-		if err := secure.HandshakeContext(ctx); err != nil {
+		proxyTLSDone := requesttiming.TransportStage(ctx, "proxy_tls")
+		err := secure.HandshakeContext(ctx)
+		proxyTLSDone()
+		if err != nil {
 			_ = conn.Close()
 			return nil, fmt.Errorf("TLS handshake with proxy: %w", err)
 		}
@@ -245,6 +252,8 @@ func (d *HTTPProxyDialer) DialTLSContext(ctx context.Context, network, addr stri
 	}
 
 	// Step 2: Send CONNECT request to establish tunnel
+	connectDone := requesttiming.TransportStage(ctx, "proxy_connect")
+	defer connectDone()
 	req := &http.Request{
 		Method: "CONNECT",
 		URL:    &url.URL{Opaque: addr},
@@ -284,6 +293,7 @@ func (d *HTTPProxyDialer) DialTLSContext(ctx context.Context, network, addr stri
 		return nil, fmt.Errorf("proxy CONNECT failed: %s", resp.Status)
 	}
 	slog.Debug("tls_fingerprint_http_proxy_tunnel_established")
+	connectDone()
 
 	// Step 4: Perform TLS handshake on the tunnel with utls fingerprint
 	tlsConn, err := performTLSHandshake(ctx, conn, d.profile, addr)
@@ -345,7 +355,7 @@ func handshakeFingerprint(ctx context.Context, conn net.Conn, profile *Profile, 
 	handshakeErr := tlsConn.HandshakeContext(ctx)
 	if trace != nil && trace.TLSHandshakeDone != nil {
 		state := tlsConn.ConnectionState()
-		trace.TLSHandshakeDone(tls.ConnectionState{Version: state.Version, HandshakeComplete: state.HandshakeComplete, CipherSuite: state.CipherSuite, NegotiatedProtocol: state.NegotiatedProtocol}, handshakeErr)
+		trace.TLSHandshakeDone(tls.ConnectionState{Version: state.Version, HandshakeComplete: state.HandshakeComplete, DidResume: state.DidResume, CipherSuite: state.CipherSuite, NegotiatedProtocol: state.NegotiatedProtocol}, handshakeErr)
 	}
 	if err := handshakeErr; err != nil {
 		_ = conn.Close()

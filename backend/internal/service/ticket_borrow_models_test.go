@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/stretchr/testify/require"
@@ -70,11 +69,10 @@ func TestBorrowHTTPMissingModelNeverSends(t *testing.T) {
 func TestBorrowHTTPModelsPrepareOwnedContinuation(t *testing.T) {
 	for _, model := range []string{"gpt-6-astra", "gpt-6.1-sol", "gpt-5.6-sol", "gpt-6-sol", "gpt-6-luna", "custom-future-model"} {
 		t.Run(model, func(t *testing.T) {
-			borrow, _ := borrowFixture()
-			svc := &OpenAIGatewayService{accountRepo: borrow.owner.accountRepo, borrowRoutes: borrow}
-			require.NoError(t, svc.getOpenAIWSStateStore().BindResponseAccount(t.Context(), 0, "resp_owned", 11, time.Hour))
-			body := []byte(`{"model":"` + model + `","reasoning":{"effort":"medium"},"previous_response_id":"resp_owned","input":"portable context"}`)
-			ctx, effective, converted, err := svc.PrepareBorrowHTTPContinuation(t.Context(), nil, "resp_owned", model, http.Header{}, body)
+			svc, _ := borrowReplayFixture(t)
+			body := []byte(`{"model":"` + model + `","reasoning":{"effort":"medium"},"previous_response_id":"resp_proven","input":"portable context"}`)
+			ctx := svc.PrepareBorrowHTTPReplay(t.Context(), nil, 1, 2, "resp_proven", body)
+			ctx, effective, converted, err := svc.PrepareBorrowHTTPContinuation(ctx, nil, "resp_proven", model, http.Header{}, body)
 			require.NoError(t, err)
 			require.True(t, converted)
 			require.False(t, gjson.GetBytes(effective, "previous_response_id").Exists())

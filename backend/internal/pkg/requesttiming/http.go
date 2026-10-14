@@ -101,6 +101,7 @@ func startAttempt(req *http.Request, accountID, proxyID int64, kind string, pare
 	}
 	idx := len(c.data.Attempts)
 	c.data.Attempts = append(c.data.Attempts, Attempt{Kind: kind, Parent: parent, Number: idx + 1, AccountID: accountID, ProxyID: proxyID, StartMS: c.offset(time.Now()), RequestBytes: req.ContentLength, Events: map[string]float64{}})
+	c.data.Attempts[idx].Transport, _ = req.Context().Value(transportKey{}).(TransportInfo)
 	c.data.Attempts[idx].BorrowRouteID, _ = req.Context().Value(borrowRouteKey{}).(string)
 	c.data.Attempts[idx].BorrowLeaseHash, _ = req.Context().Value(borrowLeaseKey{}).(string)
 	if info, ok := req.Context().Value(borrowRequestKey{}).(borrowRequestInfo); ok {
@@ -136,7 +137,17 @@ func (t *Trace) clientTrace() *httptrace.ClientTrace {
 	return &httptrace.ClientTrace{
 		GetConn: func(string) { t.mark("connection_start") },
 		GotConn: func(i httptrace.GotConnInfo) {
-			t.update(func(a *Attempt) { v := i.Reused; a.Reused = &v; a.Events["connection_ready"] = t.c.offset(time.Now()) })
+			t.update(func(a *Attempt) {
+				v := i.Reused
+				a.Reused = &v
+				a.Events["connection_ready"] = t.c.offset(time.Now())
+				if conn, ok := i.Conn.(interface{ ConnectionState() tls.ConnectionState }); ok {
+					state := conn.ConnectionState()
+					if state.HandshakeComplete {
+						observeTLS(a, state)
+					}
+				}
+			})
 		},
 		DNSStart: func(httptrace.DNSStartInfo) { t.mark("dns_start") }, DNSDone: func(httptrace.DNSDoneInfo) { t.mark("dns_end") },
 		ConnectStart: func(string, string) { t.mark("tcp_start") }, ConnectDone: func(string, string, error) { t.mark("tcp_end") },
@@ -162,6 +173,15 @@ func (t *Trace) Response(resp *http.Response, err error) {
 		}
 		if resp != nil {
 			a.Status = resp.StatusCode
+			switch resp.Proto {
+			case "HTTP/1.0", "HTTP/1.1", "HTTP/2.0", "HTTP/3.0":
+				a.Protocol = resp.Proto
+			}
+			// Response.TLS is the target connection, including when reused. Do
+			// not invent a new handshake duration for a warm connection.
+			if resp.TLS != nil && resp.TLS.HandshakeComplete {
+				observeTLS(a, *resp.TLS)
+			}
 			if n, e := strconv.ParseInt(resp.Header.Get("Retry-After"), 10, 64); e == nil && n > 0 && n <= 86400 {
 				a.RetryAfterMS = n * 1000
 			} else if at, e := http.ParseTime(resp.Header.Get("Retry-After")); e == nil {
@@ -178,6 +198,17 @@ func (t *Trace) Response(resp *http.Response, err error) {
 	})
 	if resp != nil && resp.Body != nil {
 		resp.Body = &responseBody{ReadCloser: resp.Body, trace: t}
+	}
+}
+
+func observeTLS(a *Attempt, state tls.ConnectionState) {
+	switch state.NegotiatedProtocol {
+	case "h2", "http/1.1", "h3":
+		a.ALPN = state.NegotiatedProtocol
+	}
+	a.TLSHandshake = "full"
+	if state.DidResume {
+		a.TLSHandshake = "resumed"
 	}
 }
 func errorKind(err error) string {

@@ -48,6 +48,7 @@ describe('Usage timing details', () => {
     expect(wrapper.text()).toContain('requestTiming.health.firstSlow')
     expect(wrapper.text()).toContain('requestTiming.health.largest')
     expect(wrapper.text()).toContain('requestTiming.health.normalClose')
+    expect(wrapper.find('[data-testid="attempt-title"]').text()).toContain('requestTiming.missing')
     expect(wrapper.findAll('strong').find(n => n.text() === '40.00s')?.element.parentElement?.className).toContain('text-orange-700')
     const reuse = wrapper.findAll('div').find(n => n.element.children.length === 2 && n.element.children[0]?.textContent === 'requestTiming.fields.reused')
     expect(reuse?.element.children[1]?.className).toContain('text-slate-600')
@@ -60,6 +61,33 @@ describe('Usage timing details', () => {
     const overlay = document.body.querySelector('.modal-overlay')!
     for (const type of ['mousedown', 'mouseup', 'click']) overlay.dispatchEvent(new MouseEvent(type, { bubbles: true }))
     expect(wrapper.emitted('close')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('shows actual transport identity and measured tunnel intervals', async () => {
+    mocks.get.mockResolvedValue({ retention_days: 30, traces: [{
+      trace_id: 'transport', started_at: '2026-10-14', total_ms: 100, status: 200,
+      body_bytes: 0, body_read_ms: 0, downstream_bytes: 2, downstream_write_ms: 0,
+      events: {}, spans: [], attempts: [{
+        kind: 'http', number: 2, parent: 1, account_id: 7, proxy_id: 0, start_ms: 0, end_ms: 100,
+        status: 200, reused: false, request_bytes: 0, response_bytes: 2, body_eof: true,
+        protocol: 'HTTP/2.0', alpn: 'h2', tls_handshake: 'full',
+        transport: { kind: 'utls', proxy_mode: 'https', pool_id: 'pool-digest', fingerprint_id: 'tls-digest', identity_id: 'identity-digest' },
+        events: { proxy_tls_start: 10, proxy_tls_end: 30, proxy_connect_start: 30, proxy_connect_end: 40 }
+      }]
+    }] })
+    const wrapper = mount(UsageTimingDialog, { props: { record: row(3) }, ...options })
+    await flushPromises()
+    expect(wrapper.text()).toContain('HTTP/2.0')
+    expect(wrapper.text()).toContain('pool-digest')
+    expect(wrapper.text()).toContain('tls-digest')
+    expect(wrapper.text()).toContain('requestTiming.transportScope')
+    expect(wrapper.find('[data-testid="attempt-title"]').text()).toContain('https')
+    expect(wrapper.find('[data-testid="attempt-title"]').text()).not.toContain('requestTiming.direct')
+    const stages = wrapper.findAll('[data-testid="transport-stage"]')
+    expect(stages).toHaveLength(2)
+    expect(stages[0].text()).toContain('20ms')
+    expect(stages[1].text()).toContain('10ms')
     wrapper.unmount()
   })
 

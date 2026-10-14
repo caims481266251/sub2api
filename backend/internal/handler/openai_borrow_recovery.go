@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"math/rand/v2"
 	"net/http"
@@ -13,6 +14,17 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
+
+func isOpenAIModelFailover(last *service.UpstreamFailoverError) bool {
+	return last != nil && last.StatusCode == http.StatusBadRequest && service.IsOpenAICompatibleModelNotFound400(last.ResponseBody)
+}
+
+func openAIModelFailoverSelectionContext(ctx context.Context, last *service.UpstreamFailoverError) context.Context {
+	if isOpenAIModelFailover(last) {
+		return service.WithoutBorrowRouteWait(ctx)
+	}
+	return ctx
+}
 
 // handleBorrowBusinessRecovery runs after the existing output/replay checks.
 // handled prevents the legacy same-account/OAuth retry loops from also running.
@@ -120,7 +132,8 @@ func borrowRecoveryDelay(f *service.UpstreamFailoverError, now time.Time) time.D
 // A request that has never sent upstream still uses normal admission errors.
 func (h *OpenAIGatewayHandler) finishBorrowSelectionFailure(c *gin.Context, err error, last *service.UpstreamFailoverError, stream, anthropic bool) bool {
 	r := service.BorrowBusinessRecoveryFromContext(c.Request.Context())
-	if !r.Active() || last == nil || (!errors.Is(err, service.ErrNoAvailableAccounts) && !service.IsBorrowRouteUnavailable(err)) {
+	if last == nil || (!r.Active() && !isOpenAIModelFailover(last)) ||
+		(!errors.Is(err, service.ErrNoAvailableAccounts) && !service.IsBorrowRouteUnavailable(err)) || failoverClientGone(c) {
 		return false
 	}
 	r.SelectionStopped(c.Request.Context())

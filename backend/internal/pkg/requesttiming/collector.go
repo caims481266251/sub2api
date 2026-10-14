@@ -18,6 +18,10 @@ type Span struct {
 	Attempt int     `json:"attempt,omitempty"`
 }
 type Attempt struct {
+	Transport                  TransportInfo      `json:"transport,omitzero"`
+	Protocol                   string             `json:"protocol,omitempty"`
+	ALPN                       string             `json:"alpn,omitempty"`
+	TLSHandshake               string             `json:"tls_handshake,omitempty"`
 	BorrowLeaseHash            string             `json:"borrow_lease_hash,omitempty"`
 	BorrowLeaseState           string             `json:"borrow_lease_state,omitempty"`
 	BorrowLeaseEnd             string             `json:"borrow_lease_end,omitempty"`

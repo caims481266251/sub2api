@@ -81,7 +81,8 @@ func (s *OpenAIGatewayService) PrepareBorrowHTTPContinuation(ctx context.Context
 	if !enabled {
 		return ctx, body, false, nil
 	}
-	if err := validateBorrowHTTPContinuationInput(body); err != nil {
+	ctx, body, err = s.restoreBorrowHTTPHistory(ctx, groupID, previous, id, body)
+	if err != nil {
 		return ctx, body, false, err
 	}
 	effective, err := sjson.DeleteBytes(body, "previous_response_id")
@@ -94,6 +95,9 @@ func (s *OpenAIGatewayService) PrepareBorrowHTTPContinuation(ctx context.Context
 		hint.ReplayRefusal = replay.reason
 		if hint.ReplayRefusal == "" && replay.previousAccount != id {
 			hint.ReplayRefusal = "replay_account_mismatch"
+		}
+		if hint.ReplayRefusal == "" && replay.accountBound {
+			hint.ReplayRefusal = "account_bound_reasoning"
 		}
 		hint.ReplayReady = hint.ReplayRefusal == ""
 	}

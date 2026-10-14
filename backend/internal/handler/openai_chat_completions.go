@@ -177,7 +177,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		}
 		reqLog.Debug("openai_chat_completions.account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
 		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
-			c.Request.Context(),
+			openAIModelFailoverSelectionContext(c.Request.Context(), lastFailoverErr),
 			apiKey.GroupID,
 			"",
 			sessionHash,

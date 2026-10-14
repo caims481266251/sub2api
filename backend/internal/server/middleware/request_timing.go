@@ -14,18 +14,31 @@ import (
 func RequestTiming() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		path := strings.TrimRight(c.Request.URL.Path, "/")
-		if c.Request.Method != http.MethodPost || (!strings.HasSuffix(path, "/responses") && !strings.HasSuffix(path, "/responses/compact")) {
+		if c.Request.Method != http.MethodPost || !timedHTTPGatewayPath(path) {
 			c.Next()
 			return
 		}
+		// Handlers may replace the request context with an upstream timeout or
+		// recovery context and cancel it during cleanup. Only the original
+		// ingress context describes whether this HTTP request was canceled.
+		ingressContext := c.Request.Context()
 		collector := requesttiming.New(time.Now(), c.Request.ContentLength)
-		c.Request = c.Request.WithContext(requesttiming.With(c.Request.Context(), collector))
+		c.Request = c.Request.WithContext(requesttiming.With(ingressContext, collector))
 		c.Request.Body = collector.WrapBody(c.Request.Body)
 		writer := &timingWriter{ResponseWriter: c.Writer, collector: collector}
 		c.Writer = writer
-		defer func() { collector.Finish(writer.Status(), c.Request.Context().Err() != nil) }()
+		defer func() { collector.Finish(writer.Status(), ingressContext.Err() != nil) }()
 		c.Next()
 	}
+}
+
+func timedHTTPGatewayPath(path string) bool {
+	for _, endpoint := range []string{"/responses", "/responses/compact", "/chat/completions", "/messages", "/alpha/search"} {
+		if strings.HasSuffix(path, endpoint) {
+			return true
+		}
+	}
+	return false
 }
 
 type timingWriter struct {

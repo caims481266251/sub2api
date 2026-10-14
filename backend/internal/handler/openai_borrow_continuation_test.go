@@ -120,11 +120,15 @@ func (r *borrowHTTPHandlerRepo) BindHTTPContinuationResponse(_ context.Context, 
 }
 
 type borrowHTTPHandlerUpstream struct {
-	borrow        *service.TicketBorrowService
-	bodies        [][]byte
-	headers       []http.Header
-	accountIDs    []int64
-	failureStatus int
+	borrow           *service.TicketBorrowService
+	bodies           [][]byte
+	headers          []http.Header
+	accountIDs       []int64
+	failureStatus    int
+	failureAccountID int64
+	failureBody      string
+	afterFailure     func()
+	responseOutput   string
 }
 
 func (u *borrowHTTPHandlerUpstream) SetTicketBorrowService(s *service.TicketBorrowService) {
@@ -153,11 +157,26 @@ func (u *borrowHTTPHandlerUpstream) DoWithTLS(req *http.Request, proxy string, i
 		u.bodies = append(u.bodies, body)
 		u.accountIDs = append(u.accountIDs, accountID)
 		u.headers = append(u.headers, r.Header.Clone())
-		if u.failureStatus != 0 && accountID == 11 {
-			return &http.Response{StatusCode: u.failureStatus, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"error":{"type":"server_error","message":"upstream unavailable"}}`))}, nil
+		failureAccount := u.failureAccountID
+		if failureAccount == 0 {
+			failureAccount = 11
+		}
+		if u.failureStatus != 0 && accountID == failureAccount {
+			body := u.failureBody
+			if body == "" {
+				body = `{"error":{"type":"server_error","message":"upstream unavailable"}}`
+			}
+			if u.afterFailure != nil {
+				u.afterFailure()
+			}
+			return &http.Response{StatusCode: u.failureStatus, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
 		}
 		responseID := fmt.Sprintf("resp_borrow_%d", len(u.bodies))
-		sse := fmt.Sprintf("data: {\"type\":\"response.created\",\"response\":{\"id\":%q}}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":%q,\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"OK\"}]}],\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n", responseID, responseID)
+		output := u.responseOutput
+		if output == "" {
+			output = `[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"OK"}]}]`
+		}
+		sse := fmt.Sprintf("data: {\"type\":\"response.created\",\"response\":{\"id\":%q}}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":%q,\"status\":\"completed\",\"output\":%s,\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n", responseID, responseID, output)
 		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(sse))}, nil
 	})
 }

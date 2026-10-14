@@ -52,6 +52,10 @@ func TestBorrowHTTPContinuationScopeAndInput(t *testing.T) {
 	require.NoError(t, svc.getOpenAIWSStateStore().BindResponseAccount(ctx, 0, "resp_original", 11, time.Hour))
 	headers := http.Header{"Session_id": []string{"client-original"}}
 	body := []byte(`{"model":"gpt-6-astra","previous_response_id":"resp_original","input":[{"role":"user","content":"current input"}],"reasoning":{"effort":"high"}}`)
+	ctx = svc.PrepareBorrowHTTPReplay(ctx, nil, 1, 2, "", body)
+	svc.observeBorrowHTTPReplayResponse(ctx, &Account{ID: 11, Platform: PlatformOpenAI}, []byte(`{"id":"resp_original","status":"completed","output":[{"role":"assistant","content":"OK"}]}`), "")
+	body = []byte(`{"model":"gpt-6-astra","previous_response_id":"resp_original","input":[{"role":"user","content":"current input"},{"role":"assistant","content":"OK"},{"role":"user","content":"next"}],"reasoning":{"effort":"high"}}`)
+	ctx = svc.PrepareBorrowHTTPReplay(ctx, nil, 1, 2, "resp_original", body)
 	effectiveCtx, effective, converted, err := svc.PrepareBorrowHTTPContinuation(ctx, nil, "resp_original", "gpt-6-astra", headers, body)
 	require.NoError(t, err)
 	require.True(t, converted)

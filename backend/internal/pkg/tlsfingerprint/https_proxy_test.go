@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
 	"github.com/stretchr/testify/require"
 )
 
@@ -55,8 +56,22 @@ func TestHTTPSProxyVerifiesOuterTLSAndPreservesInnerFingerprint(t *testing.T) {
 	roots := x509.NewCertPool()
 	roots.AddCert(proxy.Certificate())
 	dialer.proxyTLSConfig = &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}
-	_, err = dialer.DialTLSContext(t.Context(), "tcp", "target.example:443")
+	collector := requesttiming.New(time.Now(), 0)
+	request, err := http.NewRequestWithContext(requesttiming.With(t.Context(), collector), "GET", "https://target.example", nil)
+	require.NoError(t, err)
+	request, _ = requesttiming.StartAttempt(request, 1, 2)
+	_, err = dialer.DialTLSContext(request.Context(), "tcp", "target.example:443")
 	require.Error(t, err, "capture server intentionally stops before completing target TLS")
+	collector.Finish(502, false)
+	collector.WhenFinished(func(s requesttiming.Snapshot) {
+		e := s.Attempts[0].Events
+		for _, name := range []string{"proxy_tls_start", "proxy_tls_end", "proxy_connect_start", "proxy_connect_end", "tls_start", "tls_end"} {
+			require.Contains(t, e, name)
+		}
+		require.LessOrEqual(t, e["proxy_tls_end"], e["proxy_connect_start"])
+		require.LessOrEqual(t, e["proxy_connect_end"], e["tls_start"])
+		require.Empty(t, s.Attempts[0].TLSHandshake, "failed target handshake must not inherit successful proxy TLS")
+	})
 	select {
 	case got := <-seen:
 		require.Equal(t, "Basic Ym9ycm93OnNlY3JldA==", got.auth)

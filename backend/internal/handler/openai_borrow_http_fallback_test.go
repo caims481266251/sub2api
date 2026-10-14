@@ -70,21 +70,38 @@ func newBorrowHTTPFallbackHandler(t *testing.T) (*OpenAIGatewayHandler, *borrowH
 
 func borrowFallbackRequest(t *testing.T, h *OpenAIGatewayHandler, previous, input string, stream bool) *httptest.ResponseRecorder {
 	t.Helper()
+	return borrowFallbackEndpointRequest(t, h, previous, input, stream, "responses")
+}
+
+func borrowFallbackEndpointRequest(t *testing.T, h *OpenAIGatewayHandler, previous, input string, stream bool, endpoint string) *httptest.ResponseRecorder {
+	t.Helper()
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	body := fmt.Sprintf(`{"model":"gpt-6-astra","stream":%t,"input":%s}`, stream, input)
 	if previous != "" {
 		body = fmt.Sprintf(`{"model":"gpt-6-astra","stream":%t,"previous_response_id":%q,"input":%s}`, stream, previous, input)
 	}
-	c.Request = httptest.NewRequest("POST", "/openai/v1/responses", strings.NewReader(body))
+	if endpoint != "responses" {
+		body = fmt.Sprintf(`{"model":"gpt-6-astra","stream":%t,"max_tokens":64,"messages":[{"role":"user","content":"hello"}]}`, stream)
+	}
+	c.Request = httptest.NewRequest("POST", "/openai/v1/"+endpoint, strings.NewReader(body))
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Request.Header.Set("session_id", "original-client-session")
 	c.Request.Header.Set("X-Codex-Turn-State", "old-turn")
 	c.Request.Header.Set("X-Codex-Turn-Metadata", "old-metadata")
 	group := int64(2)
-	c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{ID: 101, UserID: 1, GroupID: &group, User: &service.User{ID: 1, Status: service.StatusActive}, Group: &service.Group{ID: group, Platform: service.PlatformOpenAI, Status: service.StatusActive}})
+	c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{ID: 101, UserID: 1, GroupID: &group, User: &service.User{ID: 1, Status: service.StatusActive}, Group: &service.Group{ID: group, Platform: service.PlatformOpenAI, Status: service.StatusActive, AllowMessagesDispatch: true}})
 	c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: 1})
-	h.Responses(c)
+	switch endpoint {
+	case "responses":
+		h.Responses(c)
+	case "chat/completions":
+		h.ChatCompletions(c)
+	case "messages":
+		h.Messages(c)
+	default:
+		t.Fatal("unsupported test endpoint")
+	}
 	return w
 }
 
@@ -127,7 +144,7 @@ func TestOpenAIResponses_BorrowHTTPContinuationFallsBackBeforeSend(t *testing.T)
 }
 
 func TestOpenAIResponses_BorrowHTTPContinuationRefusesUnsafeMigration(t *testing.T) {
-	for _, scenario := range []string{"incremental", "altered_history", "encrypted", "storage_failure", "switch_budget", "normal_account_unavailable"} {
+	for _, scenario := range []string{"altered_history", "encrypted", "storage_failure", "switch_budget", "normal_account_unavailable"} {
 		t.Run(scenario, func(t *testing.T) {
 			h, repo, upstream, accounts := newBorrowHTTPFallbackHandler(t)
 			w := borrowFallbackRequest(t, h, "", `"hello"`, true)
@@ -135,8 +152,6 @@ func TestOpenAIResponses_BorrowHTTPContinuationRefusesUnsafeMigration(t *testing
 			repo.unavailable = true
 			input := borrowFallbackFullInput
 			switch scenario {
-			case "incremental":
-				input = `"continue"`
 			case "altered_history":
 				input = strings.Replace(input, "hello", "different", 1)
 			case "encrypted":
@@ -149,16 +164,20 @@ func TestOpenAIResponses_BorrowHTTPContinuationRefusesUnsafeMigration(t *testing
 				accounts.accounts[1].Schedulable = false
 			}
 			w = borrowFallbackRequest(t, h, "resp_borrow_1", input, true)
-			require.Equal(t, http.StatusServiceUnavailable, w.Code, w.Body.String())
+			wantStatus := http.StatusServiceUnavailable
+			if scenario == "altered_history" || scenario == "encrypted" {
+				wantStatus = http.StatusBadRequest
+			}
+			require.Equal(t, wantStatus, w.Code, w.Body.String())
 			require.Equal(t, []int64{11}, upstream.accountIDs)
 			require.Zero(t, repo.leases)
-			if scenario == "incremental" || scenario == "altered_history" || scenario == "encrypted" {
-				require.Contains(t, w.Body.String(), "borrow_continuation_unavailable")
-				// Refusal only limits migration; the original target remains usable.
+			if wantStatus == http.StatusBadRequest {
+				require.Contains(t, w.Body.String(), "borrow_continuation_context_unavailable")
+				// Available routing cannot make an incomplete context safe.
 				repo.unavailable = false
 				w = borrowFallbackRequest(t, h, "resp_borrow_1", input, true)
-				require.Equal(t, 200, w.Code, w.Body.String())
-				require.Equal(t, []int64{11, 11}, upstream.accountIDs)
+				require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+				require.Equal(t, []int64{11}, upstream.accountIDs)
 			}
 		})
 	}

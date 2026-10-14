@@ -9,21 +9,24 @@ import (
 	"time"
 
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 const (
 	borrowHTTPReplayMaxBytes   = 4 << 20
 	borrowHTTPReplayMaxItems   = 4096
 	borrowHTTPReplayMaxEntries = 8192
+	borrowHTTPHistoryMaxBytes  = 64 << 20
 	borrowHTTPReplayTTL        = 30 * time.Minute
 )
 
-// A bounded, process-local proof of history, NOT a conversation cache. A miss
-// (including restart/another instance) leaves the original target restriction
-// in place. Neither raw input/output nor credentials survive the request.
+// Process-local, owner-scoped history evidence. Codex HTTP responses also keep
+// bounded input/output snapshots to restore delta continuations. They are never
+// persisted. A cache miss must not silently turn a continuation into a new turn.
 type borrowHTTPReplayStore struct {
 	mu      sync.Mutex
 	entries map[borrowHTTPReplayKey]borrowHTTPReplayProof
+	bytes   int
 }
 
 type borrowHTTPReplayKey struct {
@@ -32,10 +35,12 @@ type borrowHTTPReplayKey struct {
 }
 
 type borrowHTTPReplayProof struct {
-	digest  [32]byte
-	count   int
-	account int64
-	expires time.Time
+	digest       [32]byte
+	count        int
+	account      int64
+	expires      time.Time
+	history      json.RawMessage // immutable JSON input array, only for Codex HTTP
+	accountBound bool            // observed encrypted reasoning may only return to this account
 }
 
 type borrowHTTPReplayRequest struct {
@@ -44,6 +49,8 @@ type borrowHTTPReplayRequest struct {
 	count           int
 	previousAccount int64
 	reason          string
+	items           []json.RawMessage // request-local, captured before forwarding
+	accountBound    bool
 }
 
 type borrowHTTPReplayContextKey struct{}
@@ -58,6 +65,7 @@ func (s *borrowHTTPReplayStore) get(key borrowHTTPReplayKey, now time.Time) (bor
 	defer s.mu.Unlock()
 	p, ok := s.entries[key]
 	if ok && !now.Before(p.expires) {
+		s.bytes -= len(p.history)
 		delete(s.entries, key)
 		ok = false
 	}
@@ -72,18 +80,24 @@ func (s *borrowHTTPReplayStore) put(key borrowHTTPReplayKey, proof borrowHTTPRep
 	}
 	// Immutable response history. Conflicting observations fail closed.
 	if old, ok := s.entries[key]; ok {
-		if old.digest != proof.digest || old.count != proof.count || old.account != proof.account {
+		if old.digest != proof.digest || old.count != proof.count || old.account != proof.account || old.accountBound != proof.accountBound {
+			s.bytes -= len(old.history)
 			s.entries[key] = borrowHTTPReplayProof{expires: proof.expires}
 		}
 		return
 	}
-	if len(s.entries) >= borrowHTTPReplayMaxEntries {
-		for oldKey := range s.entries {
+	if len(proof.history) > borrowHTTPReplayMaxBytes {
+		proof.history = nil
+	}
+	for len(s.entries) >= borrowHTTPReplayMaxEntries || s.bytes+len(proof.history) > borrowHTTPHistoryMaxBytes {
+		for oldKey, old := range s.entries {
+			s.bytes -= len(old.history)
 			delete(s.entries, oldKey)
 			break
 		}
 	}
 	s.entries[key] = proof
+	s.bytes += len(proof.history)
 }
 
 // Called only by authenticated Responses HTTP ingress after owner validation.
@@ -95,11 +109,6 @@ func (s *OpenAIGatewayService) PrepareBorrowHTTPReplay(ctx context.Context, grou
 	}
 	r := &borrowHTTPReplayRequest{key: borrowHTTPReplayKey{group: derefGroupID(groupID), user: userID, apiKey: apiKeyID}}
 	ctx = context.WithValue(ctx, borrowHTTPReplayContextKey{}, r)
-	items, reason := borrowHTTPReplayInput(body)
-	if reason != "" {
-		r.reason = reason
-		return ctx
-	}
 	var previousProof borrowHTTPReplayProof
 	if previous != "" {
 		key := r.key
@@ -110,11 +119,25 @@ func (s *OpenAIGatewayService) PrepareBorrowHTTPReplay(ctx context.Context, grou
 			r.reason = "replay_evidence_missing"
 			return ctx
 		}
+	}
+	// Only the exact observed prefix may contain encrypted reasoning. New
+	// opaque input cannot acquire replay permission from a previous response.
+	trustedPrefix := 0
+	if previousProof.accountBound {
+		trustedPrefix = previousProof.count
+	}
+	items, reason := borrowHTTPHistoryInput(body, trustedPrefix)
+	if reason != "" {
+		r.reason = reason
+		return ctx
+	}
+	if previous != "" {
 		if len(items) < previousProof.count {
 			r.reason = "incomplete_history"
 			return ctx
 		}
 		r.previousAccount = previousProof.account
+		r.accountBound = previousProof.accountBound
 	}
 	for i, item := range items {
 		var ok bool
@@ -129,10 +152,15 @@ func (s *OpenAIGatewayService) PrepareBorrowHTTPReplay(ctx context.Context, grou
 		}
 	}
 	r.count = len(items)
+	r.items = items
 	return ctx
 }
 
 func borrowHTTPReplayInput(body []byte) ([]json.RawMessage, string) {
+	return borrowHTTPHistoryInput(body, 0)
+}
+
+func borrowHTTPHistoryInput(body []byte, trustedPrefix int) ([]json.RawMessage, string) {
 	if len(body) > borrowHTTPReplayMaxBytes {
 		return nil, "replay_input_too_large"
 	}
@@ -143,13 +171,32 @@ func borrowHTTPReplayInput(body []byte) ([]json.RawMessage, string) {
 	if err != nil || !exists || len(items) == 0 || len(items) > borrowHTTPReplayMaxItems {
 		return nil, "invalid_replay_input"
 	}
-	if openAIWSRawItemsContainNonPortableContext(items) || borrowHTTPReplayHasAccountResources(gjson.ParseBytes(body)) {
+	if borrowHTTPReplayHasAccountResources(gjson.ParseBytes(body)) {
 		return nil, "nonportable_context"
+	}
+	for i, item := range items {
+		if i < trustedPrefix && borrowHTTPEncryptedReasoning(item) {
+			continue // its full content is still authenticated by the prefix digest
+		}
+		if openAIWSRawItemsContainNonPortableContext([]json.RawMessage{item}) {
+			return nil, "nonportable_context"
+		}
 	}
 	if err := validateBorrowHTTPContinuationInput(body); err != nil {
 		return nil, "incomplete_tool_context"
 	}
 	return items, ""
+}
+
+// Only a top-level reasoning item may carry the observed opaque payload. File
+// references, compaction and nested opaque state retain their existing guards.
+func borrowHTTPEncryptedReasoning(item json.RawMessage) bool {
+	v := gjson.ParseBytes(item)
+	if v.Get("type").String() != "reasoning" || v.Get("encrypted_content").Type != gjson.String || strings.TrimSpace(v.Get("encrypted_content").String()) == "" {
+		return false
+	}
+	plain, err := sjson.DeleteBytes(item, "encrypted_content")
+	return err == nil && !openAIWSRawItemsContainNonPortableContext([]json.RawMessage{plain}) && !borrowHTTPReplayHasAccountResources(v)
 }
 
 // Files, vector stores and explicit interpreter containers are owned by the
@@ -224,7 +271,8 @@ func appendBorrowReplayDigest(previous [32]byte, item json.RawMessage) ([32]byte
 }
 
 // Called with the final client-facing Responses payload (after tool restoration).
-// Only an authoritative successful terminal with portable output grants proof.
+// Only an authoritative successful terminal grants proof. Observed encrypted
+// reasoning is retained for the same account and never grants migration rights.
 func (s *OpenAIGatewayService) observeBorrowHTTPReplayResponse(ctx context.Context, account *Account, payload []byte, eventType string) {
 	r := borrowHTTPReplayFromContext(ctx)
 	if r == nil || r.reason != "" || account == nil || !account.IsOpenAI() || len(payload) > borrowHTTPReplayMaxBytes {
@@ -246,10 +294,18 @@ func (s *OpenAIGatewayService) observeBorrowHTTPReplayResponse(ctx context.Conte
 		return
 	}
 	items := make([]json.RawMessage, 0, len(output.Array()))
+	accountBound := r.accountBound
 	for _, item := range output.Array() {
-		items = append(items, json.RawMessage(item.Raw))
+		raw := json.RawMessage(item.Raw)
+		if openAIWSRawItemsContainNonPortableContext([]json.RawMessage{raw}) {
+			if !account.UsesOpenAICodexProtocol() || !borrowHTTPEncryptedReasoning(raw) {
+				return
+			}
+			accountBound = true
+		}
+		items = append(items, raw)
 	}
-	if r.count+len(items) > borrowHTTPReplayMaxItems || openAIWSRawItemsContainNonPortableContext(items) || borrowHTTPReplayHasAccountResources(output) {
+	if r.count+len(items) > borrowHTTPReplayMaxItems || borrowHTTPReplayHasAccountResources(output) {
 		return
 	}
 	digest := r.digest
@@ -262,5 +318,14 @@ func (s *OpenAIGatewayService) observeBorrowHTTPReplayResponse(ctx context.Conte
 	}
 	key := r.key
 	key.response = sha256.Sum256([]byte(id))
-	s.borrowHTTPReplay.put(key, borrowHTTPReplayProof{digest: digest, count: r.count + len(items), account: account.ID, expires: time.Now().Add(min(borrowHTTPReplayTTL, s.openAIWSResponseStickyTTL()))})
+	proof := borrowHTTPReplayProof{digest: digest, count: r.count + len(items), account: account.ID, expires: time.Now().Add(min(borrowHTTPReplayTTL, s.openAIWSResponseStickyTTL())), accountBound: accountBound}
+	if account.UsesOpenAICodexProtocol() && len(r.items) == r.count {
+		history := make([]json.RawMessage, 0, proof.count)
+		history = append(history, r.items...)
+		history = append(history, items...)
+		if encoded, err := json.Marshal(normalizeBorrowHTTPHistoryStrings(history)); err == nil && len(encoded) <= borrowHTTPReplayMaxBytes {
+			proof.history = encoded
+		}
+	}
+	s.borrowHTTPReplay.put(key, proof)
 }

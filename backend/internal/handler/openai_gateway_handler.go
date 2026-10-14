@@ -863,7 +863,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		c.Request = c.Request.WithContext(h.gatewayService.PrepareBorrowHTTPReplay(c.Request.Context(), apiKey.GroupID, subject.UserID, apiKey.ID, previousResponseID, body))
 		ctx, effective, converted, err := h.gatewayService.PrepareBorrowHTTPContinuation(c.Request.Context(), apiKey.GroupID, previousResponseID, forwardModel, c.Request.Header, forwardBody)
 		if err != nil {
-			if service.IsBorrowRouteUnavailable(err) {
+			if errors.Is(err, service.ErrBorrowHTTPHistoryUnavailable) {
+				h.handleStreamingAwareErrorWithCode(c, http.StatusBadRequest, "invalid_request_error", "borrow_continuation_context_unavailable", err.Error(), streamStarted, false)
+			} else if service.IsBorrowRouteUnavailable(err) {
 				h.errorResponse(c, http.StatusServiceUnavailable, "service_unavailable", "borrowed continuation is temporarily unavailable")
 			} else if service.IsOpenAITurnAdmissionError(err) {
 				reqLog.Warn("openai.borrow_http_continuation_lookup_failed", zap.Error(err))
@@ -980,7 +982,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		// Select account supporting the requested model
 		reqLog.Debug("openai.account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
 		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
-			c.Request.Context(),
+			openAIModelFailoverSelectionContext(c.Request.Context(), lastFailoverErr),
 			apiKey.GroupID,
 			previousResponseID,
 			sessionHash,
@@ -1686,7 +1688,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		}
 		reqLog.Debug("openai_messages.account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
 		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
-			c.Request.Context(),
+			openAIModelFailoverSelectionContext(c.Request.Context(), lastFailoverErr),
 			apiKey.GroupID,
 			"", // no previous_response_id
 			sessionHash,
@@ -2063,6 +2065,12 @@ func (h *OpenAIGatewayHandler) handleAnthropicFailoverExhausted(c *gin.Context, 
 			status = http.StatusServiceUnavailable
 		}
 		h.anthropicStreamingAwareError(c, status, "api_error", failoverErr.ClientMessage, streamStarted)
+		return
+	}
+	if isOpenAIModelFailover(failoverErr) {
+		message := service.SanitizeUpstreamErrorMessage(service.ExtractUpstreamErrorMessage(failoverErr.ResponseBody))
+		service.SetOpsUpstreamError(c, failoverErr.StatusCode, message, "")
+		h.anthropicStreamingAwareError(c, http.StatusBadRequest, "invalid_request_error", message, streamStarted)
 		return
 	}
 	status, errType, errMsg := h.mapUpstreamError(failoverErr.StatusCode)
@@ -4101,10 +4109,14 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 	}
 	statusCode := failoverErr.StatusCode
 	responseBody := failoverErr.ResponseBody
-	if statusCode == http.StatusBadRequest && service.IsOpenAICompatibleModelNotFound400(responseBody) && !streamStarted {
+	if isOpenAIModelFailover(failoverErr) {
 		upstreamMsg := service.SanitizeUpstreamErrorMessage(service.ExtractUpstreamErrorMessage(responseBody))
 		service.SetOpsUpstreamError(c, statusCode, upstreamMsg, "")
-		service.WriteOpenAIUpstreamClientError(c, statusCode, responseBody, upstreamMsg)
+		if streamStarted {
+			h.handleStreamingAwareErrorWithCode(c, statusCode, "invalid_request_error", "model_not_found", upstreamMsg, true, false)
+		} else {
+			service.WriteOpenAIUpstreamClientError(c, statusCode, responseBody, upstreamMsg)
+		}
 		return
 	}
 	if service.IsOpenAISilentRefusalErrorBody(responseBody) {

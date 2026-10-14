@@ -137,12 +137,13 @@ type openAIHTTP2Settings struct {
 // upstreamClientEntry 上游客户端缓存条目
 // 记录客户端实例及其元数据，用于连接池管理和淘汰策略
 type upstreamClientEntry struct {
-	client       *http.Client // HTTP 客户端实例
-	proxyKey     string       // 代理标识（用于检测代理变更）
-	poolKey      string       // 连接池配置标识（用于检测配置变更）
-	protocolMode string       // 协议模式（default/long_stream_h2/openai_h1/openai_h2/openai_h1_fallback）
-	lastUsed     int64        // 最后使用时间戳（纳秒），用于 LRU 淘汰
-	inFlight     int64        // 当前进行中的请求数，>0 时不可淘汰
+	observation  requesttiming.TransportInfo // immutable, safe for request diagnostics
+	client       *http.Client                // HTTP 客户端实例
+	proxyKey     string                      // 代理标识（用于检测代理变更）
+	poolKey      string                      // 连接池配置标识（用于检测配置变更）
+	protocolMode string                      // 协议模式（default/long_stream_h2/openai_h1/openai_h2/openai_h1_fallback）
+	lastUsed     int64                       // 最后使用时间戳（纳秒），用于 LRU 淘汰
+	inFlight     int64                       // 当前进行中的请求数，>0 时不可淘汰
 }
 
 type openAIHTTP2FallbackState struct {
@@ -170,6 +171,7 @@ type openAIHTTP2FallbackState struct {
 // 7. 代理变更时清空旧连接池，避免复用错误代理
 // 8. 账号并发数与连接池上限对应（账号隔离策略下）
 type httpUpstreamService struct {
+	fingerprints      tlsfingerprint.HTTP2ProfileCache
 	probePoolOnce     sync.Once
 	probePool         *httpUpstreamService
 	probeOnly         bool
@@ -253,12 +255,15 @@ func (s *httpUpstreamService) Do(req *http.Request, proxyURL string, accountID i
 	if regionalEgress {
 		return s.doRegionalEgress(req, accountID, accountConcurrency, profile, nil)
 	}
+	acquireDone := requesttiming.TransportStage(req.Context(), "client_acquire")
 	entry, err := s.getClientEntry(proxyURL, accountID, accountConcurrency, profile, true, true, s.requestProtocolOverride(req, profile))
+	acquireDone()
 	if err != nil {
 		requestcapture.FromContext(req.Context()).SelectionFailed(accountID, 0, nil, nil, err)
 		return nil, err
 	}
 
+	req = observeUpstreamTransport(req, entry)
 	// 执行请求
 	client := s.httpClientForUpstreamRequest(entry.client, req)
 	if !service.BorrowBusinessRecoveryFromContext(req.Context()).Active() {
@@ -350,13 +355,16 @@ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, acco
 	if regionalEgress {
 		return s.doRegionalEgress(req, accountID, accountConcurrency, upstreamProfile, profile)
 	}
+	acquireDone := requesttiming.TransportStage(req.Context(), "client_acquire")
 	entry, err := s.acquireClientWithTLS(proxyURL, accountID, accountConcurrency, profile, upstreamProfile)
+	acquireDone()
 	if err != nil {
 		requestcapture.FromContext(req.Context()).SelectionFailed(accountID, 0, nil, nil, err)
 		slog.Debug("tls_fingerprint_acquire_client_failed", "account_id", accountID, "error", err)
 		return nil, err
 	}
 
+	req = observeUpstreamTransport(req, entry)
 	client := s.httpClientForUpstreamRequest(entry.client, req)
 	if !service.BorrowBusinessRecoveryFromContext(req.Context()).Active() {
 		client = httpClientWithGrokAccessDeniedFallback(client)
@@ -709,8 +717,7 @@ func (s *httpUpstreamService) getClientEntryWithTLS(proxyURL string, accountID i
 	protocolMode := upstreamProtocolModeOpenAIH2
 	// Materialize protocol policy before hashing so snapshots with equivalent
 	// effective fingerprints share a client, regardless of old ALPN defaults.
-	profile = tlsfingerprint.EffectiveProfile(profile)
-	profile.ALPNProtocols = []string{"h2"}
+	compiled := s.fingerprints.Compile(profile)
 	// Mode is part of the key: ordinary TLS clients must not inherit borrowing policy.
 	cacheKey := "tls:" + buildCacheKey(isolation, proxyKey, accountID, protocolMode)
 	if upstreamProfile == service.HTTPUpstreamProfileBorrowProbe {
@@ -718,15 +725,11 @@ func (s *httpUpstreamService) getClientEntryWithTLS(proxyURL string, accountID i
 	}
 	// A changed borrow binding/device or edited TLS profile must not inherit a
 	// cached transport with the previous ClientHello, even on the same proxy.
-	profileJSON, err := json.Marshal(profile)
-	if err != nil {
-		return nil, err
-	}
-	profileHash := sha256.Sum256(profileJSON)
+	profileHash := compiled.Digest()
 	// Several routed fingerprints can be active for the same account and proxy.
 	// Keep separate reusable clients instead of replacing each other's transport.
-	cacheKey += fmt.Sprintf(":fingerprint:%x", profileHash)
-	poolKey := fmt.Sprintf("%s:tls:%x", buildPoolKey(settings, protocolMode), profileHash)
+	cacheKey += ":fingerprint:" + profileHash
+	poolKey := buildPoolKey(settings, protocolMode) + ":tls:" + profileHash
 
 	now := time.Now()
 	nowUnix := now.UnixNano()
@@ -777,7 +780,7 @@ func (s *httpUpstreamService) getClientEntryWithTLS(proxyURL string, accountID i
 
 	// 创建带 TLS 指纹的 Transport
 	slog.Debug("tls_fingerprint_creating_new_client", "account_id", accountID, "cache_key", safeUpstreamPoolID(cacheKey), "proxy", safeUpstreamPoolID(proxyKey))
-	transport, err := buildUpstreamTransportWithTLSFingerprint(settings, parsedProxy, profile)
+	transport, err := buildUpstreamTransportWithTLSFingerprint(settings, parsedProxy, compiled.Profile())
 	if err != nil {
 		s.mu.Unlock()
 		return nil, fmt.Errorf("build TLS fingerprint transport: %w", err)
@@ -793,6 +796,7 @@ func (s *httpUpstreamService) getClientEntryWithTLS(proxyURL string, accountID i
 		proxyKey:     proxyKey,
 		poolKey:      poolKey,
 		protocolMode: protocolMode,
+		observation:  upstreamTransportInfo("utls", parsedProxy, cacheKey, poolKey, compiled.FingerprintID()),
 	}
 	atomic.StoreInt64(&entry.lastUsed, nowUnix)
 	if markInFlight {
@@ -960,6 +964,7 @@ func (s *httpUpstreamService) getClientEntry(proxyURL string, accountID int64, a
 		proxyKey:     proxyKey,
 		poolKey:      poolKey,
 		protocolMode: protocolMode,
+		observation:  upstreamTransportInfo("net_http", parsedProxy, cacheKey, poolKey, ""),
 	}
 	atomic.StoreInt64(&entry.lastUsed, nowUnix)
 	if markInFlight {
