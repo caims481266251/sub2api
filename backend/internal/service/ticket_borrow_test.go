@@ -187,6 +187,7 @@ func borrowFixture() (*TicketBorrowService, *borrowTestRepo) {
 	a := &Account{ID: 11, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Credentials: map[string]any{"access_token": "target-secret", "chatgpt_account_id": "target"}}
 	r := &borrowTestRepo{now: time.Now(), enabled: true}
 	r.route = &BorrowRoute{ID: "route-a", TargetID: 11, TargetRevision: 2, IdentityHash: borrowAccountIdentity(a), ExpiresAt: r.now.Add(time.Minute), Secret: BorrowRouteSecret{Endpoint: chatgptCodexURL, Cookie: http.Cookie{Name: "__oailb", Value: "donor-cookie"}, Headers: http.Header{"Authorization": []string{"Bearer target-secret"}}}}
+	r.route.Secret.Fingerprint, _ = NewBorrowFingerprint()
 	accounts := borrowTestAccounts{account: a}
 	return NewTicketBorrowService(r, &AccountTestService{accountRepo: accounts, openaiGatewayService: &OpenAIGatewayService{accountRepo: accounts}}, nil), r
 }
@@ -435,7 +436,7 @@ func TestTicketBorrowWorkerPublishesOnlyTargetVerifiedCandidates(t *testing.T) {
 	s.owner.httpUpstream = up
 	s.owner.openaiGatewayService = &OpenAIGatewayService{accountRepo: s.owner.accountRepo}
 	require.ErrorIs(t, s.Check(t.Context(), 11, "gpt-6-astra", "http"), ErrBorrowUnavailable)
-	s.runTarget(t.Context(), BorrowTarget{AcquisitionIdentity: BorrowAcquisitionSource, AccountID: 11, Revision: 2}, BorrowSettings{Running: true, TTLSeconds: 230}, "worker")
+	s.runTarget(t.Context(), BorrowTarget{AcquisitionIdentity: BorrowAcquisitionSource, AccountID: 11, Revision: 2}, BorrowSettings{Running: true}, "worker")
 	require.Len(t, up.calls, 3)
 	require.Contains(t, up.calls[0].body, "gpt-6-luna")
 	require.Equal(t, "Bearer source-token", up.calls[0].header.Get("Authorization"))
@@ -446,13 +447,13 @@ func TestTicketBorrowWorkerPublishesOnlyTargetVerifiedCandidates(t *testing.T) {
 	// A later degraded candidate must not remove the already admitted route.
 	up.replies = []stateProbeReply{{status: 200, cookies: []string{"__oailb=" + cookie + "; Max-Age=230; Secure"}, body: stateProbeCompletedStream}, mint, {status: 200, state: "changed", body: stateProbeCompletedStream}}
 	up.calls = nil
-	s.runTarget(t.Context(), BorrowTarget{AcquisitionIdentity: BorrowAcquisitionSource, AccountID: 11, Revision: 2}, BorrowSettings{Running: true, TTLSeconds: 230}, "worker")
+	s.runTarget(t.Context(), BorrowTarget{AcquisitionIdentity: BorrowAcquisitionSource, AccountID: 11, Revision: 2}, BorrowSettings{Running: true}, "worker")
 	require.Equal(t, oldID, base.route.ID)
 	require.NoError(t, s.Check(t.Context(), 11, "gpt-6-astra", "http"))
 }
 
 func TestTicketBorrowRejectsUnverifiedEndpointAndPreservesConversation(t *testing.T) {
-	s, _ := borrowFixture()
+	s, r := borrowFixture()
 	req := borrowRequest(t)
 	req.URL.Host = "other.example"
 	_, err := s.ForwardHTTP(req, "", 11, 1, nil, func(*http.Request, string, int64, int, *tlsfingerprint.Profile) (*http.Response, error) {
@@ -464,7 +465,7 @@ func TestTicketBorrowRejectsUnverifiedEndpointAndPreservesConversation(t *testin
 	req.Header.Set("X-Codex-Installation-ID", "unverified-client-device")
 	req.Header.Set("Cookie", "foreign=value")
 	_, err = s.ForwardHTTP(req, "", 11, 1, nil, func(sent *http.Request, _ string, _ int64, _ int, _ *tlsfingerprint.Profile) (*http.Response, error) {
-		require.Equal(t, "unverified-client-device", sent.Header.Get("X-Codex-Installation-ID"))
+		require.Equal(t, r.route.Secret.Fingerprint.DeviceID, sent.Header.Get("X-Codex-Installation-ID"))
 		require.Contains(t, sent.Header.Get("Cookie"), "foreign=value")
 		require.Equal(t, "conversation-ticket", sent.Header.Get("X-Codex-Turn-State"))
 		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: http.NoBody}, nil
@@ -481,7 +482,7 @@ func (r *borrowTestRepo) EndTargetRequest(context.Context, BorrowRequest, int, s
 }
 
 func (r *borrowTestRepo) Settings(context.Context) (BorrowSettings, error) {
-	return BorrowSettings{Running: true, TTLSeconds: 230}, nil
+	return BorrowSettings{Running: true}, nil
 }
 func (r *borrowTestRepo) RecordProbeOutcome(context.Context, int64, string, string, time.Duration) error {
 	return nil

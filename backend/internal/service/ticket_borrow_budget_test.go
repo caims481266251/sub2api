@@ -46,7 +46,7 @@ func TestTicketBorrowSourceReservationGatesAreNotMisreported(t *testing.T) {
 			s.repo = r
 			u := &stateProbeUpstream{}
 			s.owner.httpUpstream = u
-			_, _, err := s.acquireSource(borrowTestCandidateContext(t.Context()), r.source, BorrowSettings{TTLSeconds: 230})
+			_, _, err := s.acquireSource(borrowTestCandidateContext(t.Context()), r.source, BorrowSettings{})
 			require.ErrorIs(t, err, tc.errorWant)
 			require.Empty(t, u.calls)
 			require.Equal(t, tc.reason, r.reason)
@@ -60,10 +60,10 @@ func TestTicketBorrowSourceBudgetCountsNewCandidatesAndStopsBeforeSend(t *testin
 	s.repo = r
 	u := &stateProbeUpstream{replies: []stateProbeReply{{status: 500, body: "unavailable"}}}
 	s.owner.httpUpstream = u
-	_, _, err := s.acquireSource(borrowTestCandidateContext(t.Context()), r.source, BorrowSettings{TTLSeconds: 230})
+	_, _, err := s.acquireSource(borrowTestCandidateContext(t.Context()), r.source, BorrowSettings{})
 	require.ErrorIs(t, err, ErrBorrowUnavailable)
 	r.reason = ""
-	_, _, err = s.acquireSource(borrowTestCandidateContext(t.Context()), r.source, BorrowSettings{TTLSeconds: 230})
+	_, _, err = s.acquireSource(borrowTestCandidateContext(t.Context()), r.source, BorrowSettings{})
 	require.ErrorIs(t, err, errBorrowSourceDeferred)
 	require.Len(t, u.calls, 1)
 	require.Equal(t, 2, r.reservations)

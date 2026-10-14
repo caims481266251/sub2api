@@ -99,7 +99,7 @@ func TestTicketBorrowDiagnosticDoesNotSkipUnacquiredSource(t *testing.T) {
 	s.repo = r
 	s.owner.httpUpstream = &stateProbeUpstream{}
 	s.owner.openaiGatewayService = &OpenAIGatewayService{accountRepo: s.owner.accountRepo}
-	s.runTarget(t.Context(), BorrowTarget{AcquisitionIdentity: BorrowAcquisitionSource, AccountID: 11, Revision: 2, ScanSources: []int64{1}}, BorrowSettings{Running: true, TTLSeconds: 230}, "worker")
+	s.runTarget(t.Context(), BorrowTarget{AcquisitionIdentity: BorrowAcquisitionSource, AccountID: 11, Revision: 2, ScanSources: []int64{1}}, BorrowSettings{Running: true}, "worker")
 	require.Zero(t, r.advanced)
 }
 func TestTicketBorrowActivityTransportFailureEndsReservation(t *testing.T) {

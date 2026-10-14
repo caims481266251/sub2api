@@ -12,6 +12,23 @@ const target = (id: number): BorrowTarget => ({ account_id: id, name: `target ${
 beforeEach(() => sessionStorage.clear())
 
 describe('account management lists', () => {
+  it('explains continuing requests when all stored routes are cooling and keeps old probe results secondary', async () => {
+    const current = { ...target(63), ready: false, business_inflight: 2, inventory_count: 0, stored_inventory_count: 1, reason: 'borrow_acquisition_paused',
+      business_routes: [{ id: 'r', gateway: 'gw', source_account_id: 71, state: 'cooling', usable: false, inventory_eligible: true, inflight: 2, usable_until: new Date(now + 300000).toISOString() }] } as BorrowTarget
+    const w = mount(BorrowTargetList, { props: { targets: [current], running: true, now, dirtyIds: {} } })
+    expect(w.get('[data-testid="target-admission"]').attributes('data-tag-value')).toBe('noRoute')
+    expect(w.get('[data-testid="target-route-summary"]').text()).toContain('statusSummary.cooling{"count":1}')
+    expect(w.get('[data-testid="target-natural-drain"]').text()).toContain('statusSummary.existingContinue')
+    expect(w.get('[data-testid="target-probe-state"] [data-tag-kind="phase"]').attributes('data-tag-value')).toBe('probing')
+    const history = w.get('[data-testid="target-last-result"]')
+    expect(history.attributes('open')).toBeUndefined()
+    expect(history.get('summary').text()).toContain('statusSummary.lastProbeHistory')
+    await w.get('[data-expand-routes="63"]').trigger('click')
+    expect(w.find('[data-testid="business-routes"]').exists()).toBe(true)
+    await w.setProps({ targets: [{ ...current, business_routes: [{ ...current.business_routes![0], state: 'normal', unavailable_reason: 'route_busy', dispatch_limit: 2 }] }] })
+    expect(w.get('[data-testid="target-admission"]').attributes('data-tag-value')).toBe('busy')
+    w.unmount()
+  })
   it('keeps source cooldown, previous acquisition and paused automatic rotation independent', () => {
     const current = { ...source(1), enabled: false, unavailable_reason: 'source_account_cooling', last_reason: 'source_cookie_acquired' }
     const w = mount(BorrowSourceList, { props: { sources: [current], rotations: [{ account_id: 1, automatic: true, interval_seconds: 30 } as import('@/api/admin/ticketBorrowing').BorrowRotationState], groups: [], running: false, busy: false, rotationLoaded: true, selectionDirty: false, selected: [] } })

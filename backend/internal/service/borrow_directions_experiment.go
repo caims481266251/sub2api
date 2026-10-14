@@ -212,9 +212,7 @@ func (x *BorrowPairedExitExperiment) RunDirections(parent context.Context, in Bo
 		return
 	}
 	minimumRemaining := 120
-	if settings.MinRouteRemainingSeconds != nil {
-		minimumRemaining = *settings.MinRouteRemainingSeconds
-	}
+
 	targets := map[int64]*directionTarget{}
 	var leaseDeadline time.Time
 	// Hold both local targets because they share one upstream identity. Normal

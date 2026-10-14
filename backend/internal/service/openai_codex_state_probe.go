@@ -584,9 +584,10 @@ func fireOpenAICodexStateShotRequest(ctx context.Context, headers http.Header, m
 		return out, err
 	}
 	req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAIHarvest))
-	req.Close = true
+	req.Close = false
 	req.Host = "chatgpt.com"
 	req.Header = headers.Clone()
+	req.Header.Del("Connection")
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("OpenAI-Beta", "responses=experimental")

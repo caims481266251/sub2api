@@ -1,11 +1,19 @@
 export type BorrowTagTone = 'success' | 'info' | 'warning' | 'danger' | 'neutral' | 'category'
-export type BorrowTagKind = 'reason' | 'stage' | 'state' | 'phase' | 'route' | 'maintenance' | 'verdict' | 'failure' | 'trigger' | 'statistic' | 'terminal' | 'http' | 'pool'
+export type BorrowTagKind = 'reason' | 'stage' | 'state' | 'phase' | 'route' | 'maintenance' | 'verdict' | 'failure' | 'trigger' | 'statistic' | 'terminal' | 'http' | 'pool' | 'quality'
 type TagSpec = readonly [BorrowTagTone, string]
 const label = (tone: BorrowTagTone, key: string): TagSpec => [tone, `ticketBorrowing.tags.${key}`]
 
 // Explicit reason codes keep normal cancellation and intermediate progress separate
 // from failed verification. Unknown codes always remain neutral and visible.
 const reasons: Record<string, TagSpec> = {
+ route_quality_passed: ['success', 'ticketBorrowing.quality.passed'],
+ route_quality_failed: ['danger', 'ticketBorrowing.quality.failed'],
+ route_quality_incomplete: label('warning', 'incomplete'), route_quality_timeout: label('warning', 'incomplete'),
+ route_quality_transport_error: ['warning', 'ticketBorrowing.routePool.transportError'], route_quality_http_error: label('warning', 'httpError'),
+ route_quality_model_mismatch: ['danger', 'ticketBorrowing.quality.failed'],
+ route_probe_passed: label('success', 'probePassed'),
+ route_cooling: label('warning', 'cooling'), route_rate_limited: label('warning', 'rateLimited'),
+ route_upstream_error: ['warning', 'ticketBorrowing.routePool.upstreamError'], route_transport_error: ['warning', 'ticketBorrowing.routePool.transportError'], route_incomplete_response: label('warning', 'incomplete'), route_health_passed: label('success', 'upstreamCompleted'), route_health_cancelled: label('neutral', 'cancelled'), route_health_stale: label('neutral', 'staleIgnored'),
   candidate_gateway_prioritized: label('info', 'gatewayPrioritized'),
   candidate_gateway_recheck: label('info', 'gatewayRecheck'),
   gateway_feedback_unavailable: label('warning', 'gatewayFeedbackUnavailable'),
@@ -112,6 +120,12 @@ const reasons: Record<string, TagSpec> = {
 }
 
 const groups: Partial<Record<BorrowTagKind, Record<string, TagSpec>>> = {
+  quality: {
+    passed: ['success', 'ticketBorrowing.quality.passed'], failed: ['danger', 'ticketBorrowing.quality.failed'], pending: ['warning', 'ticketBorrowing.quality.pending'],
+    stale: ['neutral', 'ticketBorrowing.statusSummary.qualityStale'],
+    incomplete: ['warning', 'ticketBorrowing.statusSummary.qualityIncomplete'],
+    model_mismatch: ['warning', 'ticketBorrowing.statusSummary.qualityModelMismatch']
+  },
   pool: {
     acquiring: ['info', 'ticketBorrowing.candidatePool.states.acquiring'],
     queued: ['category', 'ticketBorrowing.candidatePool.states.queued'],
@@ -129,12 +143,17 @@ const groups: Partial<Record<BorrowTagKind, Record<string, TagSpec>>> = {
     waiting: ['neutral', 'ticketBorrowing.management.phases.waiting']
   },
   route: {
+    account_cooling: ['warning', 'ticketBorrowing.statusSummary.accountCooling'],
+    account_unavailable: ['warning', 'ticketBorrowing.statusSummary.accountUnavailable'],
+    pending_quality: ['warning', 'ticketBorrowing.quality.pending'], pending_probe: ['warning', 'ticketBorrowing.routePool.pendingProbe'], cooling: label('warning', 'cooling'), expired: ['neutral', 'ticketBorrowing.routePool.expired'], invalid: ['danger', 'ticketBorrowing.routePool.invalid'], checking: ['info', 'ticketBorrowing.routePool.checking'],
     accepting: ['success', 'ticketBorrowing.routes.accepting'],
+    busy: ['warning', 'ticketBorrowing.routes.busy'],
     boundOnly: ['neutral', 'ticketBorrowing.routes.boundOnly'],
     draining: ['info', 'ticketBorrowing.routes.draining'],
     unavailable: ['neutral', 'ticketBorrowing.routes.unavailable']
   },
   state: {
+    busy: ['warning', 'ticketBorrowing.routes.busy'],
     ready: ['success', 'ticketBorrowing.ready'], noRoute: ['warning', 'ticketBorrowing.management.noRoute'],
     enabled: ['category', 'ticketBorrowing.enabled'], disabled: ['neutral', 'ticketBorrowing.disabled'],
     eligible: ['success', 'ticketBorrowing.management.eligible'], unavailable: label('warning', 'accountUnavailable'),

@@ -178,6 +178,7 @@ func TestOpenAIResponses_BorrowHTTPContinuationPublicLifecycle(t *testing.T) {
 	t.Cleanup(billing.Stop)
 	gateway := service.NewOpenAIGatewayService(accounts, nil, nil, nil, nil, nil, nil, nil, cfg, nil, concurrency, service.NewBillingService(cfg, nil), nil, billing, upstream, &service.DeferredService{}, nil, nil, nil, nil, nil, nil, nil)
 	repo := &borrowHTTPHandlerRepo{bindings: map[string]string{}, sessions: map[string]string{}, route: &service.BorrowRoute{ID: "original-route", TargetID: 11, ExpiresAt: time.Now().Add(time.Minute), Secret: service.BorrowRouteSecret{Endpoint: "https://chatgpt.com/backend-api/codex/responses", Cookie: http.Cookie{Name: "__oailb", Value: "test-route"}, Headers: http.Header{"Authorization": []string{"Bearer test-token"}}}}}
+	repo.route.Secret.Fingerprint, _ = service.NewBorrowFingerprint()
 	service.ProvideAccountTestService(accounts, nil, nil, nil, nil, upstream, cfg, nil, gateway, &service.SettingService{}, nil, repo, nil)
 	t.Cleanup(gateway.CloseOpenAIWSPool)
 	h := NewOpenAIGatewayHandler(gateway, concurrency, billing, service.NewAPIKeyService(nil, nil, nil, nil, nil, nil, cfg), nil, nil, nil, nil, cfg)

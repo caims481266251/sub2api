@@ -9,13 +9,12 @@ import (
 // Controls are saved independently from the advanced settings form. The saved
 // revision still fences concurrent administrators, including a concurrent PUT.
 type BorrowControls struct {
-	Revision             int64 `json:"revision"`
-	Running              *bool `json:"running"`
-	ReplenishmentEnabled *bool `json:"replenishment_enabled"`
+	Revision int64 `json:"revision"`
+	Running  *bool `json:"running"`
 }
 
 func (s *TicketBorrowService) SaveControls(ctx context.Context, input BorrowControls) error {
-	if input.Revision < 1 || (input.Running == nil && input.ReplenishmentEnabled == nil) {
+	if input.Revision < 1 || input.Running == nil {
 		return errors.New("borrow_settings_invalid")
 	}
 	v, err := s.repo.Settings(ctx)
@@ -27,12 +26,6 @@ func (s *TicketBorrowService) SaveControls(ctx context.Context, input BorrowCont
 	}
 	if input.Running != nil {
 		v.Running = *input.Running
-	}
-	if input.ReplenishmentEnabled != nil {
-		if v.Replenishment == nil {
-			v.Replenishment = &BorrowReplenishmentSettings{Inventory: BorrowRollingInventory, IntervalSeconds: 1, HoldSeconds: 0}
-		}
-		v.Replenishment.Enabled = *input.ReplenishmentEnabled
 	}
 	return s.repo.SaveSettings(ctx, v)
 }

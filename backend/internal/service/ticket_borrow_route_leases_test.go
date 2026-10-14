@@ -53,7 +53,9 @@ func TestBorrowLeaseReleaseRetriesWithinCleanupAndRecordsOutcome(t *testing.T) {
 			repo := &borrowReleaseFailureRepo{borrowTestRepo: base, failures: failures}
 			collector := requesttiming.New(time.Now(), 0)
 			req, _ := requesttiming.StartAttempt(borrowRequest(t).WithContext(requesttiming.With(t.Context(), collector)), 11, 0)
-			use := newBorrowRouteUse(req.Context(), repo, "lease", time.Hour)
+			service := &TicketBorrowService{}
+			signal := service.routePublished()
+			use := newBorrowRouteUse(req.Context(), repo, "lease", time.Hour, service.notifyRoutePublished)
 			use.finishReason("read_error")
 			use.finish()
 			a := requesttiming.LatestAttempt(req.Context())
@@ -62,9 +64,19 @@ func TestBorrowLeaseReleaseRetriesWithinCleanupAndRecordsOutcome(t *testing.T) {
 			require.Equal(t, "read_error", a.BorrowLeaseEnd)
 			require.Equal(t, borrowHash("lease"), a.BorrowLeaseHash)
 			if failures < 2 {
+				select {
+				case <-signal:
+				default:
+					t.Fatal("released capacity must wake waiting selectors")
+				}
 				require.Zero(t, activeBorrowLeases(base))
 				require.Equal(t, "released", a.BorrowLeaseState)
 			} else {
+				select {
+				case <-signal:
+					t.Fatal("failed cleanup must not announce free capacity")
+				default:
+				}
 				require.Equal(t, 1, activeBorrowLeases(base), "persistent DB failure stays visible until TTL")
 				require.Equal(t, "release_failed", a.BorrowLeaseState)
 			}

@@ -211,7 +211,7 @@ func TestBorrowContinueTimeoutSettingsValidation(t *testing.T) {
 	s, _ := borrowFixture()
 	for _, n := range []int{0, -1, 46} {
 		v := n
-		err := s.SaveSettings(t.Context(), BorrowSettings{TTLSeconds: 230, ContinueTimeoutSeconds: &v})
+		err := s.SaveSettings(t.Context(), BorrowSettings{ContinueTimeoutSeconds: &v})
 		require.ErrorContains(t, err, "borrow_settings_invalid")
 	}
 	// Ordinary transport deadlines still follow the existing retry classification.
@@ -250,7 +250,7 @@ func TestBorrowContinueTimeoutRejectsCandidateAcrossBatchesAndAllowsNewRoute(t *
 	up := &stateProbeUpstream{replies: []stateProbeReply{source("chat.gateway.unified-1.api.openai.com"), mint, {err: &borrowContinueTimeoutError{Seconds: 7}}}}
 	s.owner.httpUpstream = up
 	run := func() {
-		s.runTarget(t.Context(), BorrowTarget{AcquisitionIdentity: BorrowAcquisitionSource, AccountID: 11, Revision: 2}, BorrowSettings{Running: true, TTLSeconds: 230}, "worker")
+		s.runTarget(t.Context(), BorrowTarget{AcquisitionIdentity: BorrowAcquisitionSource, AccountID: 11, Revision: 2}, BorrowSettings{Running: true}, "worker")
 	}
 	run()
 	require.Len(t, up.calls, 3)

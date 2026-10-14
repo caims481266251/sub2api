@@ -49,7 +49,7 @@ func TestBorrowedRouteReusesStateProbeVerdict(t *testing.T) {
 			require.Len(t, up.calls, tc.calls)
 			for i, c := range up.calls {
 				require.Equal(t, "leased-exit", c.proxy)
-				require.True(t, c.close)
+				require.False(t, c.close)
 				require.Equal(t, "Bearer target-secret", c.header.Get("Authorization"))
 				require.Equal(t, "target-id", c.header.Get("ChatGPT-Account-ID"))
 				require.Contains(t, c.header.Get("Cookie"), "__oailb=borrowed-secret")

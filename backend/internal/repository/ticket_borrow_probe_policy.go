@@ -7,7 +7,7 @@ import (
 )
 
 func (r *ticketBorrowRepository) SaveProbePolicy(ctx context.Context, id int64, p service.BorrowProbePolicy) error {
-	if p.Revision < 1 || (!p.UseGlobal && (p.Concurrency < 1 || p.Concurrency > 32 || p.RenewBeforeSeconds < 0 || p.RenewBeforeSeconds > 240)) {
+	if p.Revision < 1 || (!p.UseGlobal && (p.Concurrency < 1 || p.Concurrency > 32)) {
 		return service.ErrBorrowProbePolicyInvalid
 	}
 	res, err := r.db.ExecContext(ctx, `UPDATE ticket_borrow_targets SET

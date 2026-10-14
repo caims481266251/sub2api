@@ -173,7 +173,7 @@ func TestTicketBorrowObservationCorrelatesCandidatesAndRecordsDiscardedPrefetch(
 			up := &observationWorkerUpstream{degraded: degraded}
 			s.owner.httpUpstream = up
 			s.owner.openaiGatewayService = &OpenAIGatewayService{accountRepo: s.owner.accountRepo}
-			s.runTarget(t.Context(), BorrowTarget{AcquisitionIdentity: BorrowAcquisitionSource, AccountID: 11, Revision: 2, ProbePolicy: BorrowProbePolicy{Concurrency: 3, RenewBeforeSeconds: 15}}, BorrowSettings{Running: true, TTLSeconds: 230}, "batch-a")
+			s.runTarget(t.Context(), BorrowTarget{AcquisitionIdentity: BorrowAcquisitionSource, AccountID: 11, Revision: 2, ProbePolicy: BorrowProbePolicy{Concurrency: 3, RenewBeforeSeconds: 15}}, BorrowSettings{Running: true}, "batch-a")
 			sources := map[string]*BorrowCandidateDetails{}
 			targets, discarded := 0, 0
 			for _, event := range base.events {
@@ -212,8 +212,8 @@ func TestTicketBorrowObservationCorrelatesCandidatesAndRecordsDiscardedPrefetch(
 				require.Zero(t, discarded)
 				require.Equal(t, 6, up.targetCalls)
 			} else {
-				require.Equal(t, 1, targets)
-				require.Equal(t, 2, discarded)
+				require.Equal(t, 3, targets)
+				require.Zero(t, discarded)
 				require.GreaterOrEqual(t, up.targetCalls, 2)
 				require.LessOrEqual(t, up.targetCalls, 6)
 			}

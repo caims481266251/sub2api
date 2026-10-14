@@ -19,7 +19,7 @@ type BorrowProbePolicy struct {
 }
 
 func DefaultBorrowProbePolicy() BorrowProbePolicy {
-	return BorrowProbePolicy{Concurrency: 2, RenewBeforeSeconds: 180}
+	return BorrowProbePolicy{Concurrency: 2, RenewBeforeSeconds: 15}
 }
 
 func (p BorrowProbePolicy) effective() BorrowProbePolicy {
@@ -34,7 +34,7 @@ type BorrowProbePolicyRepository interface {
 }
 
 func (s *TicketBorrowService) SaveProbePolicy(ctx context.Context, id int64, p BorrowProbePolicy) error {
-	if id < 1 || p.Revision < 1 || (!p.UseGlobal && (p.Concurrency < 1 || p.Concurrency > 32 || p.RenewBeforeSeconds < 0 || p.RenewBeforeSeconds > 240)) {
+	if id < 1 || p.Revision < 1 || (!p.UseGlobal && (p.Concurrency < 1 || p.Concurrency > 32)) {
 		return ErrBorrowProbePolicyInvalid
 	}
 	r, ok := s.repo.(BorrowProbePolicyRepository)
@@ -49,10 +49,9 @@ type BorrowProbeBatchAccount struct {
 	Revision  *int64 `json:"revision"`
 }
 type BorrowProbeBatchInput struct {
-	UseGlobal          bool                      `json:"use_global"`
-	Accounts           []BorrowProbeBatchAccount `json:"accounts"`
-	Concurrency        *int                      `json:"concurrency"`
-	RenewBeforeSeconds *int                      `json:"renew_before_seconds"`
+	UseGlobal   bool                      `json:"use_global"`
+	Accounts    []BorrowProbeBatchAccount `json:"accounts"`
+	Concurrency *int                      `json:"concurrency"`
 }
 type BorrowProbeBatchResult struct {
 	AccountID int64  `json:"account_id"`
@@ -61,10 +60,9 @@ type BorrowProbeBatchResult struct {
 }
 
 func (s *TicketBorrowService) SaveProbePolicies(ctx context.Context, in BorrowProbeBatchInput) ([]BorrowProbeBatchResult, error) {
-	if len(in.Accounts) == 0 || len(in.Accounts) > 1000 || (!in.UseGlobal && in.Concurrency == nil && in.RenewBeforeSeconds == nil) ||
-		(in.UseGlobal && (in.Concurrency != nil || in.RenewBeforeSeconds != nil)) ||
-		(in.Concurrency != nil && (*in.Concurrency < 1 || *in.Concurrency > 32)) ||
-		(in.RenewBeforeSeconds != nil && (*in.RenewBeforeSeconds < 0 || *in.RenewBeforeSeconds > 240)) {
+	if len(in.Accounts) == 0 || len(in.Accounts) > 1000 || (!in.UseGlobal && in.Concurrency == nil) ||
+		(in.UseGlobal && in.Concurrency != nil) ||
+		(in.Concurrency != nil && (*in.Concurrency < 1 || *in.Concurrency > 32)) {
 		return nil, ErrBorrowProbePolicyInvalid
 	}
 	seen := make(map[int64]bool, len(in.Accounts))
@@ -102,9 +100,6 @@ func (s *TicketBorrowService) SaveProbePolicies(ctx context.Context, in BorrowPr
 		// Batch edits are explicit account overrides, including accounts that
 		// previously inherited their effective values from global settings.
 		p.UseGlobal = in.UseGlobal
-		if in.RenewBeforeSeconds != nil {
-			p.RenewBeforeSeconds = *in.RenewBeforeSeconds
-		}
 		err := s.SaveProbePolicy(ctx, a.AccountID, p)
 		switch {
 		case err == nil:
@@ -124,9 +119,6 @@ func (s *TicketBorrowService) SaveProbePolicies(ctx context.Context, in BorrowPr
 func borrowTargetNeedsProbe(t BorrowTarget) bool {
 	if t.BorrowInventory != nil {
 		return t.BlockedReason == "" && !t.NextAt.After(t.BorrowInventory.ServerNow)
-	}
-	if t.Replenishment != nil && !t.Replenishment.NextAt.After(t.ServerNow) {
-		return true
 	}
 	return !t.Ready || t.ExpiresAt == nil || t.ExpiresAt.Sub(t.ServerNow) <= time.Duration(t.ProbePolicy.effective().RenewBeforeSeconds)*time.Second
 }

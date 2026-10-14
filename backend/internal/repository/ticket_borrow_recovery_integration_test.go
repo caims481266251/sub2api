@@ -26,6 +26,7 @@ func borrowRecoveryFixture(t *testing.T) (service.TicketBorrowRepository, int64,
 		_ = r.SaveSettings(context.Background(), original)
 	})
 	cfg.Running = true
+	cfg.RoutePoolSize = new(1)
 	cfg.Recovery = service.DefaultBorrowRecoverySettings()
 	cfg.Recovery.FailureThreshold = 2
 	require.NoError(t, r.SaveSettings(t.Context(), cfg))
@@ -99,6 +100,7 @@ func TestTicketBorrowBusinessDoesNotExtendUpstreamWaitOrRouteExpiry(t *testing.T
 	require.NoError(t, e)
 	route := borrowAdmissionFixture(&service.BorrowRoute{ID: uuid.NewString(), TargetID: id, TargetRevision: q.Revision, IdentityHash: "identity", CookieHash: uuid.NewString(), ExpiresAt: now.Add(220 * time.Second)})
 	require.NoError(t, r.Publish(ctx, route, "worker"))
+	passBorrowFixtureQuality(t)
 	require.NoError(t, r.RecordProbeOutcome(ctx, id, "worker", "target_rate_limited", 60500*time.Millisecond))
 	before, e := r.Target(ctx, id)
 	require.NoError(t, e)
@@ -107,9 +109,11 @@ func TestTicketBorrowBusinessDoesNotExtendUpstreamWaitOrRouteExpiry(t *testing.T
 	after, e := r.Target(ctx, id)
 	require.NoError(t, e)
 	require.Equal(t, before.UpstreamWaitUntil, after.UpstreamWaitUntil)
-	got, e := r.Route(ctx, id, "identity", route.ID)
-	require.NoError(t, e)
-	require.WithinDuration(t, route.ExpiresAt, got.ExpiresAt, time.Millisecond)
+	_, e = r.Route(ctx, id, "identity", route.ID)
+	require.ErrorIs(t, e, service.ErrBorrowUnavailable, "new requests respect target upstream waiting")
+	var expiry time.Time
+	require.NoError(t, integrationDB.QueryRow(`SELECT expires_at FROM ticket_borrow_routes WHERE id=$1`, route.ID).Scan(&expiry))
+	require.WithinDuration(t, route.ExpiresAt, expiry, time.Millisecond)
 	require.NoError(t, r.FinishJob(ctx, "target", id, "worker", "target_probe_passed", 0))
 	_, e = integrationDB.ExecContext(ctx, `UPDATE ticket_borrow_targets SET upstream_wait_until=clock_timestamp()-INTERVAL '1 second' WHERE account_id=$1`, id)
 	require.NoError(t, e)
@@ -165,6 +169,7 @@ func TestTicketBorrowRecoveryFiveBusinessRequestsDoNotSerializeOrLoseActivity(t 
 	require.NoError(t, err)
 	route := borrowAdmissionFixture(&service.BorrowRoute{ID: uuid.NewString(), TargetID: id, TargetRevision: q.Revision, IdentityHash: "identity", CookieHash: uuid.NewString(), ExpiresAt: now.Add(3 * time.Minute)})
 	require.NoError(t, r.Publish(ctx, route, "worker"))
+	passBorrowFixtureQuality(t)
 	require.NoError(t, r.RecordProbeOutcome(ctx, id, "worker", "target_ticket_changed", 0))
 	require.NoError(t, r.RecordProbeOutcome(ctx, id, "worker", "target_ticket_changed", 0))
 	var wg sync.WaitGroup

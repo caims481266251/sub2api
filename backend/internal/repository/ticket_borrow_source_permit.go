@@ -64,12 +64,19 @@ func (r *ticketBorrowRepository) GrantSourceAttempt(ctx context.Context, source 
 		return false, err
 	}
 	if source == 0 {
-		var active, capacity int
-		if err = tx.QueryRowContext(ctx, `SELECT (`+borrowBackgroundInflight+`),CASE WHEN t.probe_policy_override THEN t.probe_concurrency ELSE cfg.probe_concurrency END
- FROM ticket_borrow_targets t CROSS JOIN ticket_borrow_settings cfg WHERE t.account_id=$1 AND cfg.id=1`, a.TargetID).Scan(&active, &capacity); err != nil {
+		var turn bool
+		if err = tx.QueryRowContext(ctx, `SELECT `+borrowCandidateHasTurn+` FROM ticket_borrow_targets t JOIN accounts a ON a.id=t.account_id CROSS JOIN ticket_borrow_settings cfg WHERE t.account_id=$1 AND cfg.id=1`, a.TargetID).Scan(&turn); err != nil {
 			return false, err
 		}
-		if active >= capacity {
+		if !turn {
+			return false, nil
+		}
+		var active, capacity, business, total int
+		if err = tx.QueryRowContext(ctx, `SELECT (`+borrowBackgroundInflight+`),CASE WHEN t.probe_policy_override THEN t.probe_concurrency ELSE cfg.probe_concurrency END,(`+borrowBusinessInflight+`),GREATEST(1,a.concurrency)
+ FROM ticket_borrow_targets t JOIN accounts a ON a.id=t.account_id CROSS JOIN ticket_borrow_settings cfg WHERE t.account_id=$1 AND cfg.id=1`, a.TargetID).Scan(&active, &capacity, &business, &total); err != nil {
+			return false, err
+		}
+		if active >= capacity || active+business >= total {
 			return false, nil
 		}
 	}
@@ -124,7 +131,7 @@ func (r *ticketBorrowRepository) GrantSourceAttempt(ctx context.Context, source 
  CROSS JOIN ticket_borrow_settings cfg
  LEFT JOIN ticket_borrow_source_grants g ON g.target_id=i.target_id
  WHERE c.id=1 AND cfg.id=1 AND (
- (i.source_id IS NULL AND t.acquisition_identity='self' AND (` + strings.ReplaceAll(borrowBackgroundInflight, "$1", "t.account_id") + `)<CASE WHEN t.probe_policy_override THEN t.probe_concurrency ELSE cfg.probe_concurrency END) OR
+ (i.source_id IS NULL AND t.acquisition_identity='self' AND ` + borrowCandidateHasTurn + ` AND (` + strings.ReplaceAll(borrowBackgroundInflight, "$1", "t.account_id") + `)<CASE WHEN t.probe_policy_override THEN t.probe_concurrency ELSE cfg.probe_concurrency END) OR
  (i.source_id IS NOT NULL AND t.acquisition_identity='source' AND s.enabled AND s.deleted_at IS NULL
  AND s.next_attempt_at<=clock_timestamp() AND (s.lease_until IS NULL OR s.lease_until<=clock_timestamp())
  AND ` + borrowNormalScope + ` AND NOT EXISTS(SELECT 1 FROM ticket_borrow_targets st WHERE st.account_id=a.id AND st.enabled)))

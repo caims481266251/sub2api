@@ -24,15 +24,16 @@ import (
 
 type borrowAdmissionRetryRepo struct {
 	service.TicketBorrowRepository
-	mu            sync.Mutex
-	enabled       map[int64]bool
-	checkErr      map[int64]error
-	reserveErr    map[int64]error
-	beforeSendErr map[int64]error
-	reserved      []int64
-	leases        map[string]int64
-	released      int
-	revoked       []int64
+	mu              sync.Mutex
+	enabled         map[int64]bool
+	checkErr        map[int64]error
+	reserveErr      map[int64]error
+	reserveFailures int
+	beforeSendErr   map[int64]error
+	reserved        []int64
+	leases          map[string]int64
+	released        int
+	revoked         []int64
 }
 
 func newBorrowAdmissionRetryRepo() *borrowAdmissionRetryRepo {
@@ -60,14 +61,21 @@ func (r *borrowAdmissionRetryRepo) CheckLatestRoute(_ context.Context, id int64,
 	return r.checkErr[id]
 }
 func (r *borrowAdmissionRetryRepo) route(id int64) *service.BorrowRoute {
+	fingerprint, _ := service.NewBorrowFingerprint()
 	return &service.BorrowRoute{ID: fmt.Sprintf("route-%d", id), TargetID: id, ExpiresAt: time.Now().Add(time.Minute),
-		Secret: service.BorrowRouteSecret{Endpoint: "https://chatgpt.com/backend-api/codex/responses", Cookie: http.Cookie{Name: "__oailb", Value: "borrowed-route"}}}
+		Secret: service.BorrowRouteSecret{Fingerprint: fingerprint, Endpoint: "https://chatgpt.com/backend-api/codex/responses", Cookie: http.Cookie{Name: "__oailb", Value: "borrowed-route"}}}
 }
 func (r *borrowAdmissionRetryRepo) ReserveLatestRoute(_ context.Context, id int64, _, _, _, lease string) (*service.BorrowContinuationRoute, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.reserved = append(r.reserved, id)
 	if err := r.reserveErr[id]; err != nil {
+		if r.reserveFailures > 0 {
+			r.reserveFailures--
+			if r.reserveFailures == 0 {
+				delete(r.reserveErr, id)
+			}
+		}
 		return nil, err
 	}
 	r.leases[lease] = id
@@ -132,8 +140,16 @@ func (u *borrowAdmissionRetryUpstream) Do(req *http.Request, proxy string, id in
 		if err := service.BorrowBeforeTransport(sent); err != nil {
 			return nil, err
 		}
+		// Mirror the real HTTP transport's recovery observations. Without these,
+		// the handler cannot prove when an attempt started or explicitly failed.
+		recovery := service.BorrowBusinessRecoveryFromContext(sent.Context())
+		if err := recovery.BeginTransport(sent.Context()); err != nil {
+			return nil, err
+		}
+		recovery.WroteHeaders(sent.Context())
 		u.sent = append(u.sent, id)
-		if id == 1 && u.status != 0 {
+		if id == 1 && u.status != 0 && u.status != http.StatusOK {
+			recovery.ExplicitFailure()
 			header := http.Header{"Content-Type": {"application/json"}}
 			if u.changedResponse {
 				header.Set("Set-Cookie", "__oailb=changed; Path=/")
@@ -142,6 +158,9 @@ func (u *borrowAdmissionRetryUpstream) Do(req *http.Request, proxy string, id in
 				Body: io.NopCloser(strings.NewReader(`{"error":{"type":"server_error","message":"temporary upstream failure"}}`))}, nil
 		}
 		resp := excelBPSCompleted()
+		if id == 1 && u.changedResponse {
+			resp.Header.Set("Set-Cookie", "__oailb=changed; Path=/")
+		}
 		wire, _ := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
 		delta := "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"done\",\"output_index\":0,\"content_index\":0}\n\n"
@@ -150,7 +169,7 @@ func (u *borrowAdmissionRetryUpstream) Do(req *http.Request, proxy string, id in
 	})
 }
 
-func newBorrowAdmissionRetryHandler(t *testing.T, borrow *borrowAdmissionRetryRepo, upstream *borrowAdmissionRetryUpstream) (*OpenAIGatewayHandler, *initialAdmissionRepo) {
+func newBorrowAdmissionRetryHandler(t *testing.T, borrow service.TicketBorrowRepository, upstream *borrowAdmissionRetryUpstream) (*OpenAIGatewayHandler, *initialAdmissionRepo) {
 	t.Helper()
 	accounts := &initialAdmissionRepo{}
 	h := newInitialAdmissionHandler(t, accounts, upstream)
@@ -189,7 +208,7 @@ func TestBorrowAdmissionUsesOrdinaryAccountReselection(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, endpoint := range []string{"responses", "chat/completions", "messages"} {
 		for _, stream := range []bool{false, true} {
-			for _, stage := range []string{"entry", "reserve", "before_transport"} {
+			for _, stage := range []string{"entry", "reserve", "capacity", "before_transport"} {
 				for _, borrowedFallback := range []bool{false, true} {
 					t.Run(fmt.Sprintf("%s/stream=%t/%s/borrowed_fallback=%t", endpoint, stream, stage, borrowedFallback), func(t *testing.T) {
 						borrow := newBorrowAdmissionRetryRepo()
@@ -205,6 +224,8 @@ func TestBorrowAdmissionUsesOrdinaryAccountReselection(t *testing.T) {
 							}
 						case "reserve":
 							borrow.reserveErr[1] = service.ErrBorrowUnavailable
+						case "capacity":
+							borrow.reserveErr[1] = &service.BorrowRouteAdmissionError{Reason: "route_busy"}
 						case "before_transport":
 							borrow.beforeSendErr[1] = service.ErrBorrowUnavailable
 						}
@@ -227,6 +248,58 @@ func TestBorrowAdmissionUsesOrdinaryAccountReselection(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestBorrowAdmissionCapacityRaceWaitsWithoutAnotherAccount(t *testing.T) {
+	for _, endpoint := range []string{"responses", "chat/completions", "messages"} {
+		for _, outcome := range []string{"released", "timeout"} {
+			t.Run(endpoint+"/"+outcome, func(t *testing.T) {
+				borrow := newBorrowAdmissionRetryRepo()
+				borrow.reserveErr[1] = &service.BorrowRouteAdmissionError{Reason: "route_busy"}
+				upstream := &borrowAdmissionRetryUpstream{}
+				h, accounts := newBorrowAdmissionRetryHandler(t, borrow, upstream)
+				accounts.accounts = accounts.accounts[:1]
+				h.cfg.Gateway.BorrowBusinessRecoveryTimeoutSeconds = 2
+				if outcome == "released" {
+					borrow.reserveFailures = 1
+				} else {
+					h.cfg.Gateway.BorrowBusinessRecoveryTimeoutSeconds = 1
+				}
+				start := time.Now()
+				c, rec := runBorrowAdmissionRequest(t, h, endpoint, false)
+				require.GreaterOrEqual(t, time.Since(start), 900*time.Millisecond)
+				require.Less(t, time.Since(start), 3*time.Second)
+				if outcome == "released" {
+					require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+					require.Equal(t, []int64{1}, upstream.sent, "a capacity rejection never sends upstream")
+				} else {
+					require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+					require.Empty(t, upstream.sent)
+				}
+				_, logged := c.Get(service.OpsUpstreamErrorsKey)
+				require.False(t, logged)
+				require.Empty(t, borrow.leases)
+				require.Equal(t, accounts.slots.accountAcquireCalls, accounts.slots.accountReleaseCalls)
+			})
+		}
+	}
+}
+
+func TestBorrowAdmissionRepeatedCapacityRaceSharesWaitBudget(t *testing.T) {
+	borrow := newBorrowAdmissionRetryRepo()
+	borrow.reserveErr[1] = &service.BorrowRouteAdmissionError{Reason: "account_busy"}
+	borrow.reserveFailures = 3
+	upstream := &borrowAdmissionRetryUpstream{}
+	h, accounts := newBorrowAdmissionRetryHandler(t, borrow, upstream)
+	accounts.accounts = accounts.accounts[:1]
+	accounts.slots.accountSeq = []bool{true, true, true, true}
+	h.maxAccountSwitches = 1
+	h.cfg.Gateway.BorrowBusinessRecoveryTimeoutSeconds = 5
+	_, rec := runBorrowAdmissionRequest(t, h, "responses", false)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Equal(t, []int64{1, 1, 1, 1}, borrow.reserved)
+	require.Equal(t, []int64{1}, upstream.sent)
+	require.Empty(t, borrow.leases)
 }
 
 func TestBorrowAdmissionReselectionHonorsBudgetAndControlFailures(t *testing.T) {
@@ -272,19 +345,91 @@ func TestBorrowUpstreamErrorsKeepOrdinaryFailoverPolicy(t *testing.T) {
 				h, accounts := newBorrowAdmissionRetryHandler(t, borrow, upstream)
 				_, rec := runBorrowAdmissionRequest(t, h, endpoint, false)
 				if status == http.StatusOK {
-					require.Equal(t, http.StatusBadGateway, rec.Code, rec.Body.String())
+					require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+					require.Contains(t, rec.Body.String(), "done")
 					require.Equal(t, []int64{1}, upstream.sent, "a successful request with changed routing cannot be executed twice")
 				} else {
 					require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 					require.Equal(t, []int64{1, 2}, upstream.sent)
 				}
-				require.Equal(t, []int64{1}, borrow.revoked)
+				if status == http.StatusUnauthorized {
+					require.Equal(t, []int64{1}, borrow.revoked)
+				} else {
+					require.Empty(t, borrow.revoked, "routing metadata changes alone do not revoke a healthy route")
+				}
 				require.Empty(t, borrow.leases)
 				require.Equal(t, 1, borrow.released)
 				accounts.slots.mu.Lock()
 				require.Equal(t, accounts.slots.accountAcquireCalls, accounts.slots.accountReleaseCalls)
 				accounts.slots.mu.Unlock()
 			})
+		}
+	}
+}
+
+// Exercise the real TicketBorrowService response observer and recovery path;
+// the in-memory persistence boundary models the independently tested SQL state.
+type routePoolAdmissionRepo struct {
+	*borrowAdmissionRetryRepo
+	service.BorrowRoutePoolRepository
+	outcomes []service.BorrowRouteOutcome
+}
+
+func (r *routePoolAdmissionRepo) ReserveLatestRoute(ctx context.Context, id int64, identity, session, fresh, lease string) (*service.BorrowContinuationRoute, error) {
+	choice, err := r.borrowAdmissionRetryRepo.ReserveLatestRoute(ctx, id, identity, session, fresh, lease)
+	if choice != nil {
+		choice.Route.IdentityHash = identity
+		choice.Route.Generation = 1
+	}
+	return choice, err
+}
+func (r *routePoolAdmissionRepo) CheckRouteReservation(ctx context.Context, route *service.BorrowRoute, lease string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.leases[lease] != route.TargetID {
+		return service.ErrBorrowUnavailable
+	}
+	if err := r.checkErr[route.TargetID]; err != nil {
+		return err
+	}
+	return r.beforeSendErr[route.TargetID]
+}
+func (r *routePoolAdmissionRepo) ObserveRouteOutcome(_ context.Context, o service.BorrowRouteOutcome) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.outcomes = append(r.outcomes, o)
+	if o.Reason != "" {
+		r.checkErr[o.Route.TargetID] = service.ErrBorrowNoEligibleRoute
+		r.reserveErr[o.Route.TargetID] = service.ErrBorrowNoEligibleRoute
+		r.beforeSendErr[o.Route.TargetID] = service.ErrBorrowNoEligibleRoute
+	}
+	return nil
+}
+func TestBorrowRoutePool429RotatesThroughNormalEntry(t *testing.T) {
+	for _, endpoint := range []string{"responses", "chat/completions", "messages"} {
+		for _, stream := range []bool{false, true} {
+			for _, borrowed := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/stream=%t/borrowed=%t", endpoint, stream, borrowed), func(t *testing.T) {
+					repo := &routePoolAdmissionRepo{borrowAdmissionRetryRepo: newBorrowAdmissionRetryRepo()}
+					repo.enabled[2] = borrowed
+					upstream := &borrowAdmissionRetryUpstream{status: 429}
+					h, accounts := newBorrowAdmissionRetryHandler(t, repo, upstream)
+					_, response := runBorrowAdmissionRequest(t, h, endpoint, stream)
+					require.Equal(t, 200, response.Code, response.Body.String())
+					require.Contains(t, response.Body.String(), "done")
+					require.Equal(t, []int64{1, 2}, upstream.sent)
+					require.ErrorIs(t, repo.checkErr[1], service.ErrBorrowUnavailable)
+					require.NotEmpty(t, repo.outcomes)
+					require.Equal(t, "route_rate_limited", repo.outcomes[0].Reason)
+					require.Empty(t, repo.revoked, "temporary cooling retains the route")
+					require.Empty(t, repo.leases)
+					require.Equal(t, accounts.slots.accountAcquireCalls, accounts.slots.accountReleaseCalls)
+					before := len(upstream.sent)
+					_, next := runBorrowAdmissionRequest(t, h, endpoint, stream)
+					require.Equal(t, 200, next.Code, next.Body.String())
+					require.Equal(t, []int64{2}, upstream.sent[before:], "the cooled target must be skipped on the next request")
+				})
+			}
 		}
 	}
 }

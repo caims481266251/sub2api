@@ -2426,6 +2426,20 @@ func (s *OpenAIGatewayService) selectAccountWithScheduler(
 		for {
 			published := s.borrowRoutes.routePublished()
 			selection, decision, err = s.selectAccountWithSchedulerNoWait(ctx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, requiredImageCapability, requireCompact, platform, previousResponseCanMove, useUpstreamTokenCost)
+			if errors.Is(err, ErrNoAvailableAccounts) || IsBorrowRouteUnavailable(err) {
+				if retryExcluded, ok := r.admissionRetryExclusions(excludedIDs); ok {
+					// Other accounts were tried first. A pre-send capacity race
+					// must not permanently exclude the only borrowing target.
+					if !r.waitForRoute(ctx, published) {
+						return
+					}
+					selection, decision, err = s.selectAccountWithSchedulerNoWait(ctx, groupID, previousResponseID, sessionHash, requestedModel, retryExcluded, requiredTransport, requiredCapability, requiredImageCapability, requireCompact, platform, previousResponseCanMove, useUpstreamTokenCost)
+					if err == nil || (!errors.Is(err, ErrNoAvailableAccounts) && !IsBorrowRouteUnavailable(err)) {
+						return
+					}
+					continue
+				}
+			}
 			if IsBorrowRouteUnavailable(err) && s.borrowHTTPContinuationCanFallback(ctx, groupID) {
 				return
 			}
@@ -2440,6 +2454,7 @@ func (s *OpenAIGatewayService) selectAccountWithScheduler(
 func (s *OpenAIGatewayService) selectAccountWithSchedulerNoWait(
 	ctx context.Context, groupID *int64, previousResponseID, sessionHash, requestedModel string, excludedIDs map[int64]struct{}, requiredTransport OpenAIUpstreamTransport, requiredCapability OpenAIEndpointCapability, requiredImageCapability OpenAIImagesCapability, requireCompact bool, platform string, previousResponseCanMove, useUpstreamTokenCost bool,
 ) (selection *AccountSelectionResult, decision OpenAIAccountScheduleDecision, err error) {
+	ctx = context.WithValue(ctx, borrowEndpointCapabilityKey{}, requiredCapability)
 	ctx, borrowSelectionError := withBorrowSelectionFailure(ctx)
 	defer func() { err = borrowSelectionError(err) }()
 	selectOnce := func(selectionCtx context.Context) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {

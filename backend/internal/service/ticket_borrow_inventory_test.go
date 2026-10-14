@@ -12,7 +12,7 @@ func TestBorrowInventoryTransitionsAndCadence(t *testing.T) {
 	now := time.Date(2026, 10, 11, 1, 0, 0, 0, time.UTC)
 	last := now.Add(-5 * time.Second)
 	expiry := now.Add(230 * time.Second)
-	p := &BorrowReplenishmentSettings{Enabled: true, Inventory: 2, IntervalSeconds: 10, HoldSeconds: 150}
+	p := 2
 	f := BorrowInventoryFacts{Now: now, LastStarted: &last, EarliestExpiry: &expiry, RenewBeforeSeconds: 15}
 	for _, tc := range []struct {
 		count int

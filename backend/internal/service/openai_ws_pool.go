@@ -2239,6 +2239,10 @@ func (p *openAIWSConnPool) dialConn(ctx context.Context, req openAIWSAcquireRequ
 	if req.Account != nil {
 		ctx = upstreamroute.WithAccountID(ctx, req.Account.ID)
 	}
+	ctx, err = prepareBorrowWSDial(ctx, headers, req.borrowRoute, req.Model)
+	if err != nil {
+		return nil, err
+	}
 	conn, status, handshakeHeaders, err := p.clientDialer.Dial(ctx, req.WSURL, headers, req.ProxyURL)
 	if err != nil {
 		if p.borrowRoutes != nil {

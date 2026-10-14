@@ -121,6 +121,9 @@ func (s *OpenAIGatewayService) handleOpenAIUpstreamTransportError(ctx context.Co
 	if IsOpenAITurnAdmissionError(err) || IsOpenAIRPMError(err) || errors.Is(err, ErrBorrowResponseRejected) {
 		return err
 	}
+	if errors.Is(err, ErrBorrowRecoveryTimeout) || errors.Is(err, ErrBorrowRecoveryBudget) {
+		return err // local recovery control is not a failure of the selected upstream
+	}
 	if errors.Is(err, ErrCodexTicketResponseRejected) {
 		if c != nil && !c.Writer.Written() {
 			c.AbortWithStatusJSON(http.StatusBadGateway, gin.H{"error": gin.H{"type": "ticket_response_rejected", "message": err.Error()}})

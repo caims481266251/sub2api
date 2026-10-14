@@ -13,20 +13,24 @@ import (
 // A reservation spans connection waiting and the entire response body, not
 // just response headers. Database leases survive across application instances.
 type borrowRouteUse struct {
-	repo   BorrowRouteLeaseRepository
-	id     string
-	ctx    context.Context
-	cancel context.CancelFunc
-	done   chan struct{}
-	once   sync.Once
-	bodyMu sync.Mutex
-	body   io.Closer
+	repo       BorrowRouteLeaseRepository
+	id         string
+	ctx        context.Context
+	cancel     context.CancelFunc
+	done       chan struct{}
+	once       sync.Once
+	bodyMu     sync.Mutex
+	body       io.Closer
+	onReleased func()
 }
 
-func newBorrowRouteUse(ctx context.Context, repo BorrowRouteLeaseRepository, id string, renewEvery time.Duration) *borrowRouteUse {
+func newBorrowRouteUse(ctx context.Context, repo BorrowRouteLeaseRepository, id string, renewEvery time.Duration, released ...func()) *borrowRouteUse {
 	ctx = requesttiming.WithBorrowLease(ctx, borrowHash(id))
 	ctx, cancel := context.WithCancel(ctx)
 	u := &borrowRouteUse{repo: repo, id: id, ctx: ctx, cancel: cancel, done: make(chan struct{})}
+	if len(released) > 0 {
+		u.onReleased = released[0]
+	}
 	requesttiming.BorrowLeaseEvent(ctx, "reserved", 0)
 	go func() {
 		ticker := time.NewTicker(renewEvery)
@@ -98,6 +102,9 @@ func (u *borrowRouteUse) finishReason(reason string) {
 			err := u.repo.ReleaseRoute(try, u.id)
 			cancel()
 			if err == nil {
+				if u.onReleased != nil {
+					u.onReleased()
+				}
 				requesttiming.BorrowLeaseEvent(u.ctx, "released", attempt)
 				slog.InfoContext(cleanup, "borrow_route_lease_released", "lease_hash", borrowHash(u.id), "trace_id", requesttiming.TraceID(u.ctx), "reason", reason, "attempts", attempt)
 				return

@@ -143,12 +143,12 @@ func (r *ticketBorrowRepository) RefreshSource(ctx context.Context, id, revision
 }
 func (r *ticketBorrowRepository) Settings(ctx context.Context) (service.BorrowSettings, error) {
 	var s service.BorrowSettings
-	var recovery, replenishment []byte
-	err := r.db.QueryRowContext(ctx, `SELECT revision,running,ttl_seconds,prewarm_seconds,recovery,min_route_remaining_seconds,probe_concurrency,renew_before_seconds,continue_timeout_seconds,replenishment,admission_window_seconds FROM ticket_borrow_settings WHERE id=1`).Scan(&s.Revision, &s.Running, &s.TTLSeconds, &s.PrewarmSeconds, &recovery, &s.MinRouteRemainingSeconds, &s.ProbeConcurrency, &s.RenewBeforeSeconds, &s.ContinueTimeoutSeconds, &replenishment, &s.AdmissionWindowSeconds)
+	var recovery, quality []byte
+	err := r.db.QueryRowContext(ctx, `SELECT revision,running,recovery,probe_concurrency,continue_timeout_seconds,route_pool_size,route_cooldown_seconds,route_quality FROM ticket_borrow_settings WHERE id=1`).Scan(&s.Revision, &s.Running, &recovery, &s.ProbeConcurrency, &s.ContinueTimeoutSeconds, &s.RoutePoolSize, &s.RouteCooldownSeconds, &quality)
 	if err == nil {
 		err = json.Unmarshal(recovery, &s.Recovery)
 		if err == nil {
-			err = json.Unmarshal(replenishment, &s.Replenishment)
+			err = json.Unmarshal(quality, &s.RouteQuality)
 		}
 		service.NormalizeBorrowSettings(&s)
 		if err == nil {
@@ -162,21 +162,13 @@ func (r *ticketBorrowRepository) SaveSettings(ctx context.Context, s service.Bor
 	if err != nil {
 		return err
 	}
-	if err = service.ResolveBorrowAdmissionSettings(&s, previous); err != nil {
+	if err := service.ResolveBorrowPoolSettings(&s, previous); err != nil {
 		return err
 	}
 	service.NormalizeBorrowSettings(&s)
-	if err := s.Replenishment.Validate(); err != nil {
+	quality, err := json.Marshal(s.RouteQuality)
+	if err != nil {
 		return err
-	}
-	var replenishment any
-	if s.Replenishment != nil {
-		policy := *s.Replenishment
-		raw, err := json.Marshal(policy)
-		if err != nil {
-			return err
-		}
-		replenishment = string(raw)
 	}
 	var recovery any
 	if s.Recovery != nil {
@@ -196,26 +188,10 @@ func (r *ticketBorrowRepository) SaveSettings(ctx context.Context, s service.Bor
 	if _, err = tx.ExecContext(ctx, `SELECT account_id FROM ticket_borrow_targets ORDER BY account_id FOR UPDATE`); err != nil {
 		return err
 	}
-	if s.Replenishment != nil {
-		var saved []byte
-		if err = tx.QueryRowContext(ctx, `SELECT replenishment FROM ticket_borrow_settings WHERE id=1 FOR UPDATE`).Scan(&saved); err != nil {
-			return err
-		}
-		var previous service.BorrowReplenishmentSettings
-		if err = json.Unmarshal(saved, &previous); err != nil {
-			return err
-		}
-
-		if err = s.Replenishment.Validate(); err != nil {
-			return err
-		}
-		raw, e := json.Marshal(s.Replenishment)
-		if e != nil {
-			return e
-		}
-		replenishment = string(raw)
-	}
-	res, err := tx.ExecContext(ctx, `UPDATE ticket_borrow_settings SET running=$1,ttl_seconds=$2,prewarm_seconds=$3,revision=revision+1,recovery=COALESCE($5::jsonb,recovery),min_route_remaining_seconds=COALESCE($6,min_route_remaining_seconds),probe_concurrency=COALESCE($7,probe_concurrency),renew_before_seconds=COALESCE($8,renew_before_seconds),continue_timeout_seconds=COALESCE($9,continue_timeout_seconds),replenishment=COALESCE($10::jsonb,replenishment),admission_window_seconds=$11 WHERE id=1 AND revision=$4`, s.Running, s.TTLSeconds, s.PrewarmSeconds, s.Revision, recovery, s.MinRouteRemainingSeconds, s.ProbeConcurrency, s.RenewBeforeSeconds, s.ContinueTimeoutSeconds, replenishment, s.AdmissionWindowSeconds)
+	res, err := tx.ExecContext(ctx, `UPDATE ticket_borrow_settings SET running=$1,revision=revision+1,
+ recovery=COALESCE($3::jsonb,recovery),probe_concurrency=COALESCE($4,probe_concurrency),
+ continue_timeout_seconds=COALESCE($5,continue_timeout_seconds),route_pool_size=$6,route_cooldown_seconds=$7,route_quality=$8
+ WHERE id=1 AND revision=$2`, s.Running, s.Revision, recovery, s.ProbeConcurrency, s.ContinueTimeoutSeconds, s.RoutePoolSize, s.RouteCooldownSeconds, quality)
 	if err != nil {
 		return err
 	}
@@ -223,10 +199,10 @@ func (r *ticketBorrowRepository) SaveSettings(ctx context.Context, s service.Bor
 	if n != 1 {
 		return service.ErrBorrowConflict
 	}
-	// Only an actual shrink changes existing admission. Inventory deadlines are
-	// Cookie deadlines and are unrelated to business settings or run/stop edits.
-	if s.AdmissionSeconds() < previous.AdmissionSeconds() {
-		if _, err = tx.ExecContext(ctx, `UPDATE ticket_borrow_routes SET admission_until=LEAST(admission_until,admission_started_at+$1*INTERVAL '1 second') WHERE admission_started_at IS NOT NULL`, s.AdmissionSeconds()); err != nil {
+	if *s.RouteQuality != *previous.RouteQuality {
+		if _, err = tx.ExecContext(ctx, `UPDATE ticket_borrow_routes SET state=CASE WHEN state='normal' THEN 'pending_quality' ELSE state END,
+ quality_valid_until=NULL,generation=generation+1,health_token='',health_until=NULL,health_checked_at=NULL
+ WHERE revoked_at IS NULL AND state IN ('normal','pending_probe','pending_quality','cooling')`); err != nil {
 			return err
 		}
 	}
@@ -234,14 +210,6 @@ func (r *ticketBorrowRepository) SaveSettings(ctx context.Context, s service.Bor
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE ticket_borrow_sources SET next_attempt_at=clock_timestamp() WHERE last_reason='source_request_budget'`); err != nil {
-		return err
-	}
-	// Shrinking inventory retires excess rows immediately, without revoking streams or bindings.
-	if _, err = tx.ExecContext(ctx, `WITH ranked AS (
- SELECT r.id,row_number() OVER(PARTITION BY r.target_id,r.target_revision,r.identity_hash ORDER BY LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at),r.admission_until) DESC,r.checked_at ASC,r.id ASC) n
- FROM ticket_borrow_routes r LEFT JOIN ticket_borrow_cookie_deadlines d ON d.cookie_hash=r.cookie_hash
- WHERE r.inventory_eligible AND NOT r.validation_only AND r.revoked_at IS NULL)
- UPDATE ticket_borrow_routes r SET inventory_eligible=false FROM ranked,ticket_borrow_settings cfg WHERE cfg.id=1 AND r.id=ranked.id AND ranked.n>CASE WHEN (cfg.replenishment->>'enabled')::boolean THEN 2 ELSE 1 END`); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -413,7 +381,10 @@ func (r *ticketBorrowRepository) AcquireJob(ctx context.Context, kind string, id
 	}
 	suffix := " AND (SELECT running FROM ticket_borrow_settings WHERE id=1)"
 	if kind == "target" {
-		suffix += " AND COALESCE(upstream_wait_until<=clock_timestamp(),true) AND COALESCE(budget_wait_until<=clock_timestamp(),true) AND (" + borrowBackgroundInflight + ")=0"
+		// This coordinator must wait for its previous acquisition to drain, not
+		// independent pooled-route checks. Actual HTTP work still shares the
+		// probe/account limits when claiming a candidate or beginning a request.
+		suffix += " AND COALESCE(upstream_wait_until<=clock_timestamp(),true) AND COALESCE(budget_wait_until<=clock_timestamp(),true) AND (" + borrowAcquisitionInflight + ")=0"
 	}
 	if kind == "source" {
 		suffix += " AND next_attempt_at<=NOW() AND deleted_at IS NULL"
@@ -503,6 +474,7 @@ func (r *ticketBorrowRepository) ObserveCookie(ctx context.Context, hash string,
 }
 
 func (r *ticketBorrowRepository) Publish(ctx context.Context, route *service.BorrowRoute, lease string) error {
+	route.AdmissionUntil = route.ExpiresAt
 	if route.Shadow {
 		return errors.New("borrow_shadow_unsupported")
 	}
@@ -518,10 +490,7 @@ func (r *ticketBorrowRepository) Publish(ctx context.Context, route *service.Bor
 	if _, err = tx.ExecContext(ctx, `SELECT account_id FROM ticket_borrow_targets WHERE account_id=$1 FOR UPDATE`, route.TargetID); err != nil {
 		return err
 	}
-	policy, err := borrowReplenishmentPolicy(ctx, tx, route.TargetID)
-	if err != nil {
-		return err
-	}
+
 	if err = checkBorrowAcquisition(ctx, tx, service.BorrowAcquisition{TargetID: route.TargetID, Revision: route.TargetRevision, Lease: lease, Identity: route.IdentityHash}, false); err != nil {
 		return service.ErrBorrowConflict
 	}
@@ -576,7 +545,6 @@ func (r *ticketBorrowRepository) Publish(ctx context.Context, route *service.Bor
 	}
 	var now time.Time
 	if err = tx.QueryRowContext(ctx, `SELECT clock_timestamp(),LEAST($1::timestamptz,$2::timestamptz,
- statement_timestamp()+admission_window_seconds*INTERVAL '1 second',
  COALESCE((SELECT expires_at FROM ticket_borrow_cookie_deadlines WHERE cookie_hash=$3),$1::timestamptz))
  FROM ticket_borrow_settings WHERE id=1`, route.ExpiresAt, route.AdmissionUntil, route.CookieHash).Scan(&now, &route.AdmissionUntil); err != nil {
 		return err
@@ -593,10 +561,10 @@ func (r *ticketBorrowRepository) Publish(ctx context.Context, route *service.Bor
 		return err
 	}
 	res, err := tx.ExecContext(ctx, `INSERT INTO ticket_borrow_routes(id,target_id,target_revision,source_id,identity_hash,cookie_hash,gateway,secret,expires_at,inventory_eligible,validation_only,checked_at,
- acquisition_identity,acquisition_account_id,acquisition_started_at,admission_until,candidate_id,admission_started_at)
- VALUES($1,$2,$3,NULLIF($4,0),$5,$6,$7,$8,$9,true,false,clock_timestamp(),$10,$11,$12,$13,$14,$15)
+ acquisition_identity,acquisition_account_id,acquisition_started_at,admission_until,candidate_id,admission_started_at,verification_model,deadline_source,state)
+ VALUES($1,$2,$3,NULLIF($4,0),$5,$6,$7,$8,$9,true,false,clock_timestamp(),$10,$11,$12,$13,$14,$15,$16,$17,'pending_quality')
  ON CONFLICT(target_id,target_revision,identity_hash,cookie_hash) DO NOTHING`, route.ID, route.TargetID, route.TargetRevision, route.SourceID, route.IdentityHash, route.CookieHash, route.Gateway, secret, route.ExpiresAt,
-		route.AcquisitionIdentity, route.AcquisitionAccountID, route.AcquisitionStartedAt, route.AdmissionUntil, route.CandidateID, now)
+		route.AcquisitionIdentity, route.AcquisitionAccountID, route.AcquisitionStartedAt, route.AdmissionUntil, route.CandidateID, now, route.VerificationModel, route.DeadlineSource)
 	if err != nil {
 		return err
 	}
@@ -609,12 +577,6 @@ func (r *ticketBorrowRepository) Publish(ctx context.Context, route *service.Bor
  VALUES($1,$2,$3,$4,$5,$6,'healthy','target_probe_passed',$7) ON CONFLICT(target_id,target_revision,identity_hash,cookie_hash) DO NOTHING`, route.TargetID, route.TargetRevision, route.IdentityHash, route.CookieHash, route.CandidateID, lease, route.ExpiresAt); err != nil {
 			return err
 		}
-	}
-	if err = trimBorrowInventory(ctx, tx, route, policy); err != nil {
-		return err
-	}
-	if err = armBorrowReplenishment(ctx, tx, route, policy); err != nil {
-		return err
 	}
 	return tx.Commit()
 }
@@ -632,7 +594,7 @@ func (r *ticketBorrowRepository) Revoke(ctx context.Context, id int64, routeID, 
 	if _, err = tx.ExecContext(ctx, `SELECT account_id FROM ticket_borrow_targets WHERE account_id=$1 FOR UPDATE`, id); err != nil {
 		return err
 	}
-	res, err := tx.ExecContext(ctx, `UPDATE ticket_borrow_routes SET revoked_at=clock_timestamp(),reason=$3 WHERE target_id=$1 AND id=$2 AND revoked_at IS NULL`, id, routeID, reason)
+	res, err := tx.ExecContext(ctx, `UPDATE ticket_borrow_routes SET revoked_at=clock_timestamp(),reason=$3,state='invalid',generation=generation+1 WHERE target_id=$1 AND id=$2 AND revoked_at IS NULL`, id, routeID, reason)
 	if err != nil {
 		return err
 	}
@@ -706,7 +668,7 @@ func (r *ticketBorrowRepository) Cleanup(ctx context.Context) error {
 		return err
 	}
 	// Keep other diagnostic history and continuation tombstones as before.
-	for _, query := range []string{`DELETE FROM ticket_borrow_gateway_outcomes WHERE created_at<clock_timestamp()-INTERVAL '7 days'`, `DELETE FROM ticket_borrow_gateway_feedback WHERE updated_at<clock_timestamp()-INTERVAL '7 days'`, `DELETE FROM ticket_borrow_candidate_environments WHERE lease_until<clock_timestamp()-INTERVAL '7 days'`, `DELETE FROM ticket_borrow_source_intents WHERE expires_at<=clock_timestamp()`, `DELETE FROM ticket_borrow_candidate_results WHERE expires_at<clock_timestamp()-INTERVAL '7 days'`, `DELETE FROM ticket_borrow_route_leases WHERE lease_until<=clock_timestamp()`, `DELETE FROM ticket_borrow_rotation_jobs WHERE finished_at<clock_timestamp()-INTERVAL '7 days' AND NOT EXISTS(SELECT 1 FROM ticket_borrow_rotation_accounts x WHERE x.active_job=ticket_borrow_rotation_jobs.id)`, `DELETE FROM ticket_borrow_requests WHERE finished_at<clock_timestamp()-INTERVAL '7 days'`, `DELETE FROM ticket_borrow_routes WHERE expires_at<NOW()-INTERVAL '1 day'`, `DELETE FROM ticket_borrow_rejections WHERE expires_at<NOW()`, `DELETE FROM ticket_borrow_cookie_deadlines WHERE observed_at<NOW()-INTERVAL '30 days'`, `DELETE FROM ticket_borrow_compatibility WHERE updated_at<clock_timestamp()-INTERVAL '7 days'`} {
+	for _, query := range []string{`DELETE FROM ticket_borrow_gateway_outcomes WHERE created_at<clock_timestamp()-INTERVAL '7 days'`, `DELETE FROM ticket_borrow_gateway_feedback WHERE updated_at<clock_timestamp()-INTERVAL '7 days'`, `DELETE FROM ticket_borrow_candidate_environments WHERE lease_until<clock_timestamp()-INTERVAL '7 days'`, `DELETE FROM ticket_borrow_source_intents WHERE expires_at<=clock_timestamp()`, `DELETE FROM ticket_borrow_candidate_results WHERE expires_at<clock_timestamp()-INTERVAL '7 days'`, `DELETE FROM ticket_borrow_route_leases WHERE lease_until<=clock_timestamp()`, `DELETE FROM ticket_borrow_rotation_jobs WHERE finished_at<clock_timestamp()-INTERVAL '7 days' AND NOT EXISTS(SELECT 1 FROM ticket_borrow_rotation_accounts x WHERE x.active_job=ticket_borrow_rotation_jobs.id)`, `DELETE FROM ticket_borrow_requests WHERE finished_at<clock_timestamp()-INTERVAL '7 days'`, `DELETE FROM ticket_borrow_routes r WHERE expires_at<NOW()-INTERVAL '1 day' AND NOT EXISTS(SELECT 1 FROM ticket_borrow_route_leases l WHERE l.route_id=r.id AND l.lease_until>clock_timestamp())`, `DELETE FROM ticket_borrow_rejections WHERE expires_at<NOW()`, `DELETE FROM ticket_borrow_cookie_deadlines WHERE observed_at<NOW()-INTERVAL '30 days'`, `DELETE FROM ticket_borrow_compatibility WHERE updated_at<clock_timestamp()-INTERVAL '7 days'`} {
 		if _, err := r.db.ExecContext(ctx, query); err != nil {
 			return err
 		}

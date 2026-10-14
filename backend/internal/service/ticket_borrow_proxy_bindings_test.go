@@ -39,10 +39,10 @@ func TestBorrowPoolAllocatesFreshCandidatesWithoutChangingAccountSettings(t *tes
 	reply := stateProbeReply{status: 200, cookies: []string{"__oailb=" + cookie + "; Max-Age=230"}, body: stateProbeCompletedStream}
 	up := &boundSourceUpstream{stateProbeUpstream: &stateProbeUpstream{replies: []stateProbeReply{{status: 503, body: "unavailable"}, reply, reply}}}
 	s.owner.httpUpstream = up
-	_, _, err := s.acquireSource(borrowTestCandidateContext(t.Context()), r.source, BorrowSettings{TTLSeconds: 230})
+	_, _, err := s.acquireSource(borrowTestCandidateContext(t.Context()), r.source, BorrowSettings{})
 	require.Error(t, err)
 	for range 2 {
-		_, _, err = s.acquireSource(borrowTestCandidateContext(t.Context()), r.source, BorrowSettings{TTLSeconds: 230})
+		_, _, err = s.acquireSource(borrowTestCandidateContext(t.Context()), r.source, BorrowSettings{})
 		require.NoError(t, err)
 	}
 	require.Len(t, up.calls, 3)
@@ -58,7 +58,7 @@ func TestBorrowPoolAllocatesFreshCandidatesWithoutChangingAccountSettings(t *tes
 	}
 	require.Equal(t, original, a.ProxyID)
 	up.beforeSend = func() { r.environmentCheck = func() error { return ErrBorrowUnavailable } }
-	_, _, err = s.acquireSource(borrowTestCandidateContext(t.Context()), r.source, BorrowSettings{TTLSeconds: 230})
+	_, _, err = s.acquireSource(borrowTestCandidateContext(t.Context()), r.source, BorrowSettings{})
 	require.Error(t, err)
 	require.Len(t, up.calls, 3)
 }
@@ -71,7 +71,7 @@ type automaticBorrowRepo struct {
 
 func (r *automaticBorrowRepo) Cleanup(context.Context) error { return nil }
 func (r *automaticBorrowRepo) Settings(context.Context) (BorrowSettings, error) {
-	return BorrowSettings{Running: r.running, TTLSeconds: 230}, nil
+	return BorrowSettings{Running: r.running}, nil
 }
 func (r *automaticBorrowRepo) Targets(context.Context) ([]BorrowTarget, error) {
 	return []BorrowTarget{{AcquisitionIdentity: BorrowAcquisitionSource, AccountID: 11, Enabled: true, Revision: 2}}, nil

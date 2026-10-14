@@ -28,9 +28,8 @@ func newCandidatePoolFixture(t *testing.T, targets, slots int) *candidatePoolFix
 	r, original := candidateFixture(t)
 	settings, err := r.Settings(t.Context())
 	require.NoError(t, err)
-	window, cont := 180, 7
-	settings.AdmissionWindowSeconds, settings.ContinueTimeoutSeconds, settings.ProbeConcurrency = &window, &cont, &slots
-	settings.TTLSeconds, settings.MinRouteRemainingSeconds = 0, nil
+	cont := 7
+	settings.ContinueTimeoutSeconds, settings.ProbeConcurrency = &cont, &slots
 	settings.Recovery = &service.BorrowRecoverySettings{SourceRequestsPerMinute: 120, ProbeRequestsPerMinute: 120}
 	require.NoError(t, r.SaveSettings(t.Context(), settings))
 	selection := borrowSelectionFixture(t, r)
@@ -216,6 +215,7 @@ func TestBorrowSharedPoolUniqueClaimPublicationAndOwnerFence(t *testing.T) {
 	require.Error(t, f.r.CheckCandidateEnvironment(service.WithBorrowPoolAcquisition(t.Context(), p), c.ID))
 	route := poolCandidateRoute(a, c)
 	require.NoError(t, f.r.Publish(ctx, route, a.Lease))
+	passBorrowFixtureQuality(t)
 	require.ErrorIs(t, restarted.Publish(ctx, route, a.Lease), service.ErrBorrowCandidateDuplicate)
 	published, err := restarted.PublishedPoolCandidate(ctx, a, c.ID)
 	require.NoError(t, err)
@@ -408,6 +408,10 @@ func TestBorrowSharedPoolCompletedResultsPublishAfterInventoryAndBudgetFill(t *t
 	// completed candidate then replaces it under the existing inventory policy.
 	old.AdmissionUntil = old.AdmissionUntil.Add(-20 * time.Second)
 	require.NoError(t, f.r.Publish(ctx, old, a.Lease))
+	// The service completes the pool claim immediately after publication. Keep
+	// that lifecycle here so finished verification no longer owns account capacity.
+	require.NoError(t, f.r.FinishCandidatePool(ctx, first.ID, a.Lease, "target_probe_passed"))
+	passBorrowFixtureQuality(t)
 	businessLease := uuid.NewString()
 	_, err = f.r.ReserveRoute(ctx, a.TargetID, a.Identity, "", "", businessLease)
 	require.NoError(t, err)
@@ -416,13 +420,13 @@ func TestBorrowSharedPoolCompletedResultsPublishAfterInventoryAndBudgetFill(t *t
 	require.NoError(t, f.r.CheckCandidateEnvironment(ctx, second.ID), "publication does not request a new upstream HTTP permit")
 	latest := poolCandidateRoute(a, second)
 	require.NoError(t, f.r.Publish(ctx, latest, a.Lease), "another success filling inventory cannot reject this completed result")
+	require.NoError(t, f.r.FinishCandidatePool(ctx, second.ID, a.Lease, "target_probe_passed"))
+	passBorrowFixtureQuality(t)
 	got, err := f.r.Route(ctx, a.TargetID, a.Identity, "")
 	require.NoError(t, err)
 	require.Equal(t, latest.ID, got.ID)
 	require.NoError(t, f.r.RenewRoute(ctx, businessLease), "inventory replacement does not interrupt an admitted business request")
 	require.NoError(t, f.r.ReleaseRoute(ctx, businessLease))
-	require.NoError(t, f.r.FinishCandidatePool(ctx, first.ID, a.Lease, "target_probe_passed"))
-	require.NoError(t, f.r.FinishCandidatePool(ctx, second.ID, a.Lease, "target_probe_passed"))
 	stats, err := f.r.BorrowStatistics(ctx, a.TargetID, 15)
 	require.NoError(t, err)
 	require.Equal(t, 2, stats.Passed, "claim and completion audit events do not duplicate candidate results")
@@ -446,8 +450,7 @@ func TestBorrowSharedPoolPauseConfigurationFenceAndWindowFloor(t *testing.T) {
 	settings, err = f.r.Settings(t.Context())
 	require.NoError(t, err)
 	settings.Running = true
-	short := int(service.BorrowPoolVerificationBudget(7, "mint") / time.Second)
-	settings.AdmissionWindowSeconds, settings.TTLSeconds, settings.MinRouteRemainingSeconds = &short, 0, nil
+	settings.RoutePoolSize = new(4)
 	require.NoError(t, f.r.SaveSettings(t.Context(), settings))
 	a := inventoryRestart(t, f.r, f.targets[0])
 	require.NoError(t, f.r.RegisterCandidatePoolDemand(t.Context(), a, 2), "business window no longer limits candidate validation")

@@ -19,8 +19,6 @@
       </header>
       <div class="flex flex-wrap items-center gap-x-6 gap-y-3 rounded-xl border bg-white p-3 dark:border-dark-700 dark:bg-dark-800">
         <button class="btn btn-secondary btn-sm" :disabled="busy || loading || controlsSaving || !savedSettings" data-testid="background-running" @click="saveControl('running', !backgroundRunning)">{{ t(backgroundRunning ? 'ticketBorrowing.simplified.pause' : 'ticketBorrowing.simplified.run') }}</button>
-        <label class="flex items-center gap-3 text-sm">{{ t('ticketBorrowing.replenishment.title') }}<Toggle :model-value="savedSettings?.replenishment?.enabled === true" :disabled="busy || loading || controlsSaving || !savedSettings" :aria-label="t('ticketBorrowing.replenishment.enabled')" data-testid="replenishment-enabled" @update:model-value="saveControl('replenishment_enabled', $event)" /></label>
-        <BorrowTag v-if="savedSettings?.replenishment?.enabled && !backgroundRunning" kind="state" value="replenishmentPaused" />
         <button class="btn btn-secondary btn-sm" data-testid="open-settings" @click="settingsOpen = true">{{ t('ticketBorrowing.management.parameters') }}<span v-if="settingsDirty" class="ml-1 text-amber-600">●</span></button>
         <span class="text-xs" :class="pollError ? 'text-amber-700' : 'text-gray-500'" role="status" data-testid="summary-freshness">{{ pollError ? t('ticketBorrowing.management.staleStatus') : lastUpdated ? t('ticketBorrowing.management.updatedAgo', { seconds: Math.max(0, Math.floor((now - lastUpdated) / 1000)) }) : t('ticketBorrowing.statusUnknown') }}</span>
         <p v-if="controlsError" role="alert" class="w-full text-sm text-red-600">{{ controlsError }}</p>
@@ -135,7 +133,7 @@
             </dl>
             <p class="mt-3 text-xs text-gray-500 dark:text-gray-400">{{ t('ticketBorrowing.recoveryStatusHint') }}</p>
           </div>
-          <div class="flex flex-col gap-2 sm:flex-row sm:flex-wrap"><button class="btn btn-secondary" :title="t(!backgroundRunning ? 'ticketBorrowing.pausedHint' : usable(target) ? 'ticketBorrowing.validRouteIdle' : target.refresh_requested ? 'ticketBorrowing.queued' : 'ticketBorrowing.refreshRoute')" :disabled="busy || !backgroundRunning || (usable(target) && !savedSettings?.replenishment?.enabled) || !target.enabled || target.refresh_requested" @click="refreshRoute(target.account_id)">{{ t(target.refresh_requested ? 'ticketBorrowing.queued' : 'ticketBorrowing.refreshRoute') }}</button><button v-if="target.acquisition_identity === 'source'" class="btn btn-secondary" :disabled="busy || (!scanning(target) && (!backgroundRunning || usable(target)))" @click="scan(target)">{{ t(scanning(target) ? 'ticketBorrowing.cancelScan' : 'ticketBorrowing.scan') }}</button></div>
+          <div class="flex flex-col gap-2 sm:flex-row sm:flex-wrap"><button class="btn btn-secondary" :title="t(!backgroundRunning ? 'ticketBorrowing.pausedHint' : usable(target) ? 'ticketBorrowing.validRouteIdle' : target.refresh_requested ? 'ticketBorrowing.queued' : 'ticketBorrowing.refreshRoute')" :disabled="busy || !backgroundRunning || !target.enabled || target.refresh_requested" @click="refreshRoute(target.account_id)">{{ t(target.refresh_requested ? 'ticketBorrowing.queued' : 'ticketBorrowing.refreshRoute') }}</button><button v-if="target.acquisition_identity === 'source'" class="btn btn-secondary" :disabled="busy || (!scanning(target) && (!backgroundRunning || usable(target)))" @click="scan(target)">{{ t(scanning(target) ? 'ticketBorrowing.cancelScan' : 'ticketBorrowing.scan') }}</button></div>
         </article>
     </BaseDialog>
   </AppLayout>
@@ -171,7 +169,7 @@ import type { BorrowProbeBatchAccount, BorrowProbeBatchInput, BorrowProbeBatchRe
 import BorrowSettingsPanel from '@/components/admin/BorrowSettingsPanel.vue'
 import BorrowEventList from '@/components/admin/BorrowEventList.vue'
 import BorrowReasonHint from '@/components/admin/BorrowReasonHint.vue'
-import { ticketBorrowing as api, defaultBorrowReplenishment, type BorrowSource, type BorrowTarget, type BorrowEvent, type BorrowEventQuery, type BorrowSettings, type BorrowRecoverySettings, type BorrowSelection, type BorrowSourceOptions } from '@/api/admin/ticketBorrowing'
+import { ticketBorrowing as api, type BorrowSource, type BorrowTarget, type BorrowEvent, type BorrowEventQuery, type BorrowSettings, type BorrowRecoverySettings, type BorrowSelection, type BorrowSourceOptions } from '@/api/admin/ticketBorrowing'
 const { t, te } = useI18n()
 const appStore = useAppStore()
 const route = useRoute(), router = useRouter()
@@ -253,8 +251,9 @@ const probeSelection = ref<number[]>([]), batchProbeAccounts = ref<BorrowProbeBa
 const batchProbeSelected = ref<number[]>([]), batchProbeDirty = ref(false), batchProbeError = ref('')
 const batchProbeResults = ref<BorrowProbeBatchResult[] | null>(null)
 const sources = ref<BorrowSource[]>([]), targets = ref<BorrowTarget[]>([]), events = ref<BorrowEvent[]>([])
+const defaultRouteQuality = () => ({ model: 'gpt-6-astra', reasoning_effort: 'medium', interval_seconds: 30 })
 const defaultRecovery = (): BorrowRecoverySettings => ({ enabled: false, failure_threshold: 0, cooldown_seconds: [], probe_requests_per_minute: 12, source_requests_per_minute: 12 })
-const settings = ref<BorrowSettings & { recovery: BorrowRecoverySettings }>({ running: false, admission_window_seconds: 80, ttl_seconds: 80, continue_timeout_seconds: 7, min_route_remaining_seconds: 0, probe_concurrency: 2, renew_before_seconds: 15, prewarm_seconds: 0, recovery: defaultRecovery() })
+const settings = ref<BorrowSettings & { recovery: BorrowRecoverySettings }>({ running: false, route_quality: defaultRouteQuality(), route_pool_size: 128, route_cooldown_seconds: 120, continue_timeout_seconds: 7, probe_concurrency: 2, recovery: defaultRecovery() })
 const selection = ref<BorrowSelection>({ revision: 0, group_ids: [], account_ids: [], excluded_account_ids: [], default_model: 'gpt-6-luna', rotate_identity: false, use_proxy_pool: true, model_overrides: {} })
 const savedSelection = ref<BorrowSelection>(), savedSettings = ref<BorrowSettings>()
 const options = ref<BorrowSourceOptions>({ accounts: [], groups: [], legacy_count: 0, restorable_count: 0 })
@@ -263,7 +262,7 @@ const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value))
 function selectionKey(value: BorrowSelection) {
   return JSON.stringify({ groups: [...value.group_ids].sort((a,b) => a-b), accounts: [...value.account_ids].sort((a,b) => a-b), excluded: [...(value.excluded_account_ids ?? [])].sort((a,b) => a-b), model: value.default_model, rotate: value.rotate_identity, pool: !!value.use_proxy_pool, overrides: Object.entries(value.model_overrides).sort(([a],[b]) => Number(a)-Number(b)) })
 }
-function settingsKey(value: BorrowSettings) { const r = value.recovery ?? defaultRecovery(); return JSON.stringify([value.running, value.admission_window_seconds ?? Math.max(1, value.ttl_seconds - (value.min_route_remaining_seconds ?? 0)), value.continue_timeout_seconds ?? 7, value.probe_concurrency ?? 2, r.probe_requests_per_minute, r.source_requests_per_minute ?? 12, value.replenishment?.enabled ?? false]) }
+function settingsKey(value: BorrowSettings) { const r = value.recovery ?? defaultRecovery(); return JSON.stringify([value.route_quality?.model ?? 'gpt-6-astra', value.route_quality?.reasoning_effort ?? 'medium', value.route_quality?.interval_seconds ?? 30, value.running, value.route_pool_size ?? 128, value.continue_timeout_seconds ?? 7, value.probe_concurrency ?? 2, r.probe_requests_per_minute, r.source_requests_per_minute ?? 12, value.route_cooldown_seconds ?? 120]) }
 // Keep the edit baseline separate from the latest server snapshot. A refresh must not
 // replace a draft or silently advance its revision after another administrator's edit.
 const selectionBaseline = ref(''), settingsBaseline = ref('')
@@ -282,13 +281,13 @@ function acceptSelection(value: BorrowSelection, force = false) {
 function acceptSettings(value: BorrowSettings, force = false) {
   if ((value.revision ?? 0) < (savedSettings.value?.revision ?? 0)) return
   const keepDraft = settingsDirty.value && !force
-  value = { ...value, admission_window_seconds: value.admission_window_seconds ?? Math.max(1, value.ttl_seconds - (value.min_route_remaining_seconds ?? 0)) }
+  value = { ...value, route_quality: value.route_quality ?? defaultRouteQuality(), route_pool_size: value.route_pool_size ?? 128, route_cooldown_seconds: value.route_cooldown_seconds ?? 120 }
   savedSettings.value = clone(value)
   if (value.server_now && Number.isFinite(Date.parse(value.server_now))) offset = Date.parse(value.server_now) - Date.now()
-  if (!keepDraft) { settings.value = { ...clone(value), admission_window_seconds: value.admission_window_seconds ?? Math.max(1, value.ttl_seconds - (value.min_route_remaining_seconds ?? 0)), continue_timeout_seconds: value.continue_timeout_seconds ?? 7, min_route_remaining_seconds: value.min_route_remaining_seconds ?? 120, probe_concurrency: value.probe_concurrency ?? 2, renew_before_seconds: value.renew_before_seconds ?? 180, recovery: { ...defaultRecovery(), ...clone(value.recovery ?? {}) } }; settingsBaseline.value = settingsKey(value) }
+  if (!keepDraft) { settings.value = { ...clone(value), route_pool_size: value.route_pool_size ?? 128, route_cooldown_seconds: value.route_cooldown_seconds ?? 120, continue_timeout_seconds: value.continue_timeout_seconds ?? 7, probe_concurrency: value.probe_concurrency ?? 2, recovery: { ...defaultRecovery(), ...clone(value.recovery ?? {}) } }; settingsBaseline.value = settingsKey(value) }
 }
 const controlsSaving = ref(false), controlsError = ref('')
-async function saveControl(field: 'running' | 'replenishment_enabled', enabled: boolean) {
+async function saveControl(field: 'running', enabled: boolean) {
   if (!savedSettings.value || controlsSaving.value || busy.value || loading.value) return
   const hadConflict = settingsConflict.value
   const hadDraft = settingsDirty.value
@@ -297,7 +296,7 @@ async function saveControl(field: 'running' | 'replenishment_enabled', enabled: 
     const value = await api.saveControls({ revision: savedSettings.value.revision ?? 0, [field]: enabled })
     if (disposed) return
     if (hadDraft && !hadConflict) {
-      settings.value = { ...settings.value, revision: value.revision, running: value.running, replenishment: { ...(settings.value.replenishment ?? defaultBorrowReplenishment()), enabled: value.replenishment?.enabled ?? false } }
+      settings.value = { ...settings.value, revision: value.revision, running: value.running }
       savedSettings.value = clone(value)
       settingsBaseline.value = settingsKey(value)
     } else acceptSettings(value)
@@ -414,11 +413,11 @@ async function saveSelection() {
 }
 async function restore() { if (window.confirm(t('ticketBorrowing.restoreConfirm'))) await action(() => api.restoreSources(), 'restored') }
 async function saveSettings() {
-  const { admission_window_seconds: window, continue_timeout_seconds: timeout, probe_concurrency: concurrency } = settings.value
+  const { route_pool_size: poolSize, route_cooldown_seconds: cooldown, continue_timeout_seconds: timeout, probe_concurrency: concurrency } = settings.value
   const { probe_requests_per_minute: target, source_requests_per_minute: source } = settings.value.recovery
   const inRange = (value: unknown, min: number, max: number) => typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max
-  if (!inRange(window, 1, 240)) { reportError(t('ticketBorrowing.simplified.admissionError')); return }
-  if (!inRange(timeout, 1, 45) || !inRange(concurrency, 1, 32) || !inRange(target, 2, 60) || !inRange(source, 1, 120)) { reportError(t('ticketBorrowing.reasons.borrow_settings_invalid')); return }
+  if (!inRange(poolSize, 1, 256) || !inRange(cooldown, 1, 86400)) { reportError(t('ticketBorrowing.routePool.invalidSettings')); return }
+  if (!inRange(timeout, 1, 45) || !inRange(concurrency, 1, 32) || !inRange(target, 3, 60) || !inRange(source, 1, 120)) { reportError(t('ticketBorrowing.reasons.borrow_settings_invalid')); return }
   if (!savedSettings.value || !settingsDirty.value || settingsConflict.value) return
   await action(async () => { acceptSettings(await api.saveSettings(clone(settings.value)), true) })
 }

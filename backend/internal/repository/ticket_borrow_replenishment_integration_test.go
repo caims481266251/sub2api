@@ -28,8 +28,7 @@ func replenishmentFixture(t *testing.T, shadow bool) (*ticketBorrowRepository, *
 		}
 	})
 	cfg.Running = true
-	cfg.AdmissionWindowSeconds, cfg.TTLSeconds, cfg.MinRouteRemainingSeconds = new(80), 0, nil
-	cfg.Replenishment = &service.BorrowReplenishmentSettings{Enabled: true, Shadow: shadow}
+	cfg.RoutePoolSize = new(2)
 	require.NoError(t, r.SaveSettings(t.Context(), cfg))
 	target, err := r.Target(t.Context(), id)
 	require.NoError(t, err)
@@ -55,9 +54,7 @@ func TestTicketBorrowReplenishmentInventoryWithoutEnvironmentRetention(t *testin
 	ctx := service.WithBorrowAcquisition(t.Context(), a)
 	seed := replenishmentRoute(t, a, sources[0], 220*time.Second)
 	require.NoError(t, r.Publish(ctx, seed, a.Lease))
-	window, err := r.Replenishment(ctx, a.TargetID, a.Identity)
-	require.NoError(t, err)
-	require.Nil(t, window, "successful environments are never retained")
+	passBorrowFixtureQuality(t)
 	require.NoError(t, r.FinishJob(ctx, "target", a.TargetID, a.Lease, "passed", 0))
 	rotationExec(t, `UPDATE ticket_borrow_targets SET last_batch_started_at=clock_timestamp()-INTERVAL '2 seconds' WHERE account_id=$1`, a.TargetID)
 	a.Lease = uuid.NewString()
@@ -77,15 +74,16 @@ func TestTicketBorrowReplenishmentInventoryWithoutEnvironmentRetention(t *testin
 	for err := range errs {
 		require.NoError(t, err)
 	}
+	passBorrowFixtureQuality(t)
 	var inventory, revoked, holds int
 	require.NoError(t, integrationDB.QueryRow(`SELECT count(*) FILTER(WHERE inventory_eligible),count(*) FILTER(WHERE revoked_at IS NOT NULL) FROM ticket_borrow_routes WHERE target_id=$1`, a.TargetID).Scan(&inventory, &revoked))
-	require.Equal(t, 2, inventory)
+	require.Equal(t, 7, inventory)
 	require.Zero(t, revoked)
 	require.NoError(t, integrationDB.QueryRow(`SELECT count(*) FROM ticket_borrow_replenishment_holds WHERE account_id=$1`, sources[0].AccountID).Scan(&holds))
 	require.Zero(t, holds)
 	bound, err := r.Route(ctx, a.TargetID, a.Identity, seed.ID)
 	require.NoError(t, err)
-	require.Equal(t, seed.ID, bound.ID, "retiring inventory preserves existing sessions until cutoff")
+	require.Equal(t, seed.ID, bound.ID, "surplus routes remain usable until their deadline")
 	require.NoError(t, r.FinishJob(ctx, "target", a.TargetID, a.Lease, "passed", 0))
 	inv, err := r.Inventory(ctx, a.TargetID, a.Identity)
 	require.NoError(t, err)
@@ -103,19 +101,16 @@ func TestTicketBorrowReplenishmentPublicationUsesSingleDeadline(t *testing.T) {
 	deadline, err := r.ObserveCookie(ctx, short.CookieHash, 30*time.Second)
 	require.NoError(t, err)
 	require.NoError(t, r.Publish(ctx, short, a.Lease), "no second minimum-remaining threshold")
+	passBorrowFixtureQuality(t)
 	got, err := r.Route(ctx, a.TargetID, a.Identity, short.ID)
 	require.NoError(t, err)
 	require.WithinDuration(t, deadline, got.UsableUntil, time.Millisecond)
 	expired := replenishmentRoute(t, a, sources[0], 230*time.Second)
-	expired.AdmissionUntil = time.Now().Add(-time.Second)
+	expired.ExpiresAt = time.Now().Add(-time.Second)
 	require.ErrorIs(t, r.Publish(ctx, expired, a.Lease), service.ErrBorrowCandidateExpiry)
 	legacy := replenishmentRoute(t, a, sources[0], 230*time.Second)
 	legacy.Shadow = true
 	require.EqualError(t, r.Publish(ctx, legacy, a.Lease), "borrow_shadow_unsupported")
-	cfg, err := r.Settings(ctx)
-	require.NoError(t, err)
-	cfg.Replenishment.Shadow = true
-	require.EqualError(t, r.SaveSettings(ctx, cfg), "borrow_shadow_unsupported")
 	rotationExec(t, `UPDATE ticket_borrow_routes SET validation_only=true,inventory_eligible=false WHERE id=$1`, short.ID)
 	_, err = r.Route(ctx, a.TargetID, a.Identity, short.ID)
 	require.ErrorIs(t, err, service.ErrBorrowUnavailable)
@@ -132,9 +127,6 @@ func TestTicketBorrowReplenishmentRejectsChangedCandidateIdentity(t *testing.T) 
 			}
 			rotationExec(t, `UPDATE accounts SET credentials=credentials||'{"chatgpt_account_id":"new-subject"}'::jsonb WHERE id=$1`, account)
 			require.ErrorIs(t, r.Publish(t.Context(), route, a.Lease), service.ErrBorrowConflict)
-			state, err := r.Replenishment(t.Context(), a.TargetID, a.Identity)
-			require.NoError(t, err)
-			require.Nil(t, state)
 		})
 	}
 }
@@ -152,6 +144,7 @@ func TestTicketBorrowReplenishmentPreservesRequestBudgetsAndConcurrency(t *testi
 	a = inventoryRestart(t, r, a)
 	ctx = service.WithBorrowAcquisition(ctx, a)
 	require.NoError(t, r.Publish(ctx, replenishmentRoute(t, a, sources[0], 230*time.Second), a.Lease))
+	passBorrowFixtureQuality(t)
 	permit := uuid.NewString()
 	require.NoError(t, r.QueueSourceAttempt(ctx, sources[0].ID, permit))
 	ok, err := r.GrantSourceAttempt(ctx, sources[0].ID, permit)
@@ -178,6 +171,7 @@ func TestTicketBorrowReplenishmentPreservesRequestBudgetsAndConcurrency(t *testi
 	}
 	require.ErrorIs(t, r.BeginTargetRequest(ctx, third), service.ErrBorrowRequestBudget)
 	require.NoError(t, r.Publish(ctx, replenishmentRoute(t, a, sources[0], 230*time.Second), a.Lease), "completed validation can publish when new HTTP budget is exhausted")
+	passBorrowFixtureQuality(t)
 	_, err = r.Route(ctx, a.TargetID, a.Identity, "")
 	require.NoError(t, err, "business admission is independent of acquisition budget")
 }

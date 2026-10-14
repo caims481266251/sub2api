@@ -96,6 +96,7 @@ func TestTicketBorrowNormalSelectionMembershipAndRouteSurvival(t *testing.T) {
 	require.True(t, ok)
 	route := borrowAdmissionFixture(&service.BorrowRoute{ID: uuid.NewString(), TargetID: targetID, TargetRevision: tstate.Revision, SourceID: source.ID, IdentityHash: "identity", CookieHash: uuid.NewString(), ExpiresAt: time.Now().Add(3 * time.Minute)})
 	require.NoError(t, r.Publish(ctx, route, "normal-route"))
+	passBorrowFixtureQuality(t)
 	selection, e = r.Selection(ctx)
 	require.NoError(t, e)
 	selection.ExcludedAccountIDs = []int64{a.ID}

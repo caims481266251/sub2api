@@ -85,6 +85,7 @@ func TestTicketBorrowStatisticsCountUniqueVerdictsAndAttributedBusiness(t *testi
 	require.True(t, ok)
 	route := borrowAdmissionFixture(&service.BorrowRoute{ID: uuid.NewString(), TargetID: id, TargetRevision: target.Revision, IdentityHash: "identity", CookieHash: uuid.NewString(), Gateway: "gateway", ExpiresAt: time.Now().Add(230 * time.Second)})
 	require.NoError(t, r.Publish(ctx, route, "stats-lease"))
+	passBorrowFixtureQuality(t)
 	_, err = integrationDB.ExecContext(ctx, `INSERT INTO ticket_borrow_requests(id,target_id,kind,lease_until,details) VALUES($1,$2,'probe',NOW()+INTERVAL '1 minute','{"candidate_id":"pending"}'),($3,$2,'probe',NOW()+INTERVAL '1 minute','{"candidate_id":"pending"}')`, uuid.NewString(), id, uuid.NewString())
 	require.NoError(t, err)
 

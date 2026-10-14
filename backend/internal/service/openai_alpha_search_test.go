@@ -14,10 +14,49 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
+
+func TestForwardAlphaSearchBorrowAdmissionMatchesActualEndpoint(t *testing.T) {
+	for _, pat := range []bool{false, true} {
+		t.Run(strconv.FormatBool(pat), func(t *testing.T) {
+			borrow, repo := borrowFixture()
+			account := borrow.owner.accountRepo.(borrowTestAccounts).account
+			if pat {
+				account.Credentials["auth_mode"] = OpenAIAuthModePersonalAccessToken
+				repo.route.IdentityHash = borrowAccountIdentity(account)
+			}
+			calls := 0
+			upstream := &borrowAdmissionTestUpstream{borrow: borrow, send: func(req *http.Request, _ string, _ int64, _ int, _ *tlsfingerprint.Profile) (*http.Response, error) {
+				calls++
+				require.True(t, strings.HasSuffix(req.URL.Path, "/responses"))
+				return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(alphaSearchResponsesSSE("search result")))}, nil
+			}}
+			gateway := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+			body := []byte(`{"model":"gpt-6-astra","commands":{"search_query":[{"q":"news"}]}}`)
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/alpha/search", bytes.NewReader(body))
+			result, err := gateway.ForwardAlphaSearch(t.Context(), c, account, body)
+			if pat {
+				require.NoError(t, err)
+				require.NotNil(t, result)
+				require.Equal(t, 1, result.WebSearchCalls)
+				require.Equal(t, 1, calls)
+			} else {
+				require.ErrorIs(t, err, ErrBorrowEndpointUnsupported)
+				require.Equal(t, "endpoint_unsupported", BorrowAdmissionReason(err))
+				require.True(t, IsOpenAIInitialAdmissionRejection(err))
+				require.Nil(t, result)
+				require.False(t, c.Writer.Written())
+				require.Zero(t, calls, "the unsupported request must never be sent")
+			}
+			require.Zero(t, activeBorrowLeases(repo))
+		})
+	}
+}
 
 type alphaSearchAccountStateRepo struct {
 	AccountRepository

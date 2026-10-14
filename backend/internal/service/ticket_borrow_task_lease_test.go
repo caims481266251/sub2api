@@ -225,7 +225,7 @@ func TestBorrowTargetLeaseLateCandidatesCompleteWithoutBatchDeadline(t *testing.
 					}
 					ctx, stop := context.WithTimeout(t.Context(), 5*time.Minute)
 					defer stop()
-					s.runTarget(ctx, BorrowTarget{AccountID: 11, Revision: 2, AcquisitionIdentity: mode, ProbePolicy: BorrowProbePolicy{Concurrency: 1}}, BorrowSettings{Running: true, TTLSeconds: 230}, r.token)
+					s.runTarget(ctx, BorrowTarget{AccountID: 11, Revision: 2, AcquisitionIdentity: mode, ProbePolicy: BorrowProbePolicy{Concurrency: 1}}, BorrowSettings{Running: true}, r.token)
 					require.NoError(t, ctx.Err())
 					require.Len(t, up.calls, 3, "source, target mint and continue must all complete")
 					require.NotNil(t, r.route)

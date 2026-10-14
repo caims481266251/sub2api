@@ -100,7 +100,7 @@ func TestRuntimeProxyFallbackDoesNotRedirectTicketHarvest(t *testing.T) {
 		calls++
 		require.Equal(t, "http://harvest.invalid:8080", proxy)
 		require.Equal(t, HTTPUpstreamProfileOpenAIHarvest, HTTPUpstreamProfileFromContext(req.Context()))
-		require.True(t, req.Close)
+		require.False(t, req.Close, "harvest requests must allow HTTP/2 connection reuse")
 		require.NoError(t, req.Body.Close())
 		return nil, syscall.ECONNREFUSED
 	}}

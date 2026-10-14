@@ -11,6 +11,14 @@ import (
 
 // Both reservation paths hold the target row before counting or inserting.
 const borrowBackgroundInflight = `(SELECT count(*) FROM ticket_borrow_requests WHERE target_id=$1 AND kind='probe' AND finished_at IS NULL AND lease_until>clock_timestamp())
+ + (SELECT count(*) FROM ticket_borrow_routes hr WHERE hr.target_id=$1 AND hr.health_token<>'' AND hr.health_until>clock_timestamp() AND NOT EXISTS(SELECT 1 FROM ticket_borrow_requests hq WHERE hq.batch_id=hr.health_token AND hq.finished_at IS NULL AND hq.lease_until>clock_timestamp()))
+ + (SELECT count(*) FROM ticket_borrow_candidate_pool cp WHERE cp.target_id=$1 AND cp.state='claimed' AND cp.lease_until>clock_timestamp() AND NOT EXISTS(SELECT 1 FROM ticket_borrow_requests cq WHERE cq.target_id=cp.target_id AND cq.details->>'candidate_id'=cp.id AND cq.finished_at IS NULL AND cq.lease_until>clock_timestamp()))
+ + (SELECT count(*) FROM ticket_borrow_source_attempts WHERE target_id=$1 AND source_id IS NULL AND completed_at IS NULL AND lease_until>clock_timestamp())`
+
+// Only work owned by the candidate coordinator prevents a replacement task.
+// Pooled-route health has independent ownership and continues between tasks.
+const borrowAcquisitionInflight = `(SELECT count(*) FROM ticket_borrow_requests WHERE target_id=$1 AND kind='probe' AND finished_at IS NULL AND lease_until>clock_timestamp() AND COALESCE(details->>'route_id','')='')
+ + (SELECT count(*) FROM ticket_borrow_candidate_pool WHERE target_id=$1 AND state='claimed' AND lease_until>clock_timestamp())
  + (SELECT count(*) FROM ticket_borrow_source_attempts WHERE target_id=$1 AND source_id IS NULL AND completed_at IS NULL AND lease_until>clock_timestamp())`
 
 // All request reservations and recovery transitions serialize on the target row.
@@ -24,6 +32,9 @@ func reapBorrowRequests(ctx context.Context, tx *sql.Tx, id int64) error {
 	return err
 }
 func (r *ticketBorrowRepository) BeginTargetRequest(ctx context.Context, q service.BorrowRequest) error {
+	if q.RouteHealth != nil {
+		return r.beginRouteHealthRequest(ctx, q)
+	}
 	if q.Kind != "probe" {
 		return nil
 	}
@@ -64,7 +75,35 @@ func (r *ticketBorrowRepository) BeginTargetRequest(ctx context.Context, q servi
 		if !running {
 			return service.ErrBorrowPaused
 		}
-		if inflight >= concurrency {
+		var claimed bool
+		if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM ticket_borrow_candidate_pool WHERE id=$2 AND target_id=$1 AND claim_token=$3 AND state='claimed' AND lease_until>clock_timestamp())`, q.TargetID, q.CandidateID, q.BatchID).Scan(&claimed); err != nil {
+			return err
+		}
+		if claimed {
+			var issued bool
+			if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM ticket_borrow_requests WHERE target_id=$1 AND details->>'candidate_id'=$2 AND finished_at IS NULL AND lease_until>clock_timestamp())`, q.TargetID, q.CandidateID).Scan(&issued); err != nil {
+				return err
+			}
+			if issued {
+				return service.ErrBorrowProbeBusy
+			}
+			// The claim already owns this position, including the gap between
+			// mint and continuation. This request must not count itself twice.
+			inflight--
+		} else if q.Phase == "mint" && q.SourceID != 0 {
+			var turn bool
+			if err = tx.QueryRowContext(ctx, `SELECT `+borrowCandidateHasTurn+` FROM ticket_borrow_targets t JOIN accounts a ON a.id=t.account_id CROSS JOIN ticket_borrow_settings cfg WHERE t.account_id=$1 AND cfg.id=1`, q.TargetID).Scan(&turn); err != nil {
+				return err
+			}
+			if !turn {
+				return service.ErrBorrowProbeBusy
+			}
+		}
+		var capacity, business int
+		if err = tx.QueryRowContext(ctx, `SELECT GREATEST(1,a.concurrency),`+borrowBusinessInflight+` FROM accounts a WHERE a.id=$1`, q.TargetID).Scan(&capacity, &business); err != nil {
+			return err
+		}
+		if inflight >= concurrency || inflight+business >= capacity {
 			return service.ErrBorrowProbeBusy
 		}
 		if !cooled {
@@ -106,6 +145,9 @@ func (r *ticketBorrowRepository) BeginTargetRequest(ctx context.Context, q servi
 	return tx.Commit()
 }
 func (r *ticketBorrowRepository) CheckTargetRequest(ctx context.Context, q service.BorrowRequest) error {
+	if q.RouteHealth != nil {
+		return r.checkRouteHealthRequest(ctx, q)
+	}
 	if q.Kind != "probe" {
 		return nil
 	}
@@ -224,10 +266,6 @@ func (r *ticketBorrowRepository) RecordProbeOutcome(ctx context.Context, id int6
 		return err
 	}
 	if retryAfter > 0 {
-		if _, err = tx.ExecContext(ctx, `WITH ended AS (UPDATE ticket_borrow_replenishment SET until_at=clock_timestamp(),reason=$2 WHERE target_id=$1 AND reason='success' RETURNING *)
- INSERT INTO ticket_borrow_events(target_id,source_id,stage,reason,details) SELECT target_id,source_id,'replenishment','replenishment_ended',jsonb_build_object('replenishment',jsonb_build_object('environment_version',environment_version,'until',until_at,'exit_reason',reason)) FROM ended`, id, reason); err != nil {
-			return err
-		}
 		_, err = tx.ExecContext(ctx, `UPDATE ticket_borrow_targets SET upstream_wait_until=GREATEST(upstream_wait_until,clock_timestamp()+$2*INTERVAL '1 millisecond'),upstream_wait_reason=$3 WHERE account_id=$1`, id, retryAfter.Milliseconds(), reason)
 		if err != nil {
 			return err

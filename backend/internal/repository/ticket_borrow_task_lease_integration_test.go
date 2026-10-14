@@ -62,6 +62,7 @@ func TestBorrowTargetLeaseSatisfiedInventoryDoesNotKeepInitialDemand(t *testing.
 	ctx := service.WithBorrowAcquisition(t.Context(), a)
 	for range 2 {
 		require.NoError(t, r.Publish(ctx, replenishmentRoute(t, a, sources[0], 230*time.Second), a.Lease))
+		passBorrowFixtureQuality(t)
 	}
 	for _, initial := range []string{"renew", "healthy", "refill"} {
 		_, err := integrationDB.Exec(`UPDATE ticket_borrow_targets SET last_inventory_state=$2 WHERE account_id=$1`, a.TargetID, initial)
@@ -132,6 +133,7 @@ func TestBorrowTargetLeaseClaimAndPublicationKeepIndependentDeadlines(t *testing
 	require.NoError(t, f.r.RenewTargetLease(t.Context(), a), "closing demand retains ownership while results drain")
 	route := poolCandidateRoute(a, claimed)
 	require.NoError(t, f.r.Publish(service.WithBorrowAcquisition(t.Context(), a), route, a.Lease))
+	passBorrowFixtureQuality(t)
 	var deadline time.Time
 	require.NoError(t, integrationDB.QueryRow(`SELECT admission_until FROM ticket_borrow_routes WHERE id=$1`, route.ID).Scan(&deadline))
 	require.WithinDuration(t, c.Expires, deadline, time.Microsecond)

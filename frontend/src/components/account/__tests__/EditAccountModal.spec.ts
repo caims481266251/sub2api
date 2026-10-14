@@ -56,7 +56,8 @@ vi.mock('vue-i18n', async () => {
   return {
     ...actual,
     useI18n: () => ({
-      t: (key: string) => key
+      t: (key: string) => key,
+      te: () => true
     })
   }
 })
@@ -324,6 +325,7 @@ function mountModal(account = buildAccount(), renderGroupSelector = false) {
         Select: SelectStub,
         Icon: true,
         ProxySelector: true,
+        TicketBorrowAccountSettings: true,
         GroupSelector: renderGroupSelector ? false : GroupSelectorStub,
         ModelWhitelistSelector: ModelWhitelistSelectorStub
       }

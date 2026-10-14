@@ -3,7 +3,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import TicketBorrowingView from '../TicketBorrowingView.vue'
 const api = vi.hoisted(() => ({ sources: vi.fn(), targets: vi.fn(), settings: vi.fn(), events: vi.fn(), selection: vi.fn(), sourceOptions: vi.fn(), rotations: vi.fn(), statistics: vi.fn(), saveProbePolicy: vi.fn(), saveSelection: vi.fn() }))
-vi.mock('@/api/admin/ticketBorrowing', () => ({ ticketBorrowing: api, defaultBorrowReplenishment: () => ({ enabled: false, inventory: 2, interval_seconds: 10, hold_seconds: 150, maintenance_interval_seconds: 30 }) }))
+vi.mock('@/api/admin/ticketBorrowing', () => ({ ticketBorrowing: api }))
 vi.mock('@/api/admin/usageTiming', () => ({ getUsageTiming: vi.fn() }))
 vi.mock('@/stores/app', () => ({ useAppStore: () => ({ showSuccess: vi.fn(), showError: vi.fn(), showWarning: vi.fn() }) }))
 vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key, te: () => true }) }))
@@ -13,7 +13,7 @@ beforeEach(() => {
  sessionStorage.clear(); vi.clearAllMocks(); vi.useFakeTimers()
  api.sources.mockResolvedValue([]); api.events.mockResolvedValue([]); api.rotations.mockResolvedValue([])
  api.targets.mockResolvedValue([{ account_id: 63, name: 'target', enabled: true, revision: 1, ready: false, server_now: new Date().toISOString(), reason: '', phase: '', next_attempt_at: '' }])
- api.settings.mockResolvedValue({ revision: 1, running: false, ttl_seconds: 230, prewarm_seconds: 0 })
+ api.settings.mockResolvedValue({ revision: 1, running: false,route_pool_size:4,route_cooldown_seconds:120 })
  api.selection.mockResolvedValue({ revision: 1, group_ids: [], account_ids: [], excluded_account_ids: [], default_model: 'model', model_overrides: {}, rotate_identity: false, use_proxy_pool: true })
  api.sourceOptions.mockResolvedValue({ accounts: [], groups: [], legacy_count: 0, restorable_count: 0 })
 })

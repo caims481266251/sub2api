@@ -27,34 +27,21 @@ func probeBatchFixture() (*TicketBorrowService, *probeBatchTestRepo) {
 	}}
 	return NewTicketBorrowService(r, nil, nil), r
 }
-func TestTicketBorrowProbeBatchPreservesUnspecifiedFieldsAndAcceptsZero(t *testing.T) {
-	require.Equal(t, BorrowProbePolicy{Concurrency: 2, RenewBeforeSeconds: 180}, DefaultBorrowProbePolicy())
-	for _, concurrencyOnly := range []bool{true, false} {
-		s, r := probeBatchFixture()
-		in := BorrowProbeBatchInput{Accounts: []BorrowProbeBatchAccount{{11, new(int64(2))}, {12, new(int64(3))}}}
-		if concurrencyOnly {
-			in.Concurrency = new(2)
-		} else {
-			in.RenewBeforeSeconds = new(0)
-		}
-		results, err := s.SaveProbePolicies(t.Context(), in)
-		require.NoError(t, err)
-		require.Equal(t, []BorrowProbeBatchResult{{AccountID: 11, Status: "saved"}, {AccountID: 12, Status: "saved"}}, results)
-		if concurrencyOnly {
-			require.Equal(t, BorrowProbePolicy{Revision: 2, Concurrency: 2, RenewBeforeSeconds: 30}, r.saved[11])
-			require.Equal(t, BorrowProbePolicy{Revision: 3, Concurrency: 2, RenewBeforeSeconds: 15}, r.saved[12])
-		} else {
-			require.Equal(t, BorrowProbePolicy{Revision: 2, Concurrency: 3, RenewBeforeSeconds: 0}, r.saved[11])
-			require.Equal(t, BorrowProbePolicy{Revision: 3, Concurrency: 5, RenewBeforeSeconds: 0}, r.saved[12])
-		}
-	}
+func TestTicketBorrowProbeBatchPreservesDerivedRenewal(t *testing.T) {
+	require.Equal(t, BorrowProbePolicy{Concurrency: 2, RenewBeforeSeconds: 15}, DefaultBorrowProbePolicy())
+	s, r := probeBatchFixture()
+	results, err := s.SaveProbePolicies(t.Context(), BorrowProbeBatchInput{Accounts: []BorrowProbeBatchAccount{{11, new(int64(2))}, {12, new(int64(3))}}, Concurrency: new(2)})
+	require.NoError(t, err)
+	require.Equal(t, []BorrowProbeBatchResult{{AccountID: 11, Status: "saved"}, {AccountID: 12, Status: "saved"}}, results)
+	require.Equal(t, 2, r.saved[11].Concurrency)
+	require.Equal(t, 30, r.saved[11].RenewBeforeSeconds)
+	require.Equal(t, 15, r.saved[12].RenewBeforeSeconds)
 }
 func TestTicketBorrowProbeBatchValidatesBeforeWriting(t *testing.T) {
 	valid := []BorrowProbeBatchAccount{{11, new(int64(2))}}
 	for _, in := range []BorrowProbeBatchInput{
 		{Accounts: valid}, {Concurrency: new(2)},
 		{Accounts: valid, Concurrency: new(0)}, {Accounts: valid, Concurrency: new(33)},
-		{Accounts: valid, RenewBeforeSeconds: new(-1)}, {Accounts: valid, RenewBeforeSeconds: new(241)},
 		{Accounts: []BorrowProbeBatchAccount{{11, nil}}, Concurrency: new(2)},
 		{Accounts: []BorrowProbeBatchAccount{{11, new(int64(0))}}, Concurrency: new(2)},
 		{Accounts: []BorrowProbeBatchAccount{{0, new(int64(1))}}, Concurrency: new(2)},
@@ -75,7 +62,7 @@ func TestTicketBorrowProbeBatchReportsPartialFailuresAndFencesRevisions(t *testi
 	r.errors[13] = errors.New("SECRET_DATABASE")
 	results, err := s.SaveProbePolicies(t.Context(), BorrowProbeBatchInput{
 		Accounts:    []BorrowProbeBatchAccount{{11, new(int64(1))}, {12, new(int64(3))}, {13, new(int64(1))}, {14, new(int64(1))}, {99, new(int64(1))}},
-		Concurrency: new(2), RenewBeforeSeconds: new(0),
+		Concurrency: new(2),
 	})
 	require.NoError(t, err)
 	require.Equal(t, []BorrowProbeBatchResult{

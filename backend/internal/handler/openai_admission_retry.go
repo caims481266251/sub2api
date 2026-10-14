@@ -10,11 +10,20 @@ import (
 // error text of a later send. Written heartbeats are conservatively terminal too.
 func retryOpenAIInitialAdmission(c *gin.Context, err error, result *service.OpenAIForwardResult, body []byte, accountID int64, excluded map[int64]struct{}, switches *int, maxSwitches int) bool {
 	if !service.IsOpenAIInitialAdmissionRejection(err) || result != nil ||
-		c.Request.Context().Err() != nil || c.Writer.Written() || *switches >= maxSwitches {
+		c.Request.Context().Err() != nil || c.Writer.Written() {
 		return false
 	}
 	// These requests may depend on upstream state held by the selected account.
 	if !service.OpenAIInitialAdmissionCanReselect(c.Request.Context(), body) {
+		return false
+	}
+	recovery := service.BorrowBusinessRecoveryFromContext(c.Request.Context())
+	// Revisiting a temporarily full route consumes the existing admission wait,
+	// not another account switch or upstream-send attempt.
+	if recovery.HasAdmissionRetry(accountID) && recovery.RememberAdmissionRetry(accountID, err) {
+		return true
+	}
+	if *switches >= maxSwitches {
 		return false
 	}
 	if _, alreadyExcluded := excluded[accountID]; alreadyExcluded {
@@ -22,5 +31,6 @@ func retryOpenAIInitialAdmission(c *gin.Context, err error, result *service.Open
 	}
 	excluded[accountID] = struct{}{}
 	*switches++
+	recovery.RememberAdmissionRetry(accountID, err)
 	return true
 }

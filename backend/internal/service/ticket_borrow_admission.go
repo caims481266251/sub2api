@@ -17,11 +17,24 @@ var ErrBorrowResponseRejected = errors.New("borrow_response_rejected")
 // while retaining the actual veto through all scheduler implementations.
 var ErrBorrowContinuationBindingMissing = fmt.Errorf("borrow response binding missing: %w", ErrBorrowUnavailable)
 var ErrBorrowNoEligibleRoute = fmt.Errorf("no eligible borrow route: %w", ErrBorrowUnavailable)
+var ErrBorrowEndpointUnsupported = fmt.Errorf("borrow endpoint unsupported: %w", ErrBorrowUnavailable)
+
+// Keep the route veto for diagnostics without changing account reselection or
+// permitting recovery from a storage error.
+type BorrowRouteAdmissionError struct{ Reason string }
+
+func (e *BorrowRouteAdmissionError) Error() string { return "borrow route unavailable: " + e.Reason }
+func (e *BorrowRouteAdmissionError) Unwrap() error { return ErrBorrowNoEligibleRoute }
 
 func BorrowAdmissionReason(err error) string {
+	var route *BorrowRouteAdmissionError
 	switch {
+	case errors.Is(err, ErrBorrowEndpointUnsupported):
+		return "endpoint_unsupported"
 	case errors.Is(err, ErrBorrowContinuationBindingMissing):
 		return "response_binding_missing"
+	case errors.As(err, &route):
+		return route.Reason
 	case errors.Is(err, ErrBorrowNoEligibleRoute):
 		return "no_eligible_route"
 	case IsBorrowRouteUnavailable(err):

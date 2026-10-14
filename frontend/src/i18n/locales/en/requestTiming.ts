@@ -1,5 +1,7 @@
 export default {
-  "borrowAttempts": "Borrowed-route attempts",
+  "borrowAttempts": "Borrowed and fallback attempts",
+  "ordinaryAccount": "Ordinary account path",
+  "recoveryOutcomes": { "recovered": "Final recovery succeeded", "failed": "Final failure", "canceled": "Client canceled" },
   "noTextLongTail": "Reasoning without text beyond 60 seconds",
   "borrowRoute": "Actual route",
   "requestWritten": "Request fully sent",
@@ -49,6 +51,7 @@ export default {
   "timeout": "Timeout",
   "transport_error": "Transport error",
   "fields": {
+    "borrow_retry_wait": "Recovery retry wait",
  "borrow_route_wait": "Borrowed-route wait",
     "first_semantic": "First semantic event from request start",
     "first_visible": "First visible output from request start",

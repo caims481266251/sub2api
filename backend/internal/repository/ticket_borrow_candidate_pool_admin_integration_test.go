@@ -66,6 +66,7 @@ func TestBorrowPoolAdminResizeDrainsWithoutInvalidatingWork(t *testing.T) {
 	route := poolCandidateRoute(a, claimed)
 	ctx := service.WithBorrowAcquisition(t.Context(), a)
 	require.NoError(t, f.r.Publish(ctx, route, a.Lease), "a resize cannot fence an already claimed success")
+	passBorrowFixtureQuality(t)
 	require.NoError(t, f.r.FinishCandidatePool(ctx, claimed.ID, a.Lease, "target_probe_passed"))
 	lease := uuid.NewString()
 	_, err = f.r.ReserveRoute(ctx, a.TargetID, a.Identity, "", "", lease)
@@ -142,6 +143,7 @@ func TestBorrowPoolAdminSnapshotFilteringDetailsAndRedaction(t *testing.T) {
 	require.NoError(t, err)
 	route := poolCandidateRoute(a, claimed)
 	require.NoError(t, f.r.Publish(service.WithBorrowAcquisition(t.Context(), a), route, a.Lease))
+	passBorrowFixtureQuality(t)
 	// Observation may contain extra fields from an older/newer binary. Only the
 	// typed public allowlist may cross this management API boundary.
 	_, err = integrationDB.Exec(`INSERT INTO ticket_borrow_events(target_id,source_id,stage,reason,details)

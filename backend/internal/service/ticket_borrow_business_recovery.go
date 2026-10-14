@@ -24,12 +24,14 @@ type BorrowBusinessRecovery struct {
 	closed                                                  bool
 	recoverySent                                            bool
 	routeWaitDeadline                                       time.Time
+	admissionRetries                                        map[int64]struct{}
 	mu                                                      sync.Mutex
 	client                                                  context.Context
 	active, recovering, committed, written, explicitFailure bool
 	writePossible                                           bool
 	transports, sends                                       int
 	firstStart, firstSend                                   time.Time
+	failureAt                                               time.Time
 	pinnedTarget                                            int64
 	window, timeout                                         time.Duration
 	stopReason                                              string
@@ -39,7 +41,14 @@ type BorrowBusinessRecovery struct {
 	timer                                                   *time.Timer
 	stopClient                                              func() bool
 	cleanup                                                 []func()
+	fallbackAvailable                                       func(context.Context, int64) bool
+	retryIdentity                                           string
+	retryLocal                                              bool
 	fallback                                                int64
+	retryAccountID                                          int64
+	retryProvider                                           string
+	retryIndependentProvider                                bool
+	retryNotBefore, independentNotBefore                    time.Time
 }
 
 func WithBorrowBusinessRecovery(ctx context.Context, cfg *config.Config) (context.Context, *BorrowBusinessRecovery) {
@@ -135,6 +144,7 @@ func (r *BorrowBusinessRecovery) BeginTransport(ctx context.Context) error {
 	}
 	r.transports++
 	r.written, r.explicitFailure, r.writePossible = false, false, false
+	r.failureAt = time.Time{}
 	r.observeLocked(ctx)
 	return nil
 }
@@ -196,7 +206,10 @@ func (r *BorrowBusinessRecovery) ExplicitFailure() {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.explicitFailure = true
+	if !r.explicitFailure {
+		r.explicitFailure = true
+		r.failureAt = time.Now()
+	}
 }
 
 // ReserveRecovery is called only after existing replay-safety and error
@@ -214,19 +227,25 @@ func (r *BorrowBusinessRecovery) ReserveRecovery(ctx context.Context, status int
 	if start.IsZero() {
 		start = r.firstStart
 	}
+	// A long upstream inference does not consume the recovery window. Start it
+	// when an explicit failure is first observed, without extending it for
+	// duplicate error frames. Pre-write failures retain their bounded window.
+	if r.explicitFailure {
+		start = r.failureAt
+	}
 	switch {
 	case r.err != nil:
-		r.stopReason = "recovery_timeout"
+		// Preserve the original cancellation/timeout attribution.
 	case r.committed:
 		r.stopReason = "output_started"
 	case r.recovering || r.transports >= 2:
 		r.stopReason = "attempt_limit"
-	case start.IsZero() || time.Since(start) >= r.window:
-		r.stopReason = "retry_window_elapsed"
 	case r.writePossible && !r.explicitFailure:
 		r.stopReason = "ambiguous_upstream_execution"
 	case r.client.Err() != nil:
 		r.stopReason = "client_canceled"
+	case start.IsZero() || time.Since(start) >= r.window:
+		r.stopReason = "retry_window_elapsed"
 	default:
 		r.recovering = true
 		r.recoveryCtx, r.cancel = context.WithCancelCause(context.Background())
@@ -451,3 +470,22 @@ type borrowBusinessClientContext struct {
 func (c borrowBusinessClientContext) Deadline() (time.Time, bool) { return c.client.Deadline() }
 func (c borrowBusinessClientContext) Done() <-chan struct{}       { return c.client.Done() }
 func (c borrowBusinessClientContext) Err() error                  { return c.client.Err() }
+
+// SetFallbackAvailability fences same-target recovery with current pool facts.
+func (r *BorrowBusinessRecovery) SetFallbackAvailability(check func(context.Context, int64) bool) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.fallbackAvailable = check
+	r.mu.Unlock()
+}
+func (r *BorrowBusinessRecovery) FallbackAvailable(ctx context.Context, id int64) bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	check := r.fallbackAvailable
+	r.mu.Unlock()
+	return check == nil || check(ctx, id)
+}

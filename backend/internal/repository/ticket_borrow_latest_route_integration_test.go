@@ -15,6 +15,8 @@ var _ service.BorrowLatestRouteRepository = (*ticketBorrowRepository)(nil)
 
 func TestBorrowLatestRouteReplacesStillValidRoute(t *testing.T) {
 	r, id, routes := borrowRouteLoadFixture(t)
+	rotationExec(t, `UPDATE accounts SET concurrency=64 WHERE id=$1`, id)
+	rotationExec(t, `UPDATE ticket_borrow_routes SET dispatch_limit=32 WHERE target_id=$1`, id)
 	ctx := t.Context()
 	first, err := r.ReserveLatestRoute(ctx, id, "identity", "client-session", "unused", "old-stream")
 	require.NoError(t, err)
@@ -32,7 +34,7 @@ func TestBorrowLatestRouteReplacesStillValidRoute(t *testing.T) {
 	}
 	newRequest, err := r.ReserveLatestRoute(ctx, id, "identity", "new-client", "unused", uuid.NewString())
 	require.NoError(t, err)
-	require.Equal(t, routes[1].ID, newRequest.Route.ID)
+	require.Equal(t, routes[2].ID, newRequest.Route.ID, "new sessions prefer the unloaded route")
 	require.Empty(t, newRequest.SessionID)
 	continued, err := r.ReserveHTTPContinuation(ctx, id, "identity", "old-response", "client-session", "new-effective", uuid.NewString())
 	require.NoError(t, err)
@@ -57,8 +59,10 @@ func TestBorrowLatestRouteReplacesStillValidRoute(t *testing.T) {
 	require.Equal(t, routes[1].ID, statuses[0].ID, "UI uses the same newest-first ordering")
 }
 
-func TestBorrowLatestRouteSessionOnlyAdvancesOnceAcrossInstances(t *testing.T) {
+func TestBorrowLatestRouteSessionChangesPreserveResponseLineageAcrossInstances(t *testing.T) {
 	r, id, routes := borrowRouteLoadFixture(t)
+	rotationExec(t, `UPDATE accounts SET concurrency=64 WHERE id=$1`, id)
+	rotationExec(t, `UPDATE ticket_borrow_routes SET dispatch_limit=32 WHERE target_id=$1`, id)
 	ctx := t.Context()
 	_, err := r.ReserveLatestRoute(ctx, id, "identity", "session", "first", uuid.NewString())
 	require.NoError(t, err)
@@ -90,19 +94,14 @@ func TestBorrowLatestRouteSessionOnlyAdvancesOnceAcrossInstances(t *testing.T) {
 	for err := range errors {
 		require.NoError(t, err)
 	}
-	effective, restarts := "", 0
+	used := map[string]int{}
 	for choice := range choices {
-		require.Equal(t, routes[2].ID, choice.Route.ID)
-		require.NotEmpty(t, choice.SessionID)
-		if effective == "" {
-			effective = choice.SessionID
-		}
-		require.Equal(t, effective, choice.SessionID)
+		used[choice.Route.ID]++
 		if choice.Restarted {
-			restarts++
+			require.NotEmpty(t, choice.SessionID)
 		}
 	}
-	require.Equal(t, 1, restarts, "the session advances atomically")
+	require.Len(t, used, 3, "session-only requests share capacity across normal routes")
 	// The same client header now points to a new route, but an old response is
 	// still a valid owner-checked request, not a false session-binding conflict.
 	old, err := fresh.ReserveHTTPContinuation(ctx, id, "identity", "original-response", "session", "response-effective", uuid.NewString())
@@ -115,6 +114,8 @@ func TestBorrowLatestRouteSkipsUnusableNewest(t *testing.T) {
 	for _, state := range []string{"expired", "cookie_expired", "revoked", "identity", "revision", "validation_only", "retired"} {
 		t.Run(state, func(t *testing.T) {
 			r, id, routes := borrowRouteLoadFixture(t)
+			rotationExec(t, `UPDATE accounts SET concurrency=64 WHERE id=$1`, id)
+			rotationExec(t, `UPDATE ticket_borrow_routes SET dispatch_limit=32 WHERE target_id=$1`, id)
 			ctx := t.Context()
 			query := map[string]string{
 				"expired":         `UPDATE ticket_borrow_routes SET expires_at=clock_timestamp() WHERE id=$1`,

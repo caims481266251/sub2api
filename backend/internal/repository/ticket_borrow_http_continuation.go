@@ -29,7 +29,7 @@ func (r *ticketBorrowRepository) latestBusinessRoute(ctx context.Context, db bor
 			return nil, err
 		}
 	}
-	route, err := r.readRoute(ctx, db, id, identity, "")
+	route, err := r.readRouteOrdered(ctx, db, id, identity, "", response != "")
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +92,7 @@ func (r *ticketBorrowRepository) reserveLatestBusinessRoute(ctx context.Context,
 			return nil, err
 		}
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO ticket_borrow_route_leases(id,target_id,route_id) VALUES($1,$2,$3)`, lease, id, choice.Route.ID); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO ticket_borrow_route_leases(id,target_id,route_id,generation) VALUES($1,$2,$3,$4)`, lease, id, choice.Route.ID, choice.Route.Generation); err != nil {
 		return nil, err
 	}
 	if err = tx.Commit(); err != nil {

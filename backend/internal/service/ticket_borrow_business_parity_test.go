@@ -74,7 +74,9 @@ func TestBorrowBusinessUsesNormalOAuthAdapter(t *testing.T) {
 					} else {
 						require.Contains(t, headers.Get("Cookie"), "__oailb=donor-cookie")
 						headers.Del("Cookie")
-						require.Equal(t, normalHeaders, headers)
+						expected := normalHeaders.Clone()
+						repo.route.Secret.Fingerprint.Apply(expected, model)
+						require.Equal(t, expected, headers)
 						require.JSONEq(t, normalBody, string(upstream.lastBody))
 						require.Equal(t, normalOutput, w.Body.String())
 					}
@@ -108,7 +110,11 @@ func TestBorrowBusinessPreservesNormalRequest(t *testing.T) {
 					resp, err := svc.ForwardHTTP(req, "", 11, 10, profile, func(sent *http.Request, proxy string, id int64, concurrency int, sentProfile *tlsfingerprint.Profile) (*http.Response, error) {
 						require.Equal(t, enabled, recovery.Active(), "only borrowing activates the bounded recovery budget")
 						require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(sent.Context()))
-						require.Same(t, profile, sentProfile)
+						if enabled {
+							require.Equal(t, base.route.Secret.Fingerprint.Profile, sentProfile)
+						} else {
+							require.Same(t, profile, sentProfile)
+						}
 						require.Empty(t, proxy)
 						require.EqualValues(t, 11, id)
 						require.Equal(t, 10, concurrency)
@@ -128,7 +134,9 @@ func TestBorrowBusinessPreservesNormalRequest(t *testing.T) {
 							require.NoError(t, err)
 							require.Equal(t, "donor-cookie", cookie.Value)
 							headers.Del("Cookie")
-							require.Equal(t, normalHeaders, headers)
+							expected := normalHeaders.Clone()
+							base.route.Secret.Fingerprint.Apply(expected, model)
+							require.Equal(t, expected, headers)
 							require.Equal(t, normalBody, string(actual))
 						}
 						return &http.Response{StatusCode: 200, Header: http.Header{}, Body: http.NoBody}, nil

@@ -13,10 +13,8 @@ import (
 )
 
 const (
-	BorrowAcquisitionSelf               = "self"
-	BorrowAcquisitionSource             = "source"
-	DefaultBorrowAdmissionWindowSeconds = 80
-	BorrowRollingInventory              = 2
+	BorrowAcquisitionSelf   = "self"
+	BorrowAcquisitionSource = "source"
 )
 
 var ErrBorrowAcquisitionIdentity = errors.New("borrow_acquisition_identity_invalid")
@@ -27,58 +25,6 @@ func (t BorrowTarget) AcquisitionMode() string {
 		return BorrowAcquisitionSource
 	}
 	return BorrowAcquisitionSelf
-}
-
-func (s BorrowSettings) AdmissionSeconds() int {
-	if s.AdmissionWindowSeconds != nil {
-		return *s.AdmissionWindowSeconds
-	}
-	if s.TTLSeconds > 0 {
-		remaining := 0
-		if s.MinRouteRemainingSeconds != nil {
-			remaining = *s.MinRouteRemainingSeconds
-		}
-		return max(1, s.TTLSeconds-remaining)
-	}
-	return DefaultBorrowAdmissionWindowSeconds
-}
-
-// All compatibility lives at the settings boundary. Internal admission uses W.
-func ResolveBorrowAdmissionSettings(s *BorrowSettings, previous BorrowSettings) error {
-	window := previous.AdmissionSeconds()
-	if s.AdmissionWindowSeconds != nil {
-		window = *s.AdmissionWindowSeconds
-		if s.TTLSeconds != 0 && s.MinRouteRemainingSeconds != nil && s.TTLSeconds-*s.MinRouteRemainingSeconds != window {
-			return errors.New("borrow_admission_window_invalid")
-		}
-	} else if s.TTLSeconds != 0 {
-		if s.TTLSeconds < 30 || s.TTLSeconds > 240 {
-			return errors.New("borrow_settings_invalid")
-		}
-		floor := previous.MinRouteRemainingSeconds
-		if s.MinRouteRemainingSeconds != nil {
-			floor = s.MinRouteRemainingSeconds
-		}
-		window = s.TTLSeconds
-		if floor != nil {
-			if *floor < 0 || *floor > 240 {
-				return errors.New("borrow_settings_invalid")
-			}
-			window -= *floor
-		}
-	} else if s.MinRouteRemainingSeconds != nil {
-		window = previous.TTLSeconds - *s.MinRouteRemainingSeconds
-	}
-	if window < 1 || window > 240 {
-		return errors.New("borrow_admission_window_invalid")
-	}
-	s.AdmissionWindowSeconds = &window
-	s.TTLSeconds = max(30, window)
-	floor := s.TTLSeconds - window
-	s.MinRouteRemainingSeconds = &floor
-	lead := BorrowRenewalLead(window, 0)
-	s.RenewBeforeSeconds = &lead
-	return nil
 }
 
 // Candidate environments never become account configuration or business headers.
@@ -159,10 +105,6 @@ func borrowProxyIdentity(a *Account) string {
 	}
 	raw, _ := json.Marshal([]string{account, user})
 	return borrowHash(string(raw))
-}
-
-func borrowAdmissionDeadline(start time.Time, window int, expiry time.Time) time.Time {
-	return minBorrowTime(start.Add(time.Duration(window)*time.Second), expiry)
 }
 
 // borrowCompatibilityKey scopes the circuit breaker to stable routing

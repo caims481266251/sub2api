@@ -82,7 +82,7 @@ func TestTicketBorrowParallelProbesDoNotBlockBusiness(t *testing.T) {
 			defer func() { cancel(); <-done }()
 			go func() {
 				defer close(done)
-				s.runTarget(ctx, BorrowTarget{AcquisitionIdentity: BorrowAcquisitionSource, AccountID: 11, Revision: 2, ProbePolicy: BorrowProbePolicy{Concurrency: concurrency, RenewBeforeSeconds: 15}}, BorrowSettings{Running: true, TTLSeconds: 230}, "parallel")
+				s.runTarget(ctx, BorrowTarget{AcquisitionIdentity: BorrowAcquisitionSource, AccountID: 11, Revision: 2, ProbePolicy: BorrowProbePolicy{Concurrency: concurrency, RenewBeforeSeconds: 15}}, BorrowSettings{Running: true}, "parallel")
 			}()
 			expectedProbes := concurrency
 			if expectedProbes == 0 {

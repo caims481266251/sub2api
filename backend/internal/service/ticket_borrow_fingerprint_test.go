@@ -56,7 +56,7 @@ func TestBorrowFingerprintRejectsIncompleteOrIncoherentSnapshots(t *testing.T) {
 		"version mismatch":    func(f *BorrowFingerprint) { f.Version = "999.0.0" },
 		"header injection":    func(f *BorrowFingerprint) { f.UserAgent += "\r\nX-Test: injected" },
 		"incomplete":          func(f *BorrowFingerprint) { f.Profile.Curves = nil },
-		"wrong alpn":          func(f *BorrowFingerprint) { f.Profile.ALPNProtocols = []string{"h2"} },
+		"wrong alpn":          func(f *BorrowFingerprint) { f.Profile.ALPNProtocols = []string{"http/1.1"} },
 		"wrong key share":     func(f *BorrowFingerprint) { f.Profile.KeyShareGroups = []uint16{23} },
 		"duplicate extension": func(f *BorrowFingerprint) { f.Profile.Extensions[3] = f.Profile.Extensions[2] },
 		"weak priority": func(f *BorrowFingerprint) {

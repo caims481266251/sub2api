@@ -26,31 +26,24 @@ func (r *borrowSettingsAdminRepo) Settings(context.Context) (service.BorrowSetti
 	if r.saved != nil {
 		return *r.saved, nil
 	}
-	return service.BorrowSettings{TTLSeconds: 230, MinRouteRemainingSeconds: new(120)}, nil
+	return service.BorrowSettings{}, nil
 }
 
-func TestTicketBorrowAdminMinimumRemainingValidation(t *testing.T) {
+func TestTicketBorrowAdminPoolValidation(t *testing.T) {
 	for _, tc := range []struct {
-		value  string
-		status int
-	}{{"0", 200}, {"120", 200}, {"229", 200}, {"230", 400}, {"240", 400}, {"-1", 400}, {"241", 400}, {"120.5", 400}, {`"120"`, 400}} {
-		t.Run(tc.value, func(t *testing.T) {
+		field, value string
+		status       int
+	}{
+		{"route_pool_size", "4", 200}, {"route_pool_size", "0", 400}, {"route_pool_size", "1.5", 400}, {"route_cooldown_seconds", "120", 200}, {"route_cooldown_seconds", "-1", 400},
+	} {
+		t.Run(tc.field+tc.value, func(t *testing.T) {
 			r := &borrowSettingsAdminRepo{}
 			h := &AccountHandler{accountTestService: &service.AccountTestService{TicketBorrow: service.NewTicketBorrowService(r, nil, nil)}}
 			router := gin.New()
 			router.PUT("/settings", h.BorrowSettings)
-			body := fmt.Sprintf(`{"revision":1,"ttl_seconds":230,"min_route_remaining_seconds":%s}`, tc.value)
-			req := httptest.NewRequest("PUT", "/settings", strings.NewReader(body))
-			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
-			router.ServeHTTP(w, req)
+			router.ServeHTTP(w, httptest.NewRequest("PUT", "/settings", strings.NewReader(fmt.Sprintf(`{"revision":1,"%s":%s}`, tc.field, tc.value))))
 			require.Equal(t, tc.status, w.Code)
-			if tc.status == 200 {
-				require.NotNil(t, r.saved)
-				require.NotNil(t, r.saved.MinRouteRemainingSeconds)
-			} else {
-				require.Nil(t, r.saved)
-			}
 		})
 	}
 }
@@ -63,15 +56,15 @@ func TestTicketBorrowAdminGlobalProbeValidation(t *testing.T) {
 		{`"probe_concurrency":2,"renew_before_seconds":150`, 200},
 		{`"probe_concurrency":32,"renew_before_seconds":0`, 200},
 		{`"probe_concurrency":0`, 400}, {`"probe_concurrency":33`, 400},
-		{`"probe_concurrency":1.5`, 400}, {`"renew_before_seconds":-1`, 400},
-		{`"renew_before_seconds":241`, 400}, {`"renew_before_seconds":1.5`, 400},
+		{`"probe_concurrency":1.5`, 400}, {`"renew_before_seconds":-1`, 200},
+		{`"renew_before_seconds":241`, 200}, {`"renew_before_seconds":1.5`, 200},
 	} {
 		t.Run(tc.body, func(t *testing.T) {
 			r := &borrowSettingsAdminRepo{}
 			h := &AccountHandler{accountTestService: &service.AccountTestService{TicketBorrow: service.NewTicketBorrowService(r, nil, nil)}}
 			router := gin.New()
 			router.PUT("/settings", h.BorrowSettings)
-			req := httptest.NewRequest("PUT", "/settings", strings.NewReader(`{"revision":1,"ttl_seconds":230,`+tc.body+`}`))
+			req := httptest.NewRequest("PUT", "/settings", strings.NewReader(`{"revision":1,`+tc.body+`}`))
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
@@ -93,7 +86,7 @@ func TestTicketBorrowAdminContinueTimeoutValidation(t *testing.T) {
 			h := &AccountHandler{accountTestService: &service.AccountTestService{TicketBorrow: service.NewTicketBorrowService(r, nil, nil)}}
 			router := gin.New()
 			router.PUT("/settings", h.BorrowSettings)
-			req := httptest.NewRequest("PUT", "/settings", strings.NewReader(fmt.Sprintf(`{"revision":1,"ttl_seconds":230,"continue_timeout_seconds":%s}`, tc.value)))
+			req := httptest.NewRequest("PUT", "/settings", strings.NewReader(fmt.Sprintf(`{"revision":1,"continue_timeout_seconds":%s}`, tc.value)))
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)

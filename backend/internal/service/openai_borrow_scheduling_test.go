@@ -30,7 +30,7 @@ func TestBorrowTierTriesFreeAccountBeforeReturningStickyWait(t *testing.T) {
 
 func TestOpenAIBorrowPreferredScheduling(t *testing.T) {
 	for _, mode := range []string{"legacy", "load-batch", "advanced"} {
-		for _, scenario := range []string{"ready", "alias", "future-model", "gpt-6.1-sol", "gpt-5.6-sol", "gpt-6-sol", "busy", "no-route", "expired", "admission-cutoff", "cooldown", "disabled", "excluded", "model", "both-busy", "group", "native-previous"} {
+		for _, scenario := range []string{"ready", "alpha-native", "alpha-pat", "alias", "future-model", "gpt-6.1-sol", "gpt-5.6-sol", "gpt-6-sol", "busy", "no-route", "expired", "admission-cutoff", "cooldown", "disabled", "excluded", "model", "both-busy", "group", "native-previous"} {
 			t.Run(mode+"/"+scenario, func(t *testing.T) {
 				resetOpenAIAdvancedSchedulerSettingCacheForTest()
 				t.Cleanup(resetOpenAIAdvancedSchedulerSettingCacheForTest)
@@ -45,6 +45,7 @@ func TestOpenAIBorrowPreferredScheduling(t *testing.T) {
 				cfg.Gateway.OpenAIWS.SchedulerScoreWeights.Priority = 1
 				slots := schedulerTestConcurrencyCache{acquireResults: map[int64]bool{11: true, 12: true}}
 				model := "gpt-6-astra"
+				capability := OpenAIEndpointCapabilityResponses
 				var groupID *int64
 				previous := ""
 				excluded := map[int64]struct{}{}
@@ -52,6 +53,12 @@ func TestOpenAIBorrowPreferredScheduling(t *testing.T) {
 				switch scenario {
 				case "ready":
 					want = 11
+				case "alpha-native":
+					capability = OpenAIEndpointCapabilityAlphaSearch
+				case "alpha-pat":
+					capability, want = OpenAIEndpointCapabilityAlphaSearch, 11
+					borrowed.Credentials["auth_mode"] = OpenAIAuthModePersonalAccessToken
+					repo.route.IdentityHash = borrowAccountIdentity(&borrowed)
 				case "gpt-6.1-sol", "gpt-5.6-sol", "gpt-6-sol":
 					model, want = scenario, 11
 				case "alias":
@@ -96,7 +103,7 @@ func TestOpenAIBorrowPreferredScheduling(t *testing.T) {
 					previous = "resp_native"
 					require.NoError(t, gateway.getOpenAIWSStateStore().BindResponseAccount(t.Context(), 0, previous, ordinary.ID, time.Hour))
 				}
-				selection, decision, err := gateway.selectAccountWithScheduler(t.Context(), groupID, previous, "sticky", model, excluded, OpenAIUpstreamTransportHTTPSSE, OpenAIEndpointCapabilityResponses, "", false, PlatformOpenAI, false, false)
+				selection, decision, err := gateway.selectAccountWithScheduler(t.Context(), groupID, previous, "sticky", model, excluded, OpenAIUpstreamTransportHTTPSSE, capability, "", false, PlatformOpenAI, false, false)
 				require.NoError(t, err)
 				require.NotNil(t, selection)
 				require.Equal(t, want, selection.Account.ID)

@@ -1,5 +1,7 @@
 export default {
-  "borrowAttempts": "借票请求尝试",
+  "borrowAttempts": "借票与兜底请求尝试",
+  "ordinaryAccount": "普通帐号路径",
+  "recoveryOutcomes": { "recovered": "最终恢复成功", "failed": "最终失败", "canceled": "客户端已取消" },
   "noTextLongTail": "推理中超过 60 秒无正文",
   "borrowRoute": "实际路由",
   "requestWritten": "请求已完整发出",
@@ -49,6 +51,7 @@ export default {
   "timeout": "超时",
   "transport_error": "传输错误",
   "fields": {
+    "borrow_retry_wait": "恢复重试等待",
  "borrow_route_wait": "借票可用路由等待",
     "first_semantic": "请求级首个语义事件",
     "first_visible": "请求级首个可见输出",

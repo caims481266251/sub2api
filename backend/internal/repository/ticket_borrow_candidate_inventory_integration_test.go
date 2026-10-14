@@ -61,10 +61,11 @@ func TestBorrowInventoryOldCookieSurvivesTaskGapAndPublishesWithNewAnchor(t *tes
 	require.NoError(t, f.r.CheckCandidateEnvironment(ctx, c.ID))
 	route := poolCandidateRoute(a, claimed)
 	require.NoError(t, f.r.Publish(ctx, route, a.Lease))
+	passBorrowFixtureQuality(t)
 	var anchor, deadline time.Time
 	require.NoError(t, integrationDB.QueryRow(`SELECT admission_started_at,admission_until FROM ticket_borrow_routes WHERE id=$1`, route.ID).Scan(&anchor, &deadline))
-	require.WithinDuration(t, anchor.Add(180*time.Second), deadline, time.Millisecond)
-	require.True(t, deadline.Before(c.Expires))
+	require.WithinDuration(t, c.Expires, deadline, time.Millisecond)
+	require.True(t, anchor.Before(deadline))
 	require.NoError(t, f.r.FinishCandidatePool(ctx, c.ID, a.Lease, "target_probe_passed"))
 	var released *time.Time
 	require.NoError(t, integrationDB.QueryRow(`SELECT released_at FROM ticket_borrow_candidate_environments WHERE id=$1`, c.ID).Scan(&released))

@@ -157,7 +157,7 @@ func TestBorrowCandidateFailureAdvancesToFreshCandidate(t *testing.T) {
 					}
 					require.Len(t, r.queue, 2)
 				}
-				s.runTarget(ctx, BorrowTarget{AcquisitionIdentity: mode, AccountID: 11, Revision: 2, ProbePolicy: BorrowProbePolicy{Concurrency: 1}}, BorrowSettings{Running: true, TTLSeconds: 230}, "target-owner")
+				s.runTarget(ctx, BorrowTarget{AcquisitionIdentity: mode, AccountID: 11, Revision: 2, ProbePolicy: BorrowProbePolicy{Concurrency: 1}}, BorrowSettings{Running: true}, "target-owner")
 				require.NoError(t, ctx.Err())
 				require.NotNil(t, base.route, "a failed candidate must not stall the worker")
 				require.Equal(t, mode, base.route.AcquisitionIdentity)

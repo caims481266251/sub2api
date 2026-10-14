@@ -112,7 +112,7 @@
               {{ row.status_code }}
             </span>
             <span
-              v-if="row.severity"
+              v-if="row.severity && !isRecoveredUpstreamLog(row)"
               :class="['rounded px-1.5 py-0.5 text-[10px] font-medium', getSeverityClass(row.severity)]"
             >{{ row.severity }}</span>
             <span
@@ -184,6 +184,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { balanceErrorSource } from '../utils/balanceError'
+import { isRecoveredUpstreamLog } from '../utils/recoveryStatus'
 import { useI18n } from 'vue-i18n'
 import DataTable from '@/components/common/DataTable.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
@@ -265,6 +266,10 @@ function formatRequestType(type: number | null | undefined): string {
 function getTypeBadge(log: OpsErrorLog): { label: string; className: string } {
   const phase = String(log.phase || '').toLowerCase()
   const owner = String(log.error_owner || '').toLowerCase()
+
+  if (isRecoveredUpstreamLog(log)) {
+    return { label: t('admin.ops.errorLog.typeRecovered'), className: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200' }
+  }
 
   if (isUpstreamRow(log)) {
     return { label: t('admin.ops.errorLog.typeUpstream'), className: 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200' }

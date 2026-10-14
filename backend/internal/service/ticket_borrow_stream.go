@@ -36,6 +36,9 @@ func borrowResponseKey(id string) string {
 // are owned by the normal request logger, never by borrowing telemetry.
 type borrowObservedBody struct {
 	io.ReadCloser
+	outcomeBytes     int
+	outcomeFrames    openAISSEDataAccumulator
+	outcome          *borrowRouteResponseObserver
 	owner            *TicketBorrowService
 	target           int64
 	effectiveSession string
@@ -84,6 +87,9 @@ func (b *borrowObservedBody) Read(p []byte) (int, error) {
 			if len(b.pending)+len(part) > 65536 {
 				b.pending = nil
 				b.dropping = true
+				if b.outcome != nil {
+					b.outcome.finish(false, "", nil)
+				}
 			} else {
 				b.pending = append(b.pending, part...)
 			}
@@ -123,6 +129,12 @@ func (b *borrowObservedBody) Read(p []byte) (int, error) {
 			<-b.bindingDone
 		}
 	}
+	if err == io.EOF && b.outcome != nil {
+		b.outcomeFrames.Flush(b.outcome.event)
+	}
+	if err != nil && b.outcome != nil && b.outcome.ctx.Err() == nil {
+		b.outcome.finish(false, "route_incomplete_response", nil)
+	}
 	return n, err
 }
 func borrowTerminalEvent(typ string) bool {
@@ -135,6 +147,20 @@ func borrowTerminalEvent(typ string) bool {
 }
 
 func (b *borrowObservedBody) line(line []byte) bool {
+	if b.outcome != nil {
+		b.outcomeBytes += len(line)
+		if b.outcomeBytes > 1<<20 {
+			// Observation limits cannot turn a valid large business output
+			// into a route failure. The caller still receives the whole stream.
+			b.outcome.finish(false, "", nil)
+			b.outcomeFrames = openAISSEDataAccumulator{}
+		} else {
+			b.outcomeFrames.AddLine(string(line), b.outcome.event)
+		}
+		if len(bytes.TrimSpace(line)) == 0 {
+			b.outcomeBytes = 0
+		}
+	}
 	if bytes.HasPrefix(line, []byte("event:")) {
 		return borrowTerminalEvent(string(bytes.TrimSpace(line[6:])))
 	}

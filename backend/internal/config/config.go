@@ -1175,9 +1175,10 @@ type GatewayConfig struct {
 	// Internal rollout rollback: fixed batches and FIFO; concurrency safety remains enabled.
 	BorrowAdaptiveProbingDisabled bool `mapstructure:"borrow_adaptive_probing_disabled"`
 	// Borrow business recovery is request scoped; disabled restores legacy retries.
-	BorrowBusinessRecoveryDisabled       bool `mapstructure:"borrow_business_recovery_disabled"`
-	BorrowBusinessRetryWindowSeconds     int  `mapstructure:"borrow_business_retry_window_seconds"`
-	BorrowBusinessRecoveryTimeoutSeconds int  `mapstructure:"borrow_business_recovery_timeout_seconds"`
+	BorrowBusinessRecoveryDisabled bool `mapstructure:"borrow_business_recovery_disabled"`
+	// Explicit failures start this window when observed, not when inference began.
+	BorrowBusinessRetryWindowSeconds     int `mapstructure:"borrow_business_retry_window_seconds"`
+	BorrowBusinessRecoveryTimeoutSeconds int `mapstructure:"borrow_business_recovery_timeout_seconds"`
 	// OpenAIFirstOutputTimeoutSeconds: native HTTP Responses 首个语义输出超时（秒），0表示禁用。
 	OpenAIFirstOutputTimeoutSeconds int `mapstructure:"openai_first_output_timeout_seconds"`
 	// OpenAIHighEffortFirstOutputTimeoutSeconds: high/xhigh/max 推理的首个语义输出超时（秒）。
@@ -1388,6 +1389,9 @@ type GatewayLiveConfig struct {
 type GatewayOpenAIHTTP2Config struct {
 	// Enabled: 是否启用 OpenAI HTTP/2 优先策略
 	Enabled bool `mapstructure:"enabled"`
+	// HTTP1Hosts selects HTTP/1.1 for exact upstream hostnames, without changing
+	// the protocol used by other OpenAI endpoints. Empty keeps the default.
+	HTTP1Hosts []string `mapstructure:"http1_hosts"`
 	// AllowProxyFallbackToHTTP1: HTTP/HTTPS 代理出现明确 H2 兼容错误时，临时回退 HTTP/1.1
 	AllowProxyFallbackToHTTP1 bool `mapstructure:"allow_proxy_fallback_to_http1"`
 	// FallbackErrorThreshold: 回退窗口内累计多少次兼容错误后触发回退
@@ -2756,6 +2760,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_ws.scheduler_score_weights.session_sticky", 3.0)
 	// OpenAI HTTP upstream protocol strategy
 	viper.SetDefault("gateway.openai_http2.enabled", true)
+	viper.SetDefault("gateway.openai_http2.http1_hosts", []string{})
 	viper.SetDefault("gateway.openai_http2.allow_proxy_fallback_to_http1", true)
 	viper.SetDefault("gateway.openai_http2.fallback_error_threshold", 2)
 	viper.SetDefault("gateway.openai_http2.fallback_window_seconds", 60)
@@ -3865,6 +3870,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.OpenAIHTTP2.FallbackTTLSeconds < 0 {
 		return fmt.Errorf("gateway.openai_http2.fallback_ttl_seconds must be non-negative")
+	}
+	for _, candidate := range c.Gateway.OpenAIHTTP2.HTTP1Hosts {
+		host := strings.TrimSuffix(strings.TrimSpace(candidate), ".")
+		if host == "" || !httpguts.ValidHostHeader(host) || strings.ContainsAny(host, "/:?@#*[]\\ \t\r\n") {
+			return fmt.Errorf("gateway.openai_http2.http1_hosts must contain exact hostnames without scheme, port, path or wildcard")
+		}
 	}
 	if c.Gateway.OpenAIProxyStreamCircuit.FailureThreshold < 0 {
 		return fmt.Errorf("gateway.openai_proxy_stream_circuit.failure_threshold must be non-negative")

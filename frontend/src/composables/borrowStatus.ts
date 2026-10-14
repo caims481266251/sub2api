@@ -6,11 +6,75 @@ export function borrowSeconds(until: string | undefined, now: number): number {
 }
 
 export function borrowReady(target: BorrowTarget, now: number): boolean {
+  if (target.business_routes !== undefined) {
+    return target.enabled && target.business_routes.some(route => borrowRouteAccepting(route, now))
+  }
   return target.enabled && target.ready && borrowSeconds(target.usable_until ?? target.expires_at, now) > 0
 }
 
 export function borrowRouteAccepting(route: BorrowRouteStatus, now: number): boolean {
-  return route.usable && route.inventory_eligible && borrowSeconds(route.usable_until, now) > 0
+  return borrowRouteState(route, now) === 'accepting'
+}
+
+// Match the admission snapshot, then advance time-sensitive states locally
+// between refreshes. Occupied leases and historical verdicts are not readiness.
+export function borrowRouteState(route: BorrowRouteStatus, now: number, enabled = true) {
+  const reason = route.unavailable_reason
+  if (route.state === 'invalid' || reason === 'invalid') return 'invalid'
+  if (route.state === 'expired' || borrowSeconds(route.usable_until, now) === 0) return 'expired'
+  if (!enabled) return 'unavailable'
+  if (route.state === 'cooling' || reason === 'cooling') return 'cooling'
+  if (reason === 'account_unavailable' || reason === 'account_cooling') return reason
+  if (route.state === 'pending_probe' || reason === 'pending_probe') return route.checking ? 'checking' : 'pending_probe'
+  if (route.state === 'pending_quality' || reason === 'pending_quality' ||
+      (route.state === 'normal' && (route.quality_valid_until || route.quality) &&
+       (borrowSeconds(route.quality_valid_until, now) === 0 || (route.quality && route.quality.status !== 'passed')))) {
+    return route.checking ? 'checking' : 'pending_quality'
+  }
+  if (reason === 'route_busy' || reason === 'account_busy' || (route.usable && (route.available_slots === 0 ||
+      (route.dispatch_limit != null && route.inflight >= route.dispatch_limit)))) return 'busy'
+  if (!route.usable) return 'unavailable'
+  return route.inventory_eligible ? 'accepting' : 'boundOnly'
+}
+
+export function borrowRouteQualityState(route: BorrowRouteStatus, now: number) {
+  const quality = route.quality
+  if (!quality || quality.status === 'pending') return 'pending'
+  if (quality.status === 'passed') {
+    return route.state === 'normal' && borrowSeconds(route.usable_until, now) > 0 &&
+      borrowSeconds(route.quality_valid_until, now) > 0 ? 'passed' : 'stale'
+  }
+  if (quality.reason === 'route_quality_model_mismatch') return 'model_mismatch'
+  if (quality.reason === 'route_quality_failed' || (!quality.reason && quality.answer)) return 'failed'
+  return 'incomplete'
+}
+
+export function borrowRouteCounts(target: BorrowTarget, now: number) {
+  const routes = target.business_routes ?? []
+  const states = routes.map(route => borrowRouteState(route, now, target.enabled))
+  return {
+    accepting: states.filter(state => state === 'accepting').length,
+    busy: states.filter(state => state === 'busy').length,
+    pending: states.filter(state => ['pending_quality', 'pending_probe', 'checking'].includes(state)).length,
+    cooling: states.filter(state => state === 'cooling').length,
+    unavailable: states.filter(state => ['account_cooling', 'account_unavailable', 'unavailable', 'boundOnly'].includes(state)).length,
+    expired: states.filter(state => state === 'expired').length,
+    invalid: states.filter(state => state === 'invalid').length,
+    stored: target.stored_inventory_count ?? states.filter(state => !['expired', 'invalid'].includes(state)).length,
+    desired: target.desired_inventory ?? 128
+  }
+}
+
+export function borrowTargetAdmissionState(target: BorrowTarget, now: number) {
+  if (!target.enabled) return 'disabled'
+  if (borrowReady(target, now)) return 'ready'
+  return borrowRouteCounts(target, now).busy > 0 ? 'busy' : 'noRoute'
+}
+
+export function borrowAdmissionDeadline(target: BorrowTarget, now: number): string | undefined {
+  if (target.business_routes === undefined) return target.usable_until ?? target.expires_at
+  return target.business_routes.filter(route => borrowRouteAccepting(route, now))
+    .map(route => route.usable_until).sort((a, b) => Date.parse(b) - Date.parse(a))[0]
 }
 
 // Current scheduling state is independent of the last completed probe's verdict.

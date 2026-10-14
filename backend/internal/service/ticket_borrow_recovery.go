@@ -57,6 +57,13 @@ func (s *TicketBorrowService) trackTargetRequest(req *http.Request, q BorrowRequ
 		if req.Header.Get(openAICodexTurnStateHeader) != "" {
 			q.Phase = "continue"
 		}
+		if quality, _ := req.Context().Value(borrowQualityRequestKey{}).(bool); quality {
+			q.Phase = "quality"
+		}
+	}
+	if q.RouteHealth != nil && q.Phase == "quality" {
+		// Reuse the reservation made when the health job acquired capacity.
+		q.ID = q.RouteHealth.Token
 	}
 	if q.Phase == "continue" {
 		// Read for every new attempt, not once for an entire acquisition batch.
@@ -206,7 +213,7 @@ func (s *TicketBorrowService) trackTargetRequest(req *http.Request, q BorrowRequ
 		finish(resp.StatusCode, "headers_only")
 	} else {
 		body := &borrowActivityBody{ReadCloser: resp.Body, requestError: requestError, stop: cancel, finish: func(outcome string) { finish(resp.StatusCode, outcome) }}
-		if q.Phase == "continue" {
+		if q.Phase == "continue" || q.Phase == "quality" {
 			// Closing also interrupts readers whose transport does not wake Read on
 			// cancellation. Accounting still ends only after Read/Close returns.
 			context.AfterFunc(ctx, func() { diagnostic.interrupted(ctx); _ = body.closeBody() })

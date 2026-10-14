@@ -8,7 +8,7 @@ vi.mock('@/api/admin/accounts', () => ({
   getCodexHarvestFlow: getFlow,
   updateCodexSkipHarvest: updateSkip
 }))
-vi.mock('@/components/admin/HarvestGatewayBorrowPanel.vue', () => ({ default: { template: '<section data-testid="gateway-borrow-panel" />' } }))
+vi.mock('@/components/admin/TicketBorrowMigrationCard.vue', () => ({ default: { template: '<section data-testid="ticket-borrow-migration-card" />' } }))
 vi.mock('@/components/admin/HarvestControlsPanel.vue', () => ({ default: { template: '<section />' } }))
 vi.mock('@/components/admin/HarvestManualConsole.vue', () => ({ default: { template: '<section />' } }))
 vi.mock('@/components/admin/HarvestNodeRecords.vue', () => ({ default: { template: '<section />' } }))
@@ -112,7 +112,7 @@ describe('HarvestFlowView nullable API lists', () => {
     try {
       await flushPromises()
       expect(errors).toEqual([])
-      expect(wrapper.find('[data-testid="gateway-borrow-panel"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="ticket-borrow-migration-card"]').exists()).toBe(true)
       expect(wrapper.text()).toContain('admin.harvestFlow.title')
       expect(wrapper.text()).toContain(text)
     } finally {

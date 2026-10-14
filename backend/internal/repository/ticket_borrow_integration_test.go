@@ -63,6 +63,7 @@ func TestTicketBorrowPersistenceExpiryAndFencing(t *testing.T) {
 	require.NoError(t, e)
 	route := borrowAdmissionFixture(&service.BorrowRoute{ID: uuid.NewString(), TargetID: id, TargetRevision: target.Revision, IdentityHash: "identity", CookieHash: uuid.NewString(), Gateway: "chat.gateway.unified-1.api.openai.com", ExpiresAt: now.Add(3 * time.Minute)})
 	require.NoError(t, r.Publish(ctx, route, "lease-one"))
+	passBorrowFixtureQuality(t)
 	got, e := r.Route(ctx, id, "identity", "")
 	require.NoError(t, e)
 	require.Equal(t, route.ID, got.ID)
@@ -176,6 +177,7 @@ func TestTicketBorrowSessionsReplacementSourceDeleteAndFreshRepository(t *testin
 	require.NoError(t, e)
 	old := borrowAdmissionFixture(&service.BorrowRoute{ID: uuid.NewString(), TargetID: id, TargetRevision: target.Revision, SourceID: source.ID, IdentityHash: "identity", CookieHash: uuid.NewString(), ExpiresAt: now.Add(220 * time.Second)})
 	require.NoError(t, r.Publish(ctx, old, "worker"))
+	passBorrowFixtureQuality(t)
 	bound, e := r.BindSession(ctx, id, "conversation", old.ID)
 	require.NoError(t, e)
 	require.Equal(t, old.ID, bound)
@@ -185,6 +187,7 @@ func TestTicketBorrowSessionsReplacementSourceDeleteAndFreshRepository(t *testin
 	replacement.ExpiresAt = now.Add(4 * time.Minute)
 	// A completed valid candidate is publishable independently of new-batch readiness.
 	require.NoError(t, r.Publish(ctx, borrowAdmissionFixture(&replacement), "worker"))
+	passBorrowFixtureQuality(t)
 	bound, e = r.BindSession(ctx, id, "conversation", replacement.ID)
 	require.NoError(t, e)
 	require.Equal(t, old.ID, bound)
@@ -249,4 +252,12 @@ func TestTicketBorrowScanRefreshPauseAndSettingsCAS(t *testing.T) {
 	ok, e = r.AcquireJob(ctx, "target", id, "paused")
 	require.NoError(t, e)
 	require.False(t, ok)
+}
+
+// Persistence/scheduling fixtures assume their route already passed answer
+// validation. Quality-specific tests exercise the real request proof and state
+// transition instead of using this fixture shortcut. Integration DB only.
+func passBorrowFixtureQuality(t *testing.T) {
+	t.Helper()
+	rotationExec(t, `UPDATE ticket_borrow_routes SET state='normal',quality_result='{"status":"passed","model":"gpt-6-astra","reasoning_effort":"medium","answer":"21","http_status":200}',quality_valid_until=clock_timestamp()+INTERVAL '1 hour' WHERE state='pending_quality' AND health_token=''`)
 }

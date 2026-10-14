@@ -198,7 +198,6 @@ func (s *OpenAIGatewayService) requestCodex780Probe(ctx context.Context, account
 		return
 	}
 	req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAIHarvest))
-	req.Close = true
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")

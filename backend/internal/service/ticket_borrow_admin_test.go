@@ -27,20 +27,14 @@ func (r *borrowControlsRepo) SaveSettings(_ context.Context, v BorrowSettings) e
 }
 
 func TestBorrowControlsPreserveParametersAndFenceConcurrentEdits(t *testing.T) {
-	r := &borrowControlsRepo{settings: BorrowSettings{Revision: 7, Running: true, TTLSeconds: 230, MinRouteRemainingSeconds: new(120), ContinueTimeoutSeconds: new(7), Replenishment: &BorrowReplenishmentSettings{Inventory: 3, IntervalSeconds: 20, HoldSeconds: 90}}}
+	r := &borrowControlsRepo{settings: BorrowSettings{Revision: 7, Running: true, RoutePoolSize: new(4), RouteCooldownSeconds: new(120)}}
 	s := NewTicketBorrowService(r, nil, nil)
 	require.NoError(t, s.SaveControls(t.Context(), BorrowControls{Revision: 7, Running: new(false)}))
 	require.False(t, r.settings.Running)
-	require.Equal(t, 230, r.settings.TTLSeconds)
-	require.Equal(t, 120, *r.settings.MinRouteRemainingSeconds)
-	require.Equal(t, 3, r.settings.Replenishment.Inventory)
-	require.ErrorIs(t, s.SaveControls(t.Context(), BorrowControls{Revision: 7, ReplenishmentEnabled: new(true)}), ErrBorrowConflict)
-	require.False(t, r.settings.Replenishment.Enabled)
-	require.Equal(t, 1, r.writes)
-	require.NoError(t, s.SaveControls(t.Context(), BorrowControls{Revision: 8, ReplenishmentEnabled: new(true)}))
-	require.False(t, r.settings.Running, "replenishment must not implicitly resume acquisition")
-	require.True(t, r.settings.Replenishment.Enabled)
-	require.Equal(t, 20, r.settings.Replenishment.IntervalSeconds)
+	require.Equal(t, 4, *r.settings.RoutePoolSize)
+	require.Equal(t, 120, *r.settings.RouteCooldownSeconds)
+	require.ErrorIs(t, s.SaveControls(t.Context(), BorrowControls{Revision: 7, Running: new(true)}), ErrBorrowConflict)
+	require.NoError(t, s.SaveControls(t.Context(), BorrowControls{Revision: 8, Running: new(true)}))
 	require.Error(t, s.SaveControls(t.Context(), BorrowControls{Revision: 9}))
 	require.Equal(t, 2, r.writes)
 }

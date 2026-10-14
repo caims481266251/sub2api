@@ -43,14 +43,14 @@ func rotationUpstream() *boundSourceUpstream {
 	mint.cookies = nil
 	return &boundSourceUpstream{stateProbeUpstream: &stateProbeUpstream{replies: []stateProbeReply{{status: 200, cookies: []string{"__oailb=" + cookie + "; Max-Age=230"}, body: stateProbeCompletedStream}, mint, {status: 200, body: stateProbeCompletedStream}}}}
 }
-func TestTicketBorrowCandidateEnvironmentIsIsolatedFromBusiness(t *testing.T) {
+func TestTicketBorrowCandidateFingerprintFollowsRouteWithAccountProxy(t *testing.T) {
 	s, r := rotationServiceFixture()
 	a := s.owner.accountRepo.(borrowTestAccounts).account
 	a.Proxy = &Proxy{Protocol: "http", Host: "ordinary.example", Port: 99}
 	a.ProxyID = new(int64(99))
 	up := rotationUpstream()
 	s.owner.httpUpstream = up
-	s.runTarget(t.Context(), BorrowTarget{AcquisitionIdentity: BorrowAcquisitionSource, AccountID: 11, Revision: 2}, BorrowSettings{Running: true, TTLSeconds: 230}, "worker")
+	s.runTarget(t.Context(), BorrowTarget{AcquisitionIdentity: BorrowAcquisitionSource, AccountID: 11, Revision: 2}, BorrowSettings{Running: true}, "worker")
 	require.Len(t, up.calls, 3)
 	require.NotNil(t, r.route)
 	for i, call := range up.calls {
@@ -67,8 +67,8 @@ func TestTicketBorrowCandidateEnvironmentIsIsolatedFromBusiness(t *testing.T) {
 	resp, err := s.ForwardHTTP(req, "", 11, 10, normalProfile, func(sent *http.Request, proxy string, _ int64, _ int, profile *tlsfingerprint.Profile) (*http.Response, error) {
 		require.NoError(t, BorrowBeforeSend(sent))
 		require.Equal(t, a.Proxy.URL(), proxy)
-		require.Equal(t, "ordinary-device", sent.Header.Get("X-Codex-Installation-ID"))
-		require.Same(t, normalProfile, profile)
+		require.Equal(t, up.calls[0].header.Get("X-Codex-Installation-ID"), sent.Header.Get("X-Codex-Installation-ID"))
+		require.Equal(t, up.profiles[0], profile)
 		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: http.NoBody}, nil
 	})
 	require.NoError(t, err)
@@ -88,7 +88,7 @@ func TestTicketBorrowOrdinaryTargetConfigurationFencesProbeAfterDial(t *testing.
 			a.Credentials = map[string]any{"access_token": "replacement", "chatgpt_account_id": "different"}
 		}
 	}
-	s.runTarget(t.Context(), BorrowTarget{AcquisitionIdentity: BorrowAcquisitionSource, AccountID: 11, Revision: 2}, BorrowSettings{Running: true, TTLSeconds: 230}, "worker")
+	s.runTarget(t.Context(), BorrowTarget{AcquisitionIdentity: BorrowAcquisitionSource, AccountID: 11, Revision: 2}, BorrowSettings{Running: true}, "worker")
 	require.Len(t, up.calls, 1)
 	require.Nil(t, r.route)
 }

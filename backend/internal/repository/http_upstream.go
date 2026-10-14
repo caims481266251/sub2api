@@ -111,7 +111,6 @@ const (
 	upstreamProtocolModeOpenAIH1         = "openai_h1"
 	upstreamProtocolModeOpenAIH2         = "openai_h2"
 	upstreamProtocolModeOpenAIH1Fallback = "openai_h1_fallback"
-	upstreamProtocolModeOpenAIH1NoReuse  = "openai_h1_noreuse"
 	upstreamProtocolModeGrok             = "grok"
 )
 
@@ -254,7 +253,7 @@ func (s *httpUpstreamService) Do(req *http.Request, proxyURL string, accountID i
 	if regionalEgress {
 		return s.doRegionalEgress(req, accountID, accountConcurrency, profile, nil)
 	}
-	entry, err := s.acquireClientWithProfile(proxyURL, accountID, accountConcurrency, profile)
+	entry, err := s.getClientEntry(proxyURL, accountID, accountConcurrency, profile, true, true, s.requestProtocolOverride(req, profile))
 	if err != nil {
 		requestcapture.FromContext(req.Context()).SelectionFailed(accountID, 0, nil, nil, err)
 		return nil, err
@@ -418,13 +417,8 @@ func doUpstreamRequest(client *http.Client, req *http.Request) (result *http.Res
 		}
 		if err != nil {
 			cancelCause(err)
-			// Business may share an HTTP/2 connection with other requests.
-			// Cancel only this request; closing the socket would fail unrelated
-			// in-flight streams. Acquisition/probe sockets are exclusive.
-			profile := service.HTTPUpstreamProfileFromContext(req.Context())
-			if info.Conn != nil && (profile == service.HTTPUpstreamProfileOpenAIHarvest || profile == service.HTTPUpstreamProfileBorrowProbe) {
-				_ = info.Conn.Close()
-			}
+			// HTTP/2 is shared by business, acquisition and probes. Cancel only
+			// this stream; closing the socket would fail unrelated requests.
 		}
 	}})
 	resp, err := servertiming.Do(client, req.WithContext(ctx))
@@ -712,10 +706,11 @@ func (s *httpUpstreamService) getClientEntryWithTLS(proxyURL string, accountID i
 	}
 	settings := s.resolvePoolSettings(isolation, accountConcurrency)
 	settings = s.applyProfilePoolSettings(settings, upstreamProfile)
-	protocolMode := upstreamProtocolModeDefault
-	if upstreamProfile == service.HTTPUpstreamProfileOpenAIHarvest || upstreamProfile == service.HTTPUpstreamProfileBorrowProbe {
-		protocolMode = upstreamProtocolModeOpenAIH1NoReuse
-	}
+	protocolMode := upstreamProtocolModeOpenAIH2
+	// Materialize protocol policy before hashing so snapshots with equivalent
+	// effective fingerprints share a client, regardless of old ALPN defaults.
+	profile = tlsfingerprint.EffectiveProfile(profile)
+	profile.ALPNProtocols = []string{"h2"}
 	// Mode is part of the key: ordinary TLS clients must not inherit borrowing policy.
 	cacheKey := "tls:" + buildCacheKey(isolation, proxyKey, accountID, protocolMode)
 	if upstreamProfile == service.HTTPUpstreamProfileBorrowProbe {
@@ -727,7 +722,11 @@ func (s *httpUpstreamService) getClientEntryWithTLS(proxyURL string, accountID i
 	if err != nil {
 		return nil, err
 	}
-	poolKey := fmt.Sprintf("%s:tls:%x", buildPoolKey(settings, protocolMode), sha256.Sum256(profileJSON))
+	profileHash := sha256.Sum256(profileJSON)
+	// Several routed fingerprints can be active for the same account and proxy.
+	// Keep separate reusable clients instead of replacing each other's transport.
+	cacheKey += fmt.Sprintf(":fingerprint:%x", profileHash)
+	poolKey := fmt.Sprintf("%s:tls:%x", buildPoolKey(settings, protocolMode), profileHash)
 
 	now := time.Now()
 	nowUnix := now.UnixNano()
@@ -784,19 +783,16 @@ func (s *httpUpstreamService) getClientEntryWithTLS(proxyURL string, accountID i
 		return nil, fmt.Errorf("build TLS fingerprint transport: %w", err)
 	}
 
-	if protocolMode == upstreamProtocolModeOpenAIH1NoReuse {
-		transport.DisableKeepAlives = true
-		transport.MaxIdleConns, transport.MaxIdleConnsPerHost = 0, 0
-	}
 	client := &http.Client{Transport: transport}
 	if s.shouldValidateResolvedIP() {
 		client.CheckRedirect = s.redirectChecker
 	}
 
 	entry := &upstreamClientEntry{
-		client:   client,
-		proxyKey: proxyKey,
-		poolKey:  poolKey,
+		client:       client,
+		proxyKey:     proxyKey,
+		poolKey:      poolKey,
+		protocolMode: protocolMode,
 	}
 	atomic.StoreInt64(&entry.lastUsed, nowUnix)
 	if markInFlight {
@@ -880,7 +876,7 @@ func (s *httpUpstreamService) getOrCreateClient(proxyURL string, accountID int64
 // getClientEntry 获取或创建客户端条目
 // markInFlight=true 时会标记进行中请求，用于请求路径防止被淘汰
 // enforceLimit=true 时会限制客户端数量，超限且无法淘汰时返回错误
-func (s *httpUpstreamService) getClientEntry(proxyURL string, accountID int64, accountConcurrency int, profile service.HTTPUpstreamProfile, markInFlight bool, enforceLimit bool) (*upstreamClientEntry, error) {
+func (s *httpUpstreamService) getClientEntry(proxyURL string, accountID int64, accountConcurrency int, profile service.HTTPUpstreamProfile, markInFlight bool, enforceLimit bool, protocolOverride ...string) (*upstreamClientEntry, error) {
 	if profile == service.HTTPUpstreamProfileBorrowProbe && !s.probeOnly {
 		return s.borrowProbePool().getClientEntry(proxyURL, accountID, accountConcurrency, profile, markInFlight, enforceLimit)
 	}
@@ -896,6 +892,9 @@ func (s *httpUpstreamService) getClientEntry(proxyURL string, accountID int64, a
 	}
 	// 根据请求 profile（例如 OpenAI）选择协议模式
 	protocolMode := s.resolveProtocolMode(profile, proxyKey, parsedProxy)
+	if profile == service.HTTPUpstreamProfileOpenAI && len(protocolOverride) > 0 && protocolOverride[0] == upstreamProtocolModeOpenAIH1 {
+		protocolMode = upstreamProtocolModeOpenAIH1
+	}
 	settings := s.resolvePoolSettings(isolation, accountConcurrency)
 	settings = s.applyProfilePoolSettings(settings, profile)
 	// 构建缓存键（根据隔离策略不同）
@@ -1236,6 +1235,19 @@ func (s *httpUpstreamService) resolveOpenAIHTTP2Settings() openAIHTTP2Settings {
 	return settings
 }
 
+func (s *httpUpstreamService) requestProtocolOverride(req *http.Request, profile service.HTTPUpstreamProfile) string {
+	if s == nil || s.cfg == nil || req == nil || req.URL == nil || profile != service.HTTPUpstreamProfileOpenAI {
+		return ""
+	}
+	host := strings.TrimSuffix(strings.ToLower(req.URL.Hostname()), ".")
+	for _, candidate := range s.cfg.Gateway.OpenAIHTTP2.HTTP1Hosts {
+		if host != "" && host == strings.TrimSuffix(strings.ToLower(strings.TrimSpace(candidate)), ".") {
+			return upstreamProtocolModeOpenAIH1
+		}
+	}
+	return ""
+}
+
 func (s *httpUpstreamService) resolveProtocolMode(profile service.HTTPUpstreamProfile, proxyKey string, parsedProxy *url.URL) string {
 	if profile == service.HTTPUpstreamProfileExcelBPS {
 		if s.bpsHTTP1Active(proxyKey, time.Now()) {
@@ -1251,7 +1263,7 @@ func (s *httpUpstreamService) resolveProtocolMode(profile service.HTTPUpstreamPr
 		return upstreamProtocolModeGrok
 	}
 	if profile == service.HTTPUpstreamProfileOpenAIHarvest || profile == service.HTTPUpstreamProfileBorrowProbe {
-		return upstreamProtocolModeOpenAIH1NoReuse
+		return upstreamProtocolModeOpenAIH2
 	}
 	if profile != service.HTTPUpstreamProfileOpenAI {
 		return upstreamProtocolModeDefault
@@ -1585,13 +1597,6 @@ func buildUpstreamTransport(settings poolSettings, proxyURL *url.URL, protocolMo
 	case upstreamProtocolModeOpenAIH1, upstreamProtocolModeBPSH1:
 		transport.ForceAttemptHTTP2 = false
 		transport.TLSNextProto = make(map[string]func(string, *tls.Conn) http.RoundTripper)
-	case upstreamProtocolModeOpenAIH1NoReuse:
-		// Harvest must open a fresh CONNECT each attempt so the harvest proxy can rotate egress IPs.
-		transport.ForceAttemptHTTP2 = false
-		transport.DisableKeepAlives = true
-		transport.MaxIdleConns = 0
-		transport.MaxIdleConnsPerHost = 0
-		transport.TLSNextProto = make(map[string]func(string, *tls.Conn) http.RoundTripper)
 	case upstreamProtocolModeOpenAIH1Fallback:
 		// 显式禁用 HTTP/2，确保代理不兼容场景回退到 HTTP/1.1。
 		transport.ForceAttemptHTTP2 = false
@@ -1640,6 +1645,8 @@ func enableHTTP2KeepAlive(transport *http.Transport, protocolMode string) (*http
 //   - http/https: HTTP 代理，使用 HTTPProxyDialer（CONNECT 隧道 + utls 握手）
 //   - socks5: SOCKS5 代理，使用 SOCKS5ProxyDialer（SOCKS5 隧道 + utls 握手）
 func buildUpstreamTransportWithTLSFingerprint(settings poolSettings, proxyURL *url.URL, profile *tlsfingerprint.Profile) (*http.Transport, error) {
+	profile = tlsfingerprint.EffectiveProfile(profile)
+	profile.ALPNProtocols = []string{"h2"}
 	transport := &http.Transport{
 		MaxIdleConns:          settings.maxIdleConns,
 		MaxIdleConnsPerHost:   settings.maxIdleConnsPerHost,
@@ -1647,7 +1654,7 @@ func buildUpstreamTransportWithTLSFingerprint(settings poolSettings, proxyURL *u
 		IdleConnTimeout:       settings.idleConnTimeout,
 		ResponseHeaderTimeout: settings.responseHeaderTimeout,
 		// 禁用默认的 TLS，我们使用自定义的 DialTLSContext
-		ForceAttemptHTTP2: false,
+		ForceAttemptHTTP2: true,
 	}
 
 	// 根据代理类型选择合适的 TLS 指纹 Dialer
@@ -1670,14 +1677,29 @@ func buildUpstreamTransportWithTLSFingerprint(settings poolSettings, proxyURL *u
 			httpDialer := tlsfingerprint.NewHTTPProxyDialer(profile, proxyURL)
 			transport.DialTLSContext = httpDialer.DialTLSContext
 		default:
-			// 未知代理类型，回退到普通代理配置（无 TLS 指纹）
-			slog.Debug("tls_fingerprint_transport_unknown_scheme_fallback", "scheme", scheme)
-			if err := proxyutil.ConfigureTransportProxy(transport, proxyURL); err != nil {
-				return nil, err
-			}
+			return nil, fmt.Errorf("unsupported TLS fingerprint proxy scheme: %s", scheme)
 		}
 	}
 
+	dial := transport.DialTLSContext
+	if dial == nil {
+		return nil, fmt.Errorf("TLS fingerprint HTTP/2 requires a supported proxy tunnel")
+	}
+	transport.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		conn, err := dial(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		state, ok := conn.(interface{ ConnectionState() tls.ConnectionState })
+		if !ok || state.ConnectionState().NegotiatedProtocol != "h2" {
+			_ = conn.Close()
+			return nil, fmt.Errorf("TLS fingerprint upstream did not negotiate HTTP/2")
+		}
+		return conn, nil
+	}
+	if _, err := enableHTTP2KeepAlive(transport, upstreamProtocolModeOpenAIH2); err != nil {
+		return nil, err
+	}
 	return transport, nil
 }
 

@@ -27,15 +27,17 @@ func borrowRouteLoadFixture(t *testing.T) (*ticketBorrowRepository, int64, []*se
 	routes := make([]*service.BorrowRoute, 0, 3)
 	for i := range 3 {
 		route := &service.BorrowRoute{ID: uuid.NewString(), TargetID: id, TargetRevision: target.Revision, SourceID: 1, IdentityHash: "identity", CookieHash: uuid.NewString(), Gateway: fmt.Sprintf("gateway-%d.example", i), ExpiresAt: time.Now().Add(time.Duration(220-i*10) * time.Second)}
-		_, err = integrationDB.Exec(`INSERT INTO ticket_borrow_routes(id,target_id,target_revision,source_id,identity_hash,cookie_hash,gateway,secret,expires_at,admission_until,checked_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$9,clock_timestamp()-$10*INTERVAL '1 second')`, route.ID, id, route.TargetRevision, route.SourceID, route.IdentityHash, route.CookieHash, route.Gateway, secret, route.ExpiresAt, i)
+		_, err = integrationDB.Exec(`INSERT INTO ticket_borrow_routes(id,target_id,target_revision,source_id,identity_hash,cookie_hash,gateway,secret,expires_at,admission_until,checked_at,state,quality_result,quality_valid_until) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$9,clock_timestamp()-$10*INTERVAL '1 second','normal','{"status":"passed"}',clock_timestamp()+INTERVAL '1 hour')`, route.ID, id, route.TargetRevision, route.SourceID, route.IdentityHash, route.CookieHash, route.Gateway, secret, route.ExpiresAt, i)
 		require.NoError(t, err)
 		routes = append(routes, route)
 	}
 	return r, id, routes
 }
 
-func TestTicketBorrowRoutesPreferLatestAcrossInstances(t *testing.T) {
+func TestTicketBorrowRoutesSpreadLoadAcrossInstances(t *testing.T) {
 	r, id, routes := borrowRouteLoadFixture(t)
+	rotationExec(t, `UPDATE accounts SET concurrency=64 WHERE id=$1`, id)
+	rotationExec(t, `UPDATE ticket_borrow_routes SET dispatch_limit=32 WHERE target_id=$1`, id)
 	fresh := NewTicketBorrowRepository(integrationDB, r.encryptor).(*ticketBorrowRepository)
 	var wg sync.WaitGroup
 	errors := make(chan error, 30)
@@ -60,11 +62,7 @@ func TestTicketBorrowRoutesPreferLatestAcrossInstances(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, states, 3)
 	for _, state := range states {
-		if state.ID == routes[0].ID {
-			require.Equal(t, 30, state.Inflight)
-		} else {
-			require.Zero(t, state.Inflight)
-		}
+		require.Equal(t, 10, state.Inflight)
 		require.True(t, state.Usable && state.InventoryEligible)
 		require.False(t, state.PublishedAt.IsZero())
 		require.Equal(t, state.CheckedAt, state.PublishedAt, "checked_at is written at publication")
@@ -85,6 +83,8 @@ func TestTicketBorrowRoutesPreferLatestAcrossInstances(t *testing.T) {
 
 func TestTicketBorrowRoutesExactReservationRetainsBindingFence(t *testing.T) {
 	r, id, routes := borrowRouteLoadFixture(t)
+	rotationExec(t, `UPDATE accounts SET concurrency=64 WHERE id=$1`, id)
+	rotationExec(t, `UPDATE ticket_borrow_routes SET dispatch_limit=32 WHERE target_id=$1`, id)
 	var wg sync.WaitGroup
 	results := make(chan string, 12)
 	errors := make(chan error, 12)
@@ -108,18 +108,17 @@ func TestTicketBorrowRoutesExactReservationRetainsBindingFence(t *testing.T) {
 	for route := range results {
 		require.Equal(t, routes[0].ID, route)
 	}
-	// Unbound reads prefer newest even under load. Exact-route callers retain
+	// Unbound requests prefer less loaded routes. Exact-route callers retain
 	// their binding fence; business requests use ReserveLatestRoute instead.
 	other, err := r.ReserveRoute(t.Context(), id, "identity", "", "other", uuid.NewString())
 	require.NoError(t, err)
-	require.Equal(t, routes[0].ID, other.ID)
+	require.Equal(t, routes[1].ID, other.ID)
 	_, err = r.ReserveRoute(t.Context(), id, "identity", routes[1].ID, "same-conversation", uuid.NewString())
 	require.ErrorIs(t, err, service.ErrBorrowUnavailable, "conflicting response/session bindings cannot migrate")
 	_, err = integrationDB.Exec(`UPDATE ticket_borrow_routes SET inventory_eligible=false WHERE id=$1`, routes[0].ID)
 	require.NoError(t, err)
-	bound, err := r.ReserveRoute(t.Context(), id, "identity", "", "same-conversation", uuid.NewString())
-	require.NoError(t, err)
-	require.Equal(t, routes[0].ID, bound.ID)
+	_, err = r.ReserveRoute(t.Context(), id, "identity", "", "same-conversation", uuid.NewString())
+	require.ErrorIs(t, err, service.ErrBorrowUnavailable, "retired routes cannot accept new requests")
 	_, err = integrationDB.Exec(`UPDATE ticket_borrow_routes SET expires_at=clock_timestamp() WHERE id=$1`, routes[0].ID)
 	require.NoError(t, err)
 	_, err = r.ReserveRoute(t.Context(), id, "identity", "", "same-conversation", uuid.NewString())
@@ -128,6 +127,8 @@ func TestTicketBorrowRoutesExactReservationRetainsBindingFence(t *testing.T) {
 
 func TestTicketBorrowRoutesEligibilityAndOrphanLeases(t *testing.T) {
 	r, id, routes := borrowRouteLoadFixture(t)
+	rotationExec(t, `UPDATE accounts SET concurrency=64 WHERE id=$1`, id)
+	rotationExec(t, `UPDATE ticket_borrow_routes SET dispatch_limit=32 WHERE target_id=$1`, id)
 	ctx := t.Context()
 	lease := uuid.NewString()
 	_, err := r.ReserveRoute(ctx, id, "identity", "", "", lease)

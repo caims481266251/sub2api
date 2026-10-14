@@ -24,7 +24,7 @@ func (h *OpenAIGatewayHandler) handleBorrowBusinessRecovery(c *gin.Context, fail
 	defer service.RefreshBorrowRecoveryError(c)
 	finish := func() (bool, bool) {
 		service.RefreshBorrowRecoveryError(c)
-		if !h.stopBorrowBusinessRecovery(c, stream, anthropic) {
+		if !h.stopBorrowBusinessRecovery(c, stream, anthropic) && !h.finishBorrowCapacityFailure(c, failure, stream, anthropic) {
 			if anthropic {
 				h.handleAnthropicFailoverExhausted(c, failure, stream || c.Writer.Written())
 			} else {
@@ -42,14 +42,10 @@ func (h *OpenAIGatewayHandler) handleBorrowBusinessRecovery(c *gin.Context, fail
 	}
 	ctx := service.BorrowBusinessRecoveryContext(c.Request.Context())
 	c.Request = c.Request.WithContext(ctx)
-	delay := borrowRecoveryDelay(failure, time.Now())
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return finish()
-	case <-timer.C:
-	}
+	// Defer waiting until the selected account is known. The transport boundary
+	// enforces the original wait if selection falls back to this account, while
+	// an independent ordinary provider can proceed after only the short backoff.
+	r.SetRecoveryDelay(account, failure, borrowRecoveryDelay(failure, time.Now()))
 	if failure.ShouldRetryNextAccount() && !r.Pinned() && *switches < maxSwitches {
 		excluded[account.ID] = struct{}{}
 		if canSame {
@@ -72,7 +68,7 @@ func borrowBusinessSelectionFallback(c *gin.Context, err error, excluded map[int
 		return false
 	}
 	r := service.BorrowBusinessRecoveryFromContext(c.Request.Context())
-	if id := r.TakeFallback(); id != 0 {
+	if id := r.TakeFallback(); id != 0 && r.FallbackAvailable(c.Request.Context(), id) {
 		delete(excluded, id)
 		logger.FromContext(c.Request.Context()).Info("borrow.business_recovery", zap.String("action", "fallback_same_target_reselect_route"), zap.Int64("account_id", id))
 		return true
@@ -120,7 +116,7 @@ func borrowRecoveryDelay(f *service.UpstreamFailoverError, now time.Time) time.D
 	return delay + time.Duration(rand.IntN(251))*time.Millisecond
 }
 
-// Keep an upstream 429 visible when the recovery cannot select another route.
+// Resource exhaustion after bounded recovery is distinct from client rate limits.
 // A request that has never sent upstream still uses normal admission errors.
 func (h *OpenAIGatewayHandler) finishBorrowSelectionFailure(c *gin.Context, err error, last *service.UpstreamFailoverError, stream, anthropic bool) bool {
 	r := service.BorrowBusinessRecoveryFromContext(c.Request.Context())
@@ -129,6 +125,9 @@ func (h *OpenAIGatewayHandler) finishBorrowSelectionFailure(c *gin.Context, err 
 	}
 	r.SelectionStopped(c.Request.Context())
 	service.RefreshBorrowRecoveryError(c)
+	if h.finishBorrowCapacityFailure(c, last, stream, anthropic) {
+		return true
+	}
 	if anthropic {
 		h.handleAnthropicFailoverExhausted(c, last, stream)
 	} else {
@@ -148,4 +147,17 @@ func (h *OpenAIGatewayHandler) beginBorrowBusinessRequest(c *gin.Context) func()
 		service.RefreshBorrowRecoveryError(c)
 		c.Request = c.Request.WithContext(finalContext)
 	}
+}
+
+func (h *OpenAIGatewayHandler) finishBorrowCapacityFailure(c *gin.Context, failure *service.UpstreamFailoverError, stream, anthropic bool) bool {
+	if failure == nil || failure.StatusCode != http.StatusTooManyRequests || service.IsResponseCommitted(c) {
+		return false
+	}
+	const message = "No upstream capacity is currently available. Please retry shortly."
+	if anthropic {
+		h.anthropicStreamingAwareError(c, http.StatusServiceUnavailable, "overloaded_error", message, stream || c.Writer.Written())
+	} else {
+		h.handleStreamingAwareErrorWithCode(c, http.StatusServiceUnavailable, "api_error", "upstream_capacity_unavailable", message, stream || c.Writer.Written(), false)
+	}
+	return true
 }

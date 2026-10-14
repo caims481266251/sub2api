@@ -105,19 +105,14 @@ func DefaultBorrowRecoverySettings() *BorrowRecoverySettings {
 // Legacy global prewarming and progressive cooldown stay disabled. Legacy time
 // fields are read aliases; new admission and automatic renewal have one policy.
 func NormalizeBorrowSettings(s *BorrowSettings) {
-	s.PrewarmSeconds = 0
-	if s.AdmissionWindowSeconds != nil {
-		s.TTLSeconds = max(30, *s.AdmissionWindowSeconds)
-		floor := s.TTLSeconds - *s.AdmissionWindowSeconds
-		s.MinRouteRemainingSeconds = &floor
-		lead := BorrowRenewalLead(*s.AdmissionWindowSeconds, 0)
-		s.RenewBeforeSeconds = &lead
+	if s.RouteQuality == nil {
+		s.RouteQuality = DefaultBorrowRouteQualityConfig()
 	}
-	if s.Replenishment != nil {
-		p := *s.Replenishment
-		p.Inventory, p.IntervalSeconds, p.HoldSeconds = BorrowRollingInventory, 1, 0
-		p.MaintenanceIntervalSeconds = nil
-		s.Replenishment = &p
+	if s.RoutePoolSize == nil {
+		s.RoutePoolSize = new(DefaultBorrowRoutePoolSize)
+	}
+	if s.RouteCooldownSeconds == nil {
+		s.RouteCooldownSeconds = new(DefaultBorrowRouteCooldownSeconds)
 	}
 	if s.Recovery == nil {
 		s.Recovery = DefaultBorrowRecoverySettings()
@@ -151,19 +146,20 @@ func BorrowAcquisitionFromContext(ctx context.Context) (BorrowAcquisition, bool)
 }
 
 type BorrowRequest struct {
-	Diagnostic             *BorrowHTTPAttempt `json:"diagnostic,omitempty"`
-	ContinueTimeoutSeconds int                `json:"continue_timeout_seconds,omitempty"`
-	Identity               string             `json:"-"`
-	ID                     string             `json:"id"`
-	TargetID               int64              `json:"target_id"`
-	Kind                   string             `json:"kind"`
-	BatchID                string             `json:"batch_id"`
-	SourceID               int64              `json:"source_id"`
-	Phase                  string             `json:"phase"`
-	Revision               int64              `json:"-"`
-	CandidateID            string             `json:"candidate_id,omitempty"`
-	RouteID                string             `json:"route_id,omitempty"`
-	Environment            *BorrowEnvironment `json:"environment,omitempty"`
+	RouteHealth            *BorrowRouteHealthJob `json:"-"`
+	Diagnostic             *BorrowHTTPAttempt    `json:"diagnostic,omitempty"`
+	ContinueTimeoutSeconds int                   `json:"continue_timeout_seconds,omitempty"`
+	Identity               string                `json:"-"`
+	ID                     string                `json:"id"`
+	TargetID               int64                 `json:"target_id"`
+	Kind                   string                `json:"kind"`
+	BatchID                string                `json:"batch_id"`
+	SourceID               int64                 `json:"source_id"`
+	Phase                  string                `json:"phase"`
+	Revision               int64                 `json:"-"`
+	CandidateID            string                `json:"candidate_id,omitempty"`
+	RouteID                string                `json:"route_id,omitempty"`
+	Environment            *BorrowEnvironment    `json:"environment,omitempty"`
 }
 
 // BorrowEnvironment is an explicit allowlist of diagnostic fields. Raw request
@@ -180,6 +176,7 @@ type BorrowEnvironment struct {
 }
 
 type BorrowCandidateDetails struct {
+	Quality                *BorrowRouteQualityResult   `json:"quality,omitempty"`
 	PoolEnqueuedAt         *time.Time                  `json:"pool_enqueued_at,omitempty"`
 	PoolClaimedAt          *time.Time                  `json:"pool_claimed_at,omitempty"`
 	PoolMinimumRemainingMS int64                       `json:"pool_minimum_remaining_ms,omitempty"`
@@ -250,20 +247,17 @@ type BorrowCandidateDetails struct {
 	ContinueStatus            int        `json:"continue_status,omitempty"`
 }
 type BorrowSettings struct {
-	AdmissionWindowSeconds *int                         `json:"admission_window_seconds,omitempty"`
-	Replenishment          *BorrowReplenishmentSettings `json:"replenishment,omitempty"`
-	ContinueTimeoutSeconds *int                         `json:"continue_timeout_seconds,omitempty"`
+	RouteQuality           *BorrowRouteQualityConfig `json:"route_quality,omitempty"`
+	RoutePoolSize          *int                      `json:"route_pool_size,omitempty"`
+	RouteCooldownSeconds   *int                      `json:"route_cooldown_seconds,omitempty"`
+	ContinueTimeoutSeconds *int                      `json:"continue_timeout_seconds,omitempty"`
 	// Nil on writes preserves the saved value for older API clients.
-	MinRouteRemainingSeconds *int                    `json:"min_route_remaining_seconds,omitempty"`
-	ProbeConcurrency         *int                    `json:"probe_concurrency,omitempty"`
-	RenewBeforeSeconds       *int                    `json:"renew_before_seconds,omitempty"`
-	SourceBudget             *BorrowBudgetStatus     `json:"source_budget,omitempty"`
-	ServerNow                time.Time               `json:"server_now"`
-	Recovery                 *BorrowRecoverySettings `json:"recovery,omitempty"`
-	Revision                 int64                   `json:"revision"`
-	Running                  bool                    `json:"running"`
-	TTLSeconds               int                     `json:"ttl_seconds"`
-	PrewarmSeconds           int                     `json:"prewarm_seconds"`
+	ProbeConcurrency *int                    `json:"probe_concurrency,omitempty"`
+	SourceBudget     *BorrowBudgetStatus     `json:"source_budget,omitempty"`
+	ServerNow        time.Time               `json:"server_now"`
+	Recovery         *BorrowRecoverySettings `json:"recovery,omitempty"`
+	Revision         int64                   `json:"revision"`
+	Running          bool                    `json:"running"`
 }
 
 // Budget status is calculated from database reservations, never from client input.
@@ -277,50 +271,53 @@ type BorrowTarget struct {
 	AcquisitionIdentity string `json:"acquisition_identity"`
 	AcquisitionRevision int64  `json:"acquisition_revision"`
 
-	BusinessRoutes          []BorrowRouteStatus       `json:"business_routes,omitempty"`
-	BusinessInflight        int                       `json:"business_inflight"`
-	BusinessConcurrency     int                       `json:"business_concurrency"`
-	PreferredRouteID        string                    `json:"preferred_route_id,omitempty"`
-	Replenishment           *BorrowReplenishmentState `json:"replenishment,omitempty"`
-	ProbePolicy             BorrowProbePolicy         `json:"probe_policy"`
-	UpstreamWaitUntil       *time.Time                `json:"upstream_wait_until,omitempty"`
-	UpstreamWaitReason      string                    `json:"upstream_wait_reason,omitempty"`
-	BudgetWaitUntil         *time.Time                `json:"budget_wait_until,omitempty"`
-	CooldownUntil           *time.Time                `json:"cooldown_until,omitempty"`
-	CooldownSeconds         int                       `json:"cooldown_seconds"`
-	RecoveryLevel           int                       `json:"recovery_level"`
-	ConsecutiveFailures     int                       `json:"consecutive_failures"`
-	RecoveryEpoch           int64                     `json:"recovery_epoch"`
-	LastRequestStartedAt    *time.Time                `json:"last_request_started_at,omitempty"`
-	LastRequestFinishedAt   *time.Time                `json:"last_request_finished_at,omitempty"`
-	Inflight                int                       `json:"inflight"`
-	ProbeRequestsLastMinute int                       `json:"probe_requests_last_minute"`
-	AccountID               int64                     `json:"account_id"`
-	Name                    string                    `json:"name"`
-	Enabled                 bool                      `json:"enabled"`
-	Revision                int64                     `json:"revision"`
-	Cursor                  int64                     `json:"-"`
-	ScanSources             []int64                   `json:"-"`
-	ScanOffset              int                       `json:"scan_completed"`
-	ScanTotal               int                       `json:"scan_total"`
-	RefreshRequested        bool                      `json:"refresh_requested"`
-	Phase                   string                    `json:"phase"`
-	Reason                  string                    `json:"reason"`
-	NextAttemptAt           time.Time                 `json:"next_attempt_at"`
-	Ready                   bool                      `json:"ready"`
-	Gateway                 string                    `json:"gateway,omitempty"`
-	ExpiresAt               *time.Time                `json:"expires_at,omitempty"`
-	UsableUntil             *time.Time                `json:"usable_until,omitempty"`
-	ServerNow               time.Time                 `json:"server_now"`
+	BusinessRoutes          []BorrowRouteStatus `json:"business_routes,omitempty"`
+	BusinessInflight        int                 `json:"business_inflight"`
+	BusinessConcurrency     int                 `json:"business_concurrency"`
+	PreferredRouteID        string              `json:"preferred_route_id,omitempty"`
+	ProbePolicy             BorrowProbePolicy   `json:"probe_policy"`
+	UpstreamWaitUntil       *time.Time          `json:"upstream_wait_until,omitempty"`
+	UpstreamWaitReason      string              `json:"upstream_wait_reason,omitempty"`
+	BudgetWaitUntil         *time.Time          `json:"budget_wait_until,omitempty"`
+	CooldownUntil           *time.Time          `json:"cooldown_until,omitempty"`
+	CooldownSeconds         int                 `json:"cooldown_seconds"`
+	RecoveryLevel           int                 `json:"recovery_level"`
+	ConsecutiveFailures     int                 `json:"consecutive_failures"`
+	RecoveryEpoch           int64               `json:"recovery_epoch"`
+	LastRequestStartedAt    *time.Time          `json:"last_request_started_at,omitempty"`
+	LastRequestFinishedAt   *time.Time          `json:"last_request_finished_at,omitempty"`
+	Inflight                int                 `json:"inflight"`
+	ProbeRequestsLastMinute int                 `json:"probe_requests_last_minute"`
+	AccountID               int64               `json:"account_id"`
+	Name                    string              `json:"name"`
+	Enabled                 bool                `json:"enabled"`
+	Revision                int64               `json:"revision"`
+	Cursor                  int64               `json:"-"`
+	ScanSources             []int64             `json:"-"`
+	ScanOffset              int                 `json:"scan_completed"`
+	ScanTotal               int                 `json:"scan_total"`
+	RefreshRequested        bool                `json:"refresh_requested"`
+	Phase                   string              `json:"phase"`
+	Reason                  string              `json:"reason"`
+	NextAttemptAt           time.Time           `json:"next_attempt_at"`
+	Ready                   bool                `json:"ready"`
+	Gateway                 string              `json:"gateway,omitempty"`
+	ExpiresAt               *time.Time          `json:"expires_at,omitempty"`
+	UsableUntil             *time.Time          `json:"usable_until,omitempty"`
+	ServerNow               time.Time           `json:"server_now"`
 }
 type BorrowRouteSecret struct {
-	Endpoint string                  `json:"endpoint"`
-	Cookie   http.Cookie             `json:"cookie"`
-	Headers  http.Header             `json:"headers"`
-	Proxy    string                  `json:"proxy"`
-	Profile  *tlsfingerprint.Profile `json:"profile,omitempty"`
+	Fingerprint *BorrowFingerprint      `json:"fingerprint,omitempty"`
+	Endpoint    string                  `json:"endpoint"`
+	Cookie      http.Cookie             `json:"cookie"`
+	Headers     http.Header             `json:"headers"`
+	Proxy       string                  `json:"proxy"`
+	Profile     *tlsfingerprint.Profile `json:"profile,omitempty"`
 }
 type BorrowRoute struct {
+	Generation           int64      `json:"generation"`
+	VerificationModel    string     `json:"verification_model"`
+	DeadlineSource       string     `json:"deadline_source"`
 	AcquisitionIdentity  string     `json:"acquisition_identity"`
 	AcquisitionAccountID int64      `json:"acquisition_account_id"`
 	AcquisitionStartedAt *time.Time `json:"acquisition_started_at,omitempty"`
@@ -349,16 +346,31 @@ type BorrowRoute struct {
 
 // Only sanitized route metadata is exposed to the management page.
 type BorrowRouteStatus struct {
-	ID                string    `json:"id"`
-	PublishedAt       time.Time `json:"published_at"`
-	CheckedAt         time.Time `json:"checked_at"`
-	Gateway           string    `json:"gateway"`
-	SourceAccountID   int64     `json:"source_account_id"`
-	ExpiresAt         time.Time `json:"expires_at"`
-	UsableUntil       time.Time `json:"usable_until"`
-	InventoryEligible bool      `json:"inventory_eligible"`
-	Usable            bool      `json:"usable"`
-	Inflight          int       `json:"inflight"`
+	Quality               *BorrowRouteQualityResult `json:"quality,omitempty"`
+	QualityValidUntil     *time.Time                `json:"quality_valid_until,omitempty"`
+	State                 string                    `json:"state"`
+	Generation            int64                     `json:"generation"`
+	DispatchLimit         int                       `json:"dispatch_limit"`
+	CooldownUntil         *time.Time                `json:"cooldown_until,omitempty"`
+	LastSuccessAt         *time.Time                `json:"last_success_at,omitempty"`
+	LastBusinessSuccessAt *time.Time                `json:"last_business_success_at,omitempty"`
+	LastErrorAt           *time.Time                `json:"last_error_at,omitempty"`
+	LastError             string                    `json:"last_error,omitempty"`
+	Checking              bool                      `json:"checking"`
+	VerificationModel     string                    `json:"verification_model"`
+	DeadlineSource        string                    `json:"deadline_source"`
+	ID                    string                    `json:"id"`
+	PublishedAt           time.Time                 `json:"published_at"`
+	CheckedAt             time.Time                 `json:"checked_at"`
+	Gateway               string                    `json:"gateway"`
+	SourceAccountID       int64                     `json:"source_account_id"`
+	ExpiresAt             time.Time                 `json:"expires_at"`
+	UsableUntil           time.Time                 `json:"usable_until"`
+	InventoryEligible     bool                      `json:"inventory_eligible"`
+	Usable                bool                      `json:"usable"`
+	AvailableSlots        int                       `json:"available_slots"`
+	UnavailableReason     string                    `json:"unavailable_reason,omitempty"`
+	Inflight              int                       `json:"inflight"`
 }
 
 type BorrowRouteLeaseRepository interface {

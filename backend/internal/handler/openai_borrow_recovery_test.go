@@ -22,6 +22,7 @@ type borrowRecoveryHandlerUpstream struct {
 	succeedRecovery bool
 	specialRecovery bool
 	borrow          bool
+	retryAfter      string
 }
 
 func (u *borrowRecoveryHandlerUpstream) Do(req *http.Request, _ string, id int64, _ int) (*http.Response, error) {
@@ -46,7 +47,11 @@ data: {"type":"response.completed","response":{"id":"resp_test","model":"gpt-5.2
 `
 		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
 	}
-	return &http.Response{StatusCode: u.status, Header: http.Header{"Content-Type": []string{"application/json"}, "Retry-After": []string{"1"}}, Body: io.NopCloser(strings.NewReader(`{"error":{"type":"server_error","message":"temporary upstream failure"}}`))}, nil
+	retryAfter := u.retryAfter
+	if retryAfter == "" {
+		retryAfter = "1"
+	}
+	return &http.Response{StatusCode: u.status, Header: http.Header{"Content-Type": []string{"application/json"}, "Retry-After": []string{retryAfter}}, Body: io.NopCloser(strings.NewReader(`{"error":{"type":"server_error","message":"temporary upstream failure"}}`))}, nil
 }
 
 func TestBorrowBusinessUsesOrdinaryHandlerRetries(t *testing.T) {
@@ -59,6 +64,7 @@ func TestBorrowBusinessUsesOrdinaryHandlerRetries(t *testing.T) {
 		}{
 			{"switch", 503, 3, 3, false, false}, {"429", 429, 3, 3, false, false}, {"single-target", 503, 1, 1, false, false}, {"legacy-disabled", 503, 3, 3, true, false}, {"recovery-success", 503, 3, 2, false, false},
 			{"borrow-503", 503, 3, 2, false, true}, {"borrow-429", 429, 3, 2, false, true}, {"borrow-single-429", 429, 1, 1, false, true},
+			{"borrow-429-independent-success", 429, 3, 2, false, true},
 		} {
 			status := scenario.status
 			t.Run(endpoint+"/"+scenario.name, func(t *testing.T) {
@@ -68,12 +74,21 @@ func TestBorrowBusinessUsesOrdinaryHandlerRetries(t *testing.T) {
 				for _, id := range []int64{9910, 9911, 9912}[:scenario.accounts] {
 					accounts = append(accounts, service.Account{ID: id, Name: "recovery-test", Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey, Status: service.StatusActive, Schedulable: true, Priority: int(id), GroupIDs: []int64{groupID}, Credentials: map[string]any{"api_key": "test-only", "base_url": "https://example.test", "pool_mode": true, "pool_mode_retry_count": float64(0), "pool_mode_retry_status_codes": []any{float64(status)}}, Extra: map[string]any{"openai_passthrough": true}})
 				}
+				if scenario.name == "borrow-429-independent-success" {
+					accounts[0].Credentials["base_url"] = "https://origin.example/v1"
+					for i := 1; i < len(accounts); i++ {
+						accounts[i].Credentials["base_url"] = "https://fallback.test/v1"
+					}
+				}
 				cfg := &config.Config{RunMode: config.RunModeSimple}
 				cfg.Gateway.BorrowBusinessRecoveryDisabled = scenario.disabled
 				cfg.Default.RateMultiplier = 1
 				cfg.Gateway.MaxAccountSwitches = 10
 				repo := &openAIWSFailoverHandlerAccountRepoStub{accounts: accounts}
-				upstream := &borrowRecoveryHandlerUpstream{status: status, borrow: scenario.borrow, succeedRecovery: scenario.name == "recovery-success"}
+				upstream := &borrowRecoveryHandlerUpstream{status: status, borrow: scenario.borrow, succeedRecovery: strings.HasSuffix(scenario.name, "success")}
+				if scenario.name == "borrow-429-independent-success" {
+					upstream.retryAfter = "32"
+				}
 				billing := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
 				t.Cleanup(billing.Stop)
 				gateway := service.NewOpenAIGatewayService(repo, nil, nil, nil, nil, nil, nil, nil, cfg, nil, nil, service.NewBillingService(cfg, nil), nil, billing, upstream, &service.DeferredService{}, nil, nil, nil, nil, nil, nil, nil)
@@ -85,6 +100,7 @@ func TestBorrowBusinessUsesOrdinaryHandlerRetries(t *testing.T) {
 				c.Request.Header.Set("Content-Type", "application/json")
 				c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{ID: 1803, GroupID: &groupID, User: &service.User{ID: 1703, Status: service.StatusActive}, Group: &service.Group{ID: groupID, AllowMessagesDispatch: true, Platform: service.PlatformOpenAI, Status: service.StatusActive}})
 				c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: 1703, Concurrency: 0})
+				started := time.Now()
 				switch endpoint {
 				case "responses":
 					h.Responses(c)
@@ -92,6 +108,9 @@ func TestBorrowBusinessUsesOrdinaryHandlerRetries(t *testing.T) {
 					h.ChatCompletions(c)
 				case "messages":
 					h.Messages(c)
+				}
+				if scenario.name == "borrow-429-independent-success" {
+					require.Less(t, time.Since(started), 5*time.Second, "independent fallback must not consume the recovery budget waiting for the failed target")
 				}
 				require.NoError(t, c.Request.Context().Err(), "finishing recovery must not look like a client disconnect")
 				if scenario.name == "borrow-single-429" {
@@ -101,8 +120,12 @@ func TestBorrowBusinessUsesOrdinaryHandlerRetries(t *testing.T) {
 					require.Len(t, upstream.ids, scenario.calls, w.Body.String())
 				}
 				require.Equal(t, scenario.borrow, upstream.specialRecovery, "ordinary requests must not activate borrowing-specific retries")
-				if status == 429 {
-					require.Equal(t, 429, w.Code, w.Body.String())
+				if status == 429 && !upstream.succeedRecovery {
+					expected := 429
+					if scenario.borrow {
+						expected = 503
+					}
+					require.Equal(t, expected, w.Code, w.Body.String())
 				} else {
 					if scenario.accounts > 1 {
 						require.NotEqual(t, upstream.ids[0], upstream.ids[1])

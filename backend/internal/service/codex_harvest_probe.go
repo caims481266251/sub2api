@@ -127,7 +127,6 @@ func (s *OpenAIGatewayService) requestCodexHarvestProbe(ctx context.Context, acc
 		return
 	}
 	req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAIHarvest))
-	req.Close = true
 	req.Header.Set(responsesLiteHeaderKey, "true")
 	req.Host = "chatgpt.com"
 	req.Header.Set("Authorization", "Bearer "+token)

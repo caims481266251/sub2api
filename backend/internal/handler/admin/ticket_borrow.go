@@ -43,7 +43,7 @@ func borrowError(c *gin.Context, err error) {
 		return
 	}
 	switch err.Error() {
-	case "borrow_acquisition_identity_invalid", "borrow_admission_window_invalid", "borrow_event_query_invalid", "borrow_shadow_unsupported", "borrow_probe_policy_invalid", "borrow_selection_invalid", "borrow_restore_multiple_proxies", "borrow_source_name_invalid", "borrow_source_model_invalid", "borrow_source_credentials_required", "borrow_proxy_limit", "borrow_proxy_invalid", "borrow_settings_invalid", "borrow_target_unsupported", "borrow_legacy_config_conflict", "borrow_source_is_normal_account":
+	case "borrow_acquisition_identity_invalid", "borrow_route_pool_settings_invalid", "borrow_route_quality_settings_invalid", "borrow_event_query_invalid", "borrow_shadow_unsupported", "borrow_probe_policy_invalid", "borrow_selection_invalid", "borrow_restore_multiple_proxies", "borrow_source_name_invalid", "borrow_source_model_invalid", "borrow_source_credentials_required", "borrow_proxy_limit", "borrow_proxy_invalid", "borrow_settings_invalid", "borrow_target_unsupported", "borrow_legacy_config_conflict", "borrow_source_is_normal_account":
 		response.BadRequest(c, err.Error())
 	default:
 		response.ErrorWithDetails(c, 503, "Borrowing operation failed; check configuration and credential encryption", "borrow_operation_failed", nil)
@@ -376,10 +376,9 @@ func (h *AccountHandler) BorrowSaveProbePolicy(c *gin.Context) {
 		return
 	}
 	var input struct {
-		Revision           *int64 `json:"revision"`
-		Concurrency        *int   `json:"concurrency"`
-		RenewBeforeSeconds *int   `json:"renew_before_seconds"`
-		UseGlobal          bool   `json:"use_global"`
+		Revision    *int64 `json:"revision"`
+		Concurrency *int   `json:"concurrency"`
+		UseGlobal   bool   `json:"use_global"`
 	}
 	if c.ShouldBindJSON(&input) != nil || input.Revision == nil || (!input.UseGlobal && input.Concurrency == nil) {
 		response.BadRequest(c, "borrow_probe_policy_invalid")
@@ -388,9 +387,6 @@ func (h *AccountHandler) BorrowSaveProbePolicy(c *gin.Context) {
 	policy := service.BorrowProbePolicy{Revision: *input.Revision, UseGlobal: input.UseGlobal}
 	if input.Concurrency != nil {
 		policy.Concurrency = *input.Concurrency
-	}
-	if input.RenewBeforeSeconds != nil {
-		policy.RenewBeforeSeconds = *input.RenewBeforeSeconds
 	}
 	if err := s.SaveProbePolicy(c.Request.Context(), id, policy); err != nil {
 		borrowError(c, err)

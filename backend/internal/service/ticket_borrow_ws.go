@@ -78,7 +78,11 @@ func (s *TicketBorrowService) reserveWS(ctx, lifetime context.Context, account *
 	if err != nil {
 		return nil, ErrBorrowUnavailable
 	}
-	use := newBorrowRouteUse(lifetime, allocator, lease, 15*time.Second)
+	use := newBorrowRouteUse(lifetime, allocator, lease, 15*time.Second, s.notifyRoutePublished)
+	if ValidateBorrowFingerprint(route.Secret.Fingerprint) != nil {
+		use.finish()
+		return nil, ErrBorrowFingerprintInvalid
+	}
 	u, err := url.Parse(endpoint)
 	if err != nil {
 		use.finish()

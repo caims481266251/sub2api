@@ -95,7 +95,7 @@ func TestTicketBorrowStoppedRoundCancelsSlowSources(t *testing.T) {
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				s.runTarget(t.Context(), BorrowTarget{AcquisitionIdentity: BorrowAcquisitionSource, AccountID: 11, Revision: 2, ProbePolicy: BorrowProbePolicy{Concurrency: 3, RenewBeforeSeconds: 15}}, BorrowSettings{Running: true, TTLSeconds: 230}, "stop-slow-prefetch")
+				s.runTarget(t.Context(), BorrowTarget{AcquisitionIdentity: BorrowAcquisitionSource, AccountID: 11, Revision: 2, ProbePolicy: BorrowProbePolicy{Concurrency: 3, RenewBeforeSeconds: 15}}, BorrowSettings{Running: true}, "stop-slow-prefetch")
 			}()
 			select {
 			case <-done:
@@ -130,11 +130,20 @@ func TestTicketBorrowStoppedRoundCancelsSlowSources(t *testing.T) {
 
 type prefetchReleaseRepo struct {
 	*observationWorkerRepo
-	finishMu sync.Mutex
-	finishes []struct {
+	finishMu  sync.Mutex
+	published chan struct{}
+	finishes  []struct {
 		kind, reason string
 		liveContext  bool
 	}
+}
+
+func (r *prefetchReleaseRepo) Publish(ctx context.Context, route *BorrowRoute, lease string) error {
+	err := r.observationWorkerRepo.Publish(ctx, route, lease)
+	if err == nil && r.published != nil {
+		close(r.published)
+	}
+	return err
 }
 
 func (r *prefetchReleaseRepo) FinishJob(ctx context.Context, kind string, _ int64, _, reason string, _ time.Duration) error {
@@ -147,10 +156,10 @@ func (r *prefetchReleaseRepo) FinishJob(ctx context.Context, kind string, _ int6
 	return nil
 }
 
-func TestTicketBorrowSuccessfulPublicationCancelsSlowSpeculativeSources(t *testing.T) {
+func TestTicketBorrowPublicationPreservesPendingSourceWorkUntilItFinishes(t *testing.T) {
 	s, base := borrowFixture()
 	base.route = nil
-	r := &prefetchReleaseRepo{observationWorkerRepo: &observationWorkerRepo{borrowWorkerRepo: &borrowWorkerRepo{borrowTestRepo: base}}}
+	r := &prefetchReleaseRepo{observationWorkerRepo: &observationWorkerRepo{borrowWorkerRepo: &borrowWorkerRepo{borrowTestRepo: base}}, published: make(chan struct{})}
 	s.repo = r
 	u := &slowPrefetchUpstream{started: make(chan struct{}, 2), fallback: make(chan struct{})}
 	s.owner.httpUpstream = u
@@ -158,33 +167,25 @@ func TestTicketBorrowSuccessfulPublicationCancelsSlowSpeculativeSources(t *testi
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		s.runTarget(t.Context(), BorrowTarget{AcquisitionIdentity: BorrowAcquisitionSource, AccountID: 11, Revision: 2, ProbePolicy: BorrowProbePolicy{Concurrency: 3, RenewBeforeSeconds: 15}}, BorrowSettings{Running: true, TTLSeconds: 230}, "fast-winner")
+		s.runTarget(t.Context(), BorrowTarget{AcquisitionIdentity: BorrowAcquisitionSource, AccountID: 11, Revision: 2, ProbePolicy: BorrowProbePolicy{Concurrency: 3}}, BorrowSettings{Running: true}, "preserve-pending")
 	}()
 	select {
-	case <-done:
+	case <-r.published:
 	case <-time.After(2 * time.Second):
 		close(u.fallback)
 		<-done
-		t.Fatal("published route kept waiting for slow speculative source requests")
+		t.Fatal("no publication")
 	}
-	require.EqualValues(t, 2, u.cancelled.Load())
+	select {
+	case <-done:
+		t.Fatal("publication alone must not cancel other candidates")
+	default:
+	}
+	close(u.fallback)
+	<-done
+	require.Zero(t, u.cancelled.Load())
 	require.NotNil(t, base.route)
-	require.Equal(t, "chat.gateway.unified-3.api.openai.com", base.route.Gateway)
-	require.NoError(t, s.Check(t.Context(), 11, "gpt-6-astra", "http"), "batch cancellation must not revoke the published route")
-	counts := map[string]int{}
-	for _, finish := range r.finishes {
-		require.True(t, finish.liveContext)
-		counts[finish.kind+":"+finish.reason]++
-	}
-	require.Equal(t, 1, counts["target:target_probe_passed"])
-	require.Equal(t, 1, counts["source:source_cookie_acquired"])
-	require.Equal(t, 2, counts["source:source_acquisition_cancelled"])
-	for _, event := range base.events {
-		require.NotEqual(t, "source_failed", event.Reason)
-		if event.Reason == "source_acquisition_cancelled" {
-			require.Equal(t, "batch_success", event.Details.CancellationCause)
-		}
-	}
+	require.NoError(t, s.Check(t.Context(), 11, "gpt-6-astra", "http"))
 }
 
 func (r *stoppedPrefetchRepo) CheckAcquisition(ctx context.Context, a BorrowAcquisition) error {

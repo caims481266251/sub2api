@@ -12,7 +12,7 @@ type BorrowInventoryFacts struct {
 	Now                 time.Time
 	Count               int
 	EarliestExpiry      *time.Time
-	MinRemainingSeconds int
+	RenewalExpiry       *time.Time
 	RenewBeforeSeconds  int
 	LastStarted         *time.Time
 	LastState           string
@@ -21,6 +21,8 @@ type BorrowInventoryFacts struct {
 }
 
 type BorrowInventory struct {
+	PendingCount       int        `json:"pending_inventory_count"`
+	StoredCount        int        `json:"stored_inventory_count"`
 	Count              int        `json:"inventory_count"`
 	Desired            int        `json:"desired_inventory"`
 	State              string     `json:"maintenance_state"`
@@ -30,6 +32,7 @@ type BorrowInventory struct {
 	BlockedReason      string     `json:"blocked_reason,omitempty"`
 	ServerNow          time.Time  `json:"-"`
 	EarliestExpiry     *time.Time `json:"-"`
+	RenewalExpiry      *time.Time `json:"-"`
 }
 
 type BorrowInventoryRepository interface {
@@ -39,26 +42,31 @@ type BorrowInventoryRepository interface {
 	NeedsCandidate(context.Context, BorrowAcquisition, *time.Time) (bool, error)
 }
 
-func EvaluateBorrowInventory(f BorrowInventoryFacts, p *BorrowReplenishmentSettings) BorrowInventory {
-	out := BorrowInventory{Count: f.Count, Desired: 1, State: "search", NextAt: f.Now, ServerNow: f.Now, RefreshGeneration: f.RefreshGeneration}
-	if p != nil && p.Enabled {
-		out.Desired = BorrowRollingInventory
+func EvaluateBorrowInventory(f BorrowInventoryFacts, desired int) BorrowInventory {
+	out := BorrowInventory{Count: f.Count, Desired: DefaultBorrowRoutePoolSize, State: "search", NextAt: f.Now, ServerNow: f.Now, RefreshGeneration: f.RefreshGeneration}
+	if desired > 0 {
+		out.Desired = desired
 	}
 	if f.EarliestExpiry != nil {
 		out.EarliestExpiry = f.EarliestExpiry
 		out.EarliestAdmitUntil = f.EarliestExpiry
 	}
+	renewal := f.RenewalExpiry
+	if renewal == nil {
+		renewal = f.EarliestExpiry
+	}
+	out.RenewalExpiry = renewal
 	switch {
 	case f.Count == 0:
 	case f.Count < out.Desired:
 		out.State = "refill"
-	case f.EarliestExpiry != nil && !f.EarliestExpiry.Add(-time.Duration(f.RenewBeforeSeconds)*time.Second).After(f.Now):
+	case renewal != nil && !renewal.Add(-time.Duration(f.RenewBeforeSeconds)*time.Second).After(f.Now):
 		out.State = "renew"
 	default:
 		out.State = "healthy"
 	}
-	if out.State == "healthy" && f.EarliestExpiry != nil {
-		out.NextAt = f.EarliestExpiry.Add(-time.Duration(f.RenewBeforeSeconds) * time.Second)
+	if out.State == "healthy" && renewal != nil {
+		out.NextAt = renewal.Add(-time.Duration(f.RenewBeforeSeconds) * time.Second)
 	} else if f.LastStarted != nil && f.LastState == out.State {
 		out.NextAt = f.LastStarted.Add(time.Second)
 	}

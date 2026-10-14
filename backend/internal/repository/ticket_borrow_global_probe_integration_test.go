@@ -19,7 +19,6 @@ func TestTicketBorrowGlobalProbeInheritanceOverrideAndLiveLimits(t *testing.T) {
 	settings, err := r.Settings(ctx)
 	require.NoError(t, err)
 	require.Equal(t, 2, *settings.ProbeConcurrency)
-	require.Equal(t, 15, *settings.RenewBeforeSeconds)
 	for _, targetID := range []int64{id, other} {
 		target, e := r.Target(ctx, targetID)
 		require.NoError(t, e)
@@ -39,7 +38,7 @@ func TestTicketBorrowGlobalProbeInheritanceOverrideAndLiveLimits(t *testing.T) {
 		request.ID = uuid.NewString()
 		require.ErrorIs(t, r.BeginTargetRequest(ctx, request), service.ErrBorrowProbeBusy)
 	}
-	settings.ProbeConcurrency, settings.RenewBeforeSeconds = new(1), new(180)
+	settings.ProbeConcurrency = new(1)
 	require.NoError(t, r.SaveSettings(ctx, settings))
 	stale := settings
 	stale.ProbeConcurrency = new(8)
@@ -65,7 +64,7 @@ func TestTicketBorrowGlobalProbeInheritanceOverrideAndLiveLimits(t *testing.T) {
 	require.NoError(t, r.(service.BorrowProbePolicyRepository).SaveProbePolicy(ctx, other, policy))
 	settings, err = r.Settings(ctx)
 	require.NoError(t, err)
-	settings.ProbeConcurrency, settings.RenewBeforeSeconds = new(4), new(150)
+	settings.ProbeConcurrency = new(4)
 	require.NoError(t, r.SaveSettings(ctx, settings))
 	otherTarget, err = r.Target(ctx, other)
 	require.NoError(t, err)
@@ -95,12 +94,11 @@ func TestTicketBorrowGlobalProbeInheritanceOverrideAndLiveLimits(t *testing.T) {
 	// Older clients omitting the new globals preserve administrator settings.
 	settings, err = r.Settings(ctx)
 	require.NoError(t, err)
-	settings.ProbeConcurrency, settings.RenewBeforeSeconds = nil, nil
+	settings.ProbeConcurrency = nil
 	require.NoError(t, r.SaveSettings(ctx, settings))
 	settings, err = r.Settings(ctx)
 	require.NoError(t, err)
 	require.Equal(t, 4, *settings.ProbeConcurrency)
-	require.Equal(t, 15, *settings.RenewBeforeSeconds)
 }
 
 func TestTicketBorrowGlobalProbeMigrationPreservesAccountChoices(t *testing.T) {

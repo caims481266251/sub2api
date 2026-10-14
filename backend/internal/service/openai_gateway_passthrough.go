@@ -363,6 +363,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	var resp *http.Response
 	var usage *OpenAIUsage
 	var firstTokenMs *int
+	clientDisconnected := false
 	responseID := ""
 	imageCount := 0
 	var imageOutputSizes []string
@@ -402,13 +403,13 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			return nil, err
 		}
 		upstreamStart := time.Now()
-		resp, err = s.doOpenAIUpstream(upstreamReq, proxyURL, account)
+		resp, err = s.doOpenAIUpstreamWithKeepalive(c, reqStream, upstreamReq, proxyURL, account)
 		SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 		if err != nil {
 			if account.IsCopilotSDKEnabled() {
 				// Replaying a stateful turn after an ambiguous transport error can
 				// duplicate work. Let the client decide how to recover explicitly.
-				c.JSON(http.StatusBadGateway, gin.H{"error": gin.H{"type": "upstream_error", "message": "Copilot sidecar transport failed; request was not replayed"}})
+				writeOpenAIErrorJSON(c, http.StatusBadGateway, gin.H{"error": gin.H{"type": "upstream_error", "message": "Copilot sidecar transport failed; request was not replayed"}})
 				return nil, fmt.Errorf("copilot sidecar transport: %w", err)
 			}
 			// Transport-level failure (proxy/DNS/TCP/TLS — no HTTP response). Convert to
@@ -424,7 +425,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			if account.IsCopilotSDKEnabled() {
 				// In particular, 409 means a lost/foreign pending SDK turn, not a
 				// reason to fail over or rewrite fields and retry the request.
-				c.Data(resp.StatusCode, "application/json", probeBody)
+				writeOpenAIErrorBytes(c, resp.StatusCode, "application/json", probeBody)
 				return nil, fmt.Errorf("copilot sidecar rejected request: %d", resp.StatusCode)
 			}
 			if retryBody, reason, changed, retryErr := normalizeOpenAIResponsesRejectedFieldRetryBody(resp.StatusCode, body, probeBody); retryErr != nil {
@@ -490,6 +491,9 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 				effort = *reasoningEffort
 			}
 			result, handleErr := s.handleStreamingResponsePassthroughWithImage(ctx, resp, c, account, startTime, reqModel, upstreamPassthroughModel, imageBillingModel, effort)
+			if result != nil {
+				clientDisconnected = result.clientDisconnected
+			}
 			if handleErr != nil {
 				if retryBody, fallbackModel, retry := s.applyOpenAIPassthroughCompactFallbackFromSignal(
 					c, account, requestedModel, body, handleErr, compactModelFallbackRetried, resp,
@@ -515,7 +519,8 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 						RequestID: resp.Header.Get("x-request-id"), ResponseID: result.responseID,
 						Usage: *result.usage, Model: reqModel, UpstreamModel: upstreamPassthroughModel,
 						Stream: true, Duration: time.Since(startTime), FirstTokenMs: result.firstTokenMs,
-						ReasoningEffort: reasoningEffort, ImageCount: result.imageCount,
+						ClientDisconnect: result.clientDisconnected,
+						ReasoningEffort:  reasoningEffort, ImageCount: result.imageCount,
 						UpstreamHeaders: resp.Header, ResponseHeaders: resp.Header,
 						UpstreamResponseModel:         observedUpstreamResponseModel(c),
 						UpstreamResponseModelConflict: observedUpstreamResponseModelConflict(c),
@@ -595,6 +600,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		OpenAIWSMode:                  false,
 		Duration:                      time.Since(startTime),
 		FirstTokenMs:                  firstTokenMs,
+		ClientDisconnect:              clientDisconnected || OpenAIDownstreamDisconnected(c),
 	}
 	if imageCount > 0 {
 		forwardResult.ImageCount = imageCount
@@ -952,6 +958,10 @@ func writeOpenAIPassthroughErrorEnvelope(c *gin.Context, downstreamStatus int, u
 	if writeOpenAICompactSSEBridge(c, downstreamStatus, body) {
 		return
 	}
+	if StopOpenAICompactSSEKeepaliveCommitted(c) {
+		writeOpenAICompactSSEFailureMessage(c, downstreamStatus, "upstream_error", message)
+		return
+	}
 	writeOpenAIPassthroughErrorHeaders(c.Writer.Header(), upstreamHeaders)
 	c.Data(downstreamStatus, "application/json; charset=utf-8", body)
 }
@@ -1118,11 +1128,12 @@ func collectOpenAIPassthroughTimeoutHeaders(h http.Header) []string {
 }
 
 type openaiStreamingResultPassthrough struct {
-	usage            *OpenAIUsage
-	firstTokenMs     *int
-	responseID       string
-	imageCount       int
-	imageOutputSizes []string
+	usage              *OpenAIUsage
+	firstTokenMs       *int
+	clientDisconnected bool
+	responseID         string
+	imageCount         int
+	imageOutputSizes   []string
 }
 
 type openaiNonStreamingResultPassthrough struct {
@@ -2014,7 +2025,12 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 	ctx = requesttiming.ResponseContext(ctx, resp)
 	ttftMode := s.openAITTFTMode(ctx)
 	requesttiming.Mode(ctx, ttftMode)
-	clientDisconnected := false
+	clientDisconnected := OpenAIDownstreamDisconnected(c)
+	defer func() {
+		if clientDisconnected {
+			c.Set(openAIDownstreamDisconnectedKey, true)
+		}
+	}()
 	sawDone := false
 	sawTerminalEvent := false
 	sawFailedEvent := false
@@ -2141,6 +2157,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 	}
 	streamInterval := s.openAIPassthroughStreamDataInterval(imageBillingModel)
 	heartbeat := func() {
+		clientDisconnected = clientDisconnected || OpenAIDownstreamDisconnected(c)
 		if clientDisconnected || clientOutputStarted || failureDelivered {
 			return
 		}
@@ -2156,11 +2173,12 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 	needModelReplace := strings.TrimSpace(originalModel) != "" && strings.TrimSpace(mappedModel) != "" && strings.TrimSpace(originalModel) != strings.TrimSpace(mappedModel)
 	resultWithUsage := func() *openaiStreamingResultPassthrough {
 		return &openaiStreamingResultPassthrough{
-			usage:            usage,
-			firstTokenMs:     firstTokenMs,
-			responseID:       responseID,
-			imageCount:       imageCounter.Count(),
-			imageOutputSizes: imageCounter.Sizes(),
+			usage:              usage,
+			firstTokenMs:       firstTokenMs,
+			clientDisconnected: clientDisconnected || OpenAIDownstreamDisconnected(c),
+			responseID:         responseID,
+			imageCount:         imageCounter.Count(),
+			imageOutputSizes:   imageCounter.Sizes(),
 		}
 	}
 
@@ -2172,6 +2190,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 	upstreamReadCtx, releaseUpstreamReadCtx := openAIPassthroughContext(ctx, account)
 	defer releaseUpstreamReadCtx()
 	for documentScanner.Next(upstreamReadCtx, streamInterval, keepaliveCh, heartbeat) {
+		clientDisconnected = clientDisconnected || OpenAIDownstreamDisconnected(c)
 		line := documentScanner.Text()
 		if eventType, ok := extractOpenAISSEEventLine(line); ok {
 			pendingSSEEventType = eventType
@@ -2425,6 +2444,8 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 					// The timeout event is the terminal response. Tell the
 					// handler not to append a second failure event.
 					MarkResponseCommitted(c)
+				} else {
+					clientDisconnected = true
 				}
 			}
 			return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", err)
@@ -2456,6 +2477,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 		)
 		return resultWithUsage(), fmt.Errorf("stream read error: %w", err)
 	}
+	clientDisconnected = clientDisconnected || OpenAIDownstreamDisconnected(c)
 	if sawFailedEvent {
 		return resultWithUsage(), fmt.Errorf("upstream response failed: %s", failedMessage)
 	}

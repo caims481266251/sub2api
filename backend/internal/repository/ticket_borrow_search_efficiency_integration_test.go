@@ -71,6 +71,7 @@ func TestBorrowSearchCostIncludesFailuresAndResetsAtPublication(t *testing.T) {
 	require.GreaterOrEqual(t, observed, int64(100000))
 	route := poolCandidateRoute(a, c)
 	require.NoError(t, f.r.Publish(service.WithBorrowAcquisition(t.Context(), a), route, a.Lease))
+	passBorrowFixtureQuality(t)
 	require.NoError(t, integrationDB.QueryRow(`SELECT acquisition_duration_ms FROM ticket_borrow_targets WHERE account_id=$1`, a.TargetID).Scan(&observed))
 	require.GreaterOrEqual(t, observed, int64(100000), "quick successful candidate must not hide failed search time")
 	// A late failure from another candidate must start timing at the publication,

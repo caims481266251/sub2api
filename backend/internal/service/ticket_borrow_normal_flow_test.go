@@ -48,7 +48,7 @@ func TestBorrowNormalFlowAdmissionNeverSendsIneligibleAccounts(t *testing.T) {
 			}
 			up := &borrowStatusUpstream{}
 			s.owner.httpUpstream = up
-			_, _, err := s.acquireSource(borrowTestCandidateContext(t.Context()), r.source, BorrowSettings{TTLSeconds: 230})
+			_, _, err := s.acquireSource(borrowTestCandidateContext(t.Context()), r.source, BorrowSettings{})
 			require.Error(t, err)
 			require.Zero(t, up.calls, "invalid source must never reach transport")
 		})
@@ -76,7 +76,7 @@ func TestBorrowNormalFlowRechecksHealthAfterConnectionWait(t *testing.T) {
 				accounts.account = &a
 			}
 			s.owner.httpUpstream = up
-			_, _, err := s.acquireSource(borrowTestCandidateContext(t.Context()), r.source, BorrowSettings{TTLSeconds: 230})
+			_, _, err := s.acquireSource(borrowTestCandidateContext(t.Context()), r.source, BorrowSettings{})
 			require.Error(t, err)
 			require.Empty(t, up.calls, "connection acquisition must not authorize stale state")
 		})
@@ -161,7 +161,7 @@ func TestTicketBorrowBatchRefillsAfterSourceLeaseRace(t *testing.T) {
 	s.repo = r
 	up := &observationWorkerUpstream{}
 	s.owner.httpUpstream = up
-	s.runTarget(t.Context(), BorrowTarget{AcquisitionIdentity: BorrowAcquisitionSource, AccountID: 11, Revision: 2, ProbePolicy: BorrowProbePolicy{Concurrency: 1}}, BorrowSettings{Running: true, TTLSeconds: 230}, "refill")
+	s.runTarget(t.Context(), BorrowTarget{AcquisitionIdentity: BorrowAcquisitionSource, AccountID: 11, Revision: 2, ProbePolicy: BorrowProbePolicy{Concurrency: 1}}, BorrowSettings{Running: true}, "refill")
 	require.Equal(t, 1, up.sourceCalls)
 	require.NotNil(t, base.route)
 	require.Equal(t, int64(2), base.route.SourceID)

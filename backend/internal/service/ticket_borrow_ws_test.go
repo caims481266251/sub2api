@@ -90,7 +90,7 @@ func TestBorrowWSPreservesPayloadAndDrainsExpiredRoute(t *testing.T) {
 	require.Contains(t, d.headers[0].Get("Cookie"), "__oailb=donor-cookie")
 	require.NotContains(t, d.headers[0].Get("Cookie"), "__oailb=old")
 	require.Equal(t, req.Headers.Get("Authorization"), d.headers[0].Get("Authorization"))
-	require.Equal(t, req.Headers.Get("User-Agent"), d.headers[0].Get("User-Agent"))
+	require.Equal(t, repo.route.Secret.Fingerprint.UserAgent, d.headers[0].Get("User-Agent"))
 	require.Empty(t, d.proxies[0])
 	payload := json.RawMessage(`{"type":"response.create","model":"gpt-6-sol","reasoning":{"effort":"medium"},"input":"candy","stream":true,"prompt_cache_key":"preserve"}`)
 	require.NoError(t, lease.WriteJSONContext(t.Context(), payload))

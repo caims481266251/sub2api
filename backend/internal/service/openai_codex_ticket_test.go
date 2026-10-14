@@ -286,7 +286,7 @@ func TestHarvestOpenAICodexTicket_StopsAt292AndUsesHarvestProxy(t *testing.T) {
 	require.Empty(t, upstream.requests[0].Header.Get(openAICodexTurnStateHeader))
 	require.Equal(t, openAICodexAstraMinVersion, upstream.requests[0].Header.Get("version"))
 	require.Equal(t, HTTPUpstreamProfileOpenAIHarvest, HTTPUpstreamProfileFromContext(upstream.requests[0].Context()))
-	require.True(t, upstream.requests[0].Close)
+	require.False(t, upstream.requests[0].Close, "harvest requests must allow HTTP/2 connection reuse")
 }
 
 func TestHarvestOpenAICodexTicket_HTTP503DoesNotAbortHunt(t *testing.T) {
@@ -923,7 +923,7 @@ func TestDoOpenAIUpstream_BoundTicketUsesHarvestProxy(t *testing.T) {
 	require.False(t, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").Exists())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "client_metadata").Exists())
 	require.Equal(t, HTTPUpstreamProfileOpenAIHarvest, HTTPUpstreamProfileFromContext(upstream.lastReq.Context()))
-	require.True(t, upstream.lastReq.Close)
+	require.False(t, upstream.lastReq.Close)
 	require.NoError(t, resp.Body.Close())
 }
 

@@ -25,18 +25,16 @@ export interface BorrowProbeBatchInput {
  accounts: { account_id: number; revision: number }[]
  use_global?: boolean
  concurrency?: number
- renew_before_seconds?: number
 }
 export interface BorrowProbeBatchResult { account_id: number; status: 'saved' | 'failed'; reason?: string }
 export interface BorrowTarget {
  acquisition_identity?: 'self' | 'source'; acquisition_revision?: number
- inventory_count?: number; desired_inventory?: number; maintenance_state?: 'search' | 'refill' | 'renew' | 'healthy'; next_probe_at?: string; earliest_admit_until?: string; refresh_generation?: number; blocked_reason?: string
+ stored_inventory_count?: number; inventory_count?: number; desired_inventory?: number; maintenance_state?: 'search' | 'refill' | 'renew' | 'healthy'; next_probe_at?: string; earliest_admit_until?: string; refresh_generation?: number; blocked_reason?: string
 
  preferred_route_id?: string
  business_routes?: BorrowRouteStatus[]
  business_inflight?: number
  business_concurrency?: number
- replenishment?: { source_id: number; source_account_id: number; environment_version: number; until: string; next_at: string; attempts: number }
   probe_policy?: BorrowProbePolicy
   upstream_wait_until?: string; upstream_wait_reason?: string; budget_wait_until?: string
   cooldown_until?: string; cooldown_seconds?: number; recovery_level?: number; recovery_epoch?: number
@@ -47,15 +45,20 @@ export interface BorrowTarget {
  ready: boolean; phase: string; reason: string; gateway?: string
   expires_at?: string; usable_until?: string; server_now: string; next_attempt_at: string
 }
+export interface BorrowRouteQualityConfig { model: string; reasoning_effort: string; interval_seconds: number }
+export interface BorrowRouteQualityResult { status: string; model: string; reasoning_effort: string; answer?: string; reason?: string; http_status: number; checked_at: string; duration_ms: number }
 export interface BorrowRouteStatus {
+ available_slots?: number; unavailable_reason?: string
+ quality?: BorrowRouteQualityResult; quality_valid_until?: string
+ state?: 'normal' | 'pending_quality' | 'pending_probe' | 'cooling' | 'expired' | 'invalid'; generation?: number; dispatch_limit?: number
+ cooldown_until?: string; last_success_at?: string; last_business_success_at?: string; last_error_at?: string; last_error?: string
+ checking?: boolean; verification_model?: string; deadline_source?: string
  id: string; gateway: string; source_account_id: number; published_at?: string; checked_at?: string
  expires_at: string; usable_until: string
  inventory_eligible: boolean; usable: boolean; inflight: number
 }
 export interface BorrowRecoverySettings { enabled: boolean; failure_threshold: number; cooldown_seconds: number[]; probe_requests_per_minute: number; source_requests_per_minute?: number }
-export interface BorrowReplenishmentSettings { enabled: boolean; inventory: number; interval_seconds: number; hold_seconds: number; maintenance_interval_seconds?: number }
-export const defaultBorrowReplenishment = (): BorrowReplenishmentSettings => ({ enabled: false, inventory: 2, interval_seconds: 1, hold_seconds: 0 })
-export interface BorrowSettings { admission_window_seconds?: number; replenishment?: BorrowReplenishmentSettings; continue_timeout_seconds?: number; revision?:number; running: boolean; ttl_seconds: number; min_route_remaining_seconds?: number; probe_concurrency?: number; renew_before_seconds?: number; prewarm_seconds: number; recovery?: BorrowRecoverySettings; server_now?: string; source_budget?: { used: number; limit: number; available_at?: string } }
+export interface BorrowSettings { route_quality?: BorrowRouteQualityConfig; route_pool_size?: number; route_cooldown_seconds?: number; continue_timeout_seconds?: number; revision?:number; running: boolean; probe_concurrency?: number; recovery?: BorrowRecoverySettings; server_now?: string; source_budget?: { used: number; limit: number; available_at?: string } }
 export interface BorrowEnvironment {
   identity_hash?: string; profile_hash?: string; configured_proxy_hash?: string; client_version?: string; body_hash?: string
 }
@@ -136,12 +139,12 @@ export const ticketBorrowing = {
   setTarget: async (id: number, enabled: boolean, revision: number, acquisition_identity?: 'self' | 'source', acquisition_revision?: number) => (await apiClient.put<BorrowTarget>(`/admin/accounts/${id}/ticket-borrowing`, { enabled, revision, acquisition_identity, acquisition_revision })).data,
   refreshTarget: async (id: number) => apiClient.post(`/admin/accounts/${id}/ticket-borrowing/refresh`),
   settings: async () => (await apiClient.get<BorrowSettings>(`${base}/settings`)).data,
-  saveControls: async (value: { revision: number; running?: boolean; replenishment_enabled?: boolean }) => (await apiClient.patch<BorrowSettings>(`${base}/settings`, value)).data,
+  saveControls: async (value: { revision: number; running?: boolean }) => (await apiClient.patch<BorrowSettings>(`${base}/settings`, value)).data,
   saveSettings: async (value: BorrowSettings) => (await apiClient.put<BorrowSettings>(`${base}/settings`, {
     revision: value.revision, running: value.running,
-    admission_window_seconds: value.admission_window_seconds ?? Math.max(1, value.ttl_seconds - (value.min_route_remaining_seconds ?? 0)),
+    route_quality: value.route_quality, route_pool_size: value.route_pool_size, route_cooldown_seconds: value.route_cooldown_seconds,
     probe_concurrency: value.probe_concurrency, continue_timeout_seconds: value.continue_timeout_seconds,
-    recovery: value.recovery, replenishment: { enabled: value.replenishment?.enabled ?? false }
+    recovery: value.recovery
   })).data,
   events: async (query: BorrowEventQuery | number = {}) => (await apiClient.get<BorrowEvent[]>(`${base}/events`, { params: typeof query === 'number' ? { before: query } : query })).data
 }

@@ -1,6 +1,7 @@
 package tlsfingerprint
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"io"
@@ -12,6 +13,7 @@ import (
 
 	utls "github.com/refraction-networking/utls"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/net/http2"
 )
 
 func TestEffectiveProfilePreservesDialerSemantics(t *testing.T) {
@@ -28,10 +30,11 @@ func TestBorrowProfilesCompleteRealTLS12AndTLS13Handshakes(t *testing.T) {
 		t.Run(tls.VersionName(version), func(t *testing.T) {
 			observed := make(chan *tls.ClientHelloInfo, 1)
 			server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, "ok") }))
-			server.TLS = &tls.Config{MinVersion: version, MaxVersion: version, NextProtos: []string{"http/1.1"}, GetConfigForClient: func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+			server.TLS = &tls.Config{MinVersion: version, MaxVersion: version, NextProtos: []string{"h2"}, GetConfigForClient: func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
 				observed <- hello
 				return nil, nil
 			}}
+			server.EnableHTTP2 = true
 			server.StartTLS()
 			defer server.Close()
 			roots := x509.NewCertPool()
@@ -39,30 +42,35 @@ func TestBorrowProfilesCompleteRealTLS12AndTLS13Handshakes(t *testing.T) {
 			for range 64 {
 				p, err := NewBorrowProfile()
 				require.NoError(t, err)
-				conn, err := net.DialTimeout("tcp", server.Listener.Addr().String(), time.Second)
+				tr := &http.Transport{ForceAttemptHTTP2: true, DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+					conn, err := (&net.Dialer{Timeout: time.Second}).DialContext(ctx, network, addr)
+					if err != nil {
+						return nil, err
+					}
+					return handshakeFingerprint(ctx, conn, p, &utls.Config{ServerName: "example.com", RootCAs: roots})
+				}}
+				// Match the production transport registration, not just ALPN.
+				h2, err := http2.ConfigureTransports(tr)
 				require.NoError(t, err)
-				require.NoError(t, conn.SetDeadline(time.Now().Add(3*time.Second)))
-				client := utls.UClient(conn, &utls.Config{ServerName: "example.com", RootCAs: roots}, utls.HelloCustom)
-				require.NoError(t, client.ApplyPreset(buildClientHelloSpecFromProfile(p)))
-				err = client.HandshakeContext(t.Context())
-				if err != nil {
-					_ = conn.Close()
+				h2.ReadIdleTimeout, h2.PingTimeout = 15*time.Second, 15*time.Second
+				client := &http.Client{Transport: tr, Timeout: 3 * time.Second}
+				for range 2 {
+					resp, err := client.Get(server.URL)
+					require.NoError(t, err)
+					body, err := io.ReadAll(resp.Body)
+					_ = resp.Body.Close()
+					require.NoError(t, err)
+					require.Equal(t, "ok", string(body))
+					require.Equal(t, 2, resp.ProtoMajor)
+					require.Equal(t, version, resp.TLS.Version)
+					require.Equal(t, "h2", resp.TLS.NegotiatedProtocol)
 				}
-				require.NoError(t, err)
-				state := client.ConnectionState()
-				require.Equal(t, version, state.Version)
-				require.Equal(t, "http/1.1", state.NegotiatedProtocol)
 				hello := <-observed
 				require.Equal(t, p.CipherSuites, hello.CipherSuites)
 				require.Equal(t, p.SupportedVersions, hello.SupportedVersions)
 				require.Equal(t, p.ALPNProtocols, hello.SupportedProtos)
-				_, err = io.WriteString(client, "GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n")
-				require.NoError(t, err)
-				body, err := io.ReadAll(client)
-				_ = client.Close()
-				require.NoError(t, err)
-				require.Contains(t, string(body), "200 OK")
-				require.Contains(t, string(body), "\r\n\r\nok")
+				require.Empty(t, observed, "both requests reuse one actual H2 connection")
+				tr.CloseIdleConnections()
 			}
 		})
 	}

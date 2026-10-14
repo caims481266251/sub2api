@@ -12,12 +12,12 @@ import (
 	"github.com/google/uuid"
 )
 
-const BorrowFingerprintGenerator = "borrow-h1-v2"
+const BorrowFingerprintGenerator = "borrow-h2-v3"
 
 var ErrBorrowFingerprintInvalid = errors.New("borrow_fingerprint_invalid")
 
 // BorrowFingerprint is an immutable snapshot for one acquisition candidate.
-// Acquisition and target verification share it; business never inherits it.
+// Acquisition, target verification and routed requests share the snapshot.
 type BorrowFingerprint struct {
 	Generator  string                  `json:"generator"`
 	DeviceID   string                  `json:"device_id"`

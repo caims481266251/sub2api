@@ -247,7 +247,12 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 	// 注意：OpenAI `/v1/responses` streaming 事件必须符合 OpenAI Responses schema；
 	// 否则下游 SDK（例如 OpenCode）会因为类型校验失败而报错。
 	errorEventSent := false
-	clientDisconnected := false // 客户端断开后继续 drain 上游以收集 usage
+	clientDisconnected := OpenAIDownstreamDisconnected(c) // Continue draining upstream for usage.
+	defer func() {
+		if clientDisconnected {
+			c.Set(openAIDownstreamDisconnectedKey, true)
+		}
+	}()
 	sawTerminalEvent := false
 	sawFailedEvent := false
 	sawBareError := false
@@ -381,6 +386,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		lastDownstreamWriteAt = time.Now()
 	}
 	finalizeStream := func() (*openaiStreamingResult, error) {
+		clientDisconnected = clientDisconnected || OpenAIDownstreamDisconnected(c)
 		if stageFirstOutput && eventInProgress {
 			// EOF dispatches the final SSE event even without a trailing blank line.
 			completeGuardedEvent(true)
@@ -489,6 +495,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		return resultWithUsage(), fmt.Errorf("stream read error: %w", scanErr), true
 	}
 	processSSELine := func(line string, queueDrained bool) {
+		clientDisconnected = clientDisconnected || OpenAIDownstreamDisconnected(c)
 		if streamEarlyErr != nil {
 			return
 		}
@@ -622,7 +629,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 							s.recordOpenAIStreamUpstreamError(c, account, false, upstreamRequestID, "http_error", dataBytes, failedMessage)
 							MarkResponseCommitted(c)
 							c.Writer.Header().Set("Content-Type", "application/json; charset=utf-8")
-							c.JSON(status, gin.H{
+							writeOpenAIErrorJSON(c, status, gin.H{
 								"error": gin.H{
 									"type":    errType,
 									"message": errMsg,
@@ -988,6 +995,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			)
 
 		case <-keepaliveCh:
+			clientDisconnected = clientDisconnected || OpenAIDownstreamDisconnected(c)
 			if clientDisconnected || failureDelivered {
 				continue
 			}
@@ -1983,13 +1991,13 @@ func (s *OpenAIGatewayService) writeOpenAINonStreamingProtocolError(resp *http.R
 	setOpsUpstreamError(c, http.StatusBadGateway, message, "")
 	// body-signal compact 心跳可能已把响应头提交为 200，此时只能以
 	// response.failed 终止事件回传错误，不能再写 JSON+状态码。
-	if openAICompactClientWantsStream(c) && StopOpenAICompactSSEKeepaliveCommitted(c) {
+	if StopOpenAICompactSSEKeepaliveCommitted(c) {
 		writeOpenAICompactSSEFailureMessage(c, http.StatusBadGateway, "upstream_error", message)
 		return fmt.Errorf("non-streaming openai protocol error: %s", message)
 	}
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	c.Writer.Header().Set("Content-Type", "application/json; charset=utf-8")
-	c.JSON(http.StatusBadGateway, gin.H{
+	writeOpenAIErrorJSON(c, http.StatusBadGateway, gin.H{
 		"error": gin.H{
 			"type":    "upstream_error",
 			"message": message,

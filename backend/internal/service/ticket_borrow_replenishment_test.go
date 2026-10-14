@@ -26,8 +26,7 @@ func (r *candidateFlowRepo) Sources(ctx context.Context) ([]BorrowSource, error)
 	return r.borrowWorkerRepo.Sources(ctx)
 }
 func (r *candidateFlowRepo) Settings(context.Context) (BorrowSettings, error) {
-	w := 80
-	return BorrowSettings{Running: true, AdmissionWindowSeconds: &w, Replenishment: &BorrowReplenishmentSettings{Enabled: r.rolling}}, nil
+	return BorrowSettings{Running: true}, nil
 }
 func (r *candidateFlowRepo) Publish(_ context.Context, route *BorrowRoute, _ string) error {
 	r.published = append(r.published, route)
@@ -77,10 +76,7 @@ func TestTicketBorrowFreshSelfCandidatesWithRollingOffAndOn(t *testing.T) {
 			up := &candidateFlowUpstream{}
 			s.owner.httpUpstream = up
 			settings, _ := r.Settings(t.Context())
-			expected := 1
-			if rolling {
-				expected = 2
-			}
+			expected := 2
 			for range 2 {
 				s.runTarget(t.Context(), BorrowTarget{AccountID: 11, Revision: 2, ProbePolicy: BorrowProbePolicy{Concurrency: 2}}, settings, "fresh-self")
 			}
@@ -92,7 +88,7 @@ func TestTicketBorrowFreshSelfCandidatesWithRollingOffAndOn(t *testing.T) {
 				require.EqualValues(t, 11, route.AcquisitionAccountID)
 				require.Equal(t, BorrowAcquisitionSelf, route.AcquisitionIdentity)
 				require.NotNil(t, route.AcquisitionStartedAt)
-				require.Equal(t, route.AcquisitionStartedAt.Add(80*1e9), route.AdmissionUntil)
+				require.Equal(t, route.ExpiresAt, route.AdmissionUntil)
 				env := r.environments[route.CandidateID]
 				require.NotNil(t, env)
 				require.Empty(t, devices[env.Fingerprint.DeviceID])

@@ -259,8 +259,9 @@ gateway:
   # Grok 文本 Responses 首字节超时时间（秒，0=禁用；默认 120）
   grok_response_header_timeout: 120
   # Borrowing-target HTTP business recovery: initial attempt + at most one recovery.
-  # 上游 429 不做内部重试；首次失败需在 15 秒内，恢复等待首个有效输出最多 30 秒。
-  # true restores legacy retry scheduling (transport freshness remains enabled).
+  # 明确失败后 15 秒内可发起一次恢复（含 429），选路/排队/发送前等待最多 30 秒。
+  # 已进入 HTTP 写入后解除恢复等待计时；同目标/共享限制遵守 Retry-After。
+  # true restores legacy retry scheduling.
   borrow_business_recovery_disabled: false
   borrow_business_retry_window_seconds: 15 # 1-60; 0 uses default 15
   borrow_business_recovery_timeout_seconds: 30 # 30-120; 0 uses default 30
@@ -503,6 +504,10 @@ gateway:
   # OpenAI HTTP 上游协议策略（默认 HTTP/2；代理明确不兼容时可临时回退 HTTP/1.1）。
   openai_http2:
     enabled: true
+    # Exact upstream hostnames that should use HTTP/1.1. Empty keeps HTTP/2.
+    # 单独验证某个普通上游时可设置 ["yumitu.com"]，不影响其他域名。
+    # 不匹配子域名或 URL；仅影响共享 HTTP 传输，插件/区域出口保留自身协议。
+    http1_hosts: []
     allow_proxy_fallback_to_http1: true
     fallback_error_threshold: 2
     fallback_window_seconds: 60

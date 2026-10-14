@@ -4,7 +4,7 @@ import TicketBorrowingView from '../TicketBorrowingView.vue'
 const api=vi.hoisted(()=>({statistics:vi.fn(),saveControls:vi.fn(),target:vi.fn(),setTarget:vi.fn(),rotations:vi.fn(),rotate:vi.fn(),saveRotationPolicy:vi.fn(),saveRotationPolicies:vi.fn(),saveProbePolicy:vi.fn(),saveProbePolicies:vi.fn(),sources:vi.fn(),targets:vi.fn(),settings:vi.fn(),events:vi.fn(),selection:vi.fn(),sourceOptions:vi.fn(),saveSelection:vi.fn(),restoreSources:vi.fn(),saveSettings:vi.fn(),refreshTarget:vi.fn(),scanTarget:vi.fn()}))
 const notifications = vi.hoisted(() => ({ showSuccess: vi.fn(), showError: vi.fn(), showWarning: vi.fn() }))
 vi.mock('@/stores/app', () => ({ useAppStore: () => notifications }))
-vi.mock('@/api/admin/ticketBorrowing',()=>({ticketBorrowing:api,defaultBorrowReplenishment:()=>({enabled:false,inventory:2,interval_seconds:1,hold_seconds:0})}))
+vi.mock('@/api/admin/ticketBorrowing',()=>({ticketBorrowing:api}))
 const navigation = vi.hoisted(() => ({ route: { query: {} as Record<string, string> }, replace: vi.fn(), push: vi.fn() }))
 vi.mock('vue-router',async importOriginal=>({...await importOriginal<typeof import('vue-router')>(),useRoute:()=>navigation.route,useRouter:()=>({replace:navigation.replace,push:navigation.push}),onBeforeRouteLeave:vi.fn()}))
 vi.mock('@/api/admin/usageTiming',()=>({getUsageTiming:vi.fn().mockResolvedValue({traces:[]})}))
@@ -17,7 +17,7 @@ const mountPage=()=>mount(TicketBorrowingView,{global:{stubs:{BaseDialog:{props:
 const openScope = async (w: ReturnType<typeof mountPage>) => { await w.get('[data-tab="sources"]').trigger('click'); await w.get('[data-testid="manage-sources"]').trigger('click') }
 const closeDrawer = async (w: ReturnType<typeof mountPage>) => { await w.get('[data-close-drawer]').trigger('click') }
 const openTarget = async (w: ReturnType<typeof mountPage>, id = 11) => { await w.get(`[data-target-open="${id}"]`).trigger('click') }
-beforeEach(()=>{sessionStorage.clear(); navigation.route.query = {}; vi.clearAllMocks(); api.statistics.mockResolvedValue(undefined); api.saveControls.mockImplementation(async input=>{const current=await api.settings();const value={...current,revision:(current.revision ?? 0)+1,...(input.running !== undefined ? {running:input.running} : {}),replenishment:{enabled:false,inventory:2,interval_seconds:1,hold_seconds:0,...current.replenishment,...(input.replenishment_enabled !== undefined ? {enabled:input.replenishment_enabled} : {})}};api.settings.mockResolvedValue(value);return value});api.rotations.mockResolvedValue([]);api.rotate.mockResolvedValue({id:"test",phase:"draining"});api.saveRotationPolicy.mockResolvedValue([]);api.sources.mockResolvedValue([]);api.targets.mockResolvedValue([]);api.events.mockResolvedValue([]);api.settings.mockResolvedValue({revision:1,running:false,admission_window_seconds:80,ttl_seconds:80,prewarm_seconds:0});api.selection.mockResolvedValue(config());api.sourceOptions.mockResolvedValue({accounts:[account(12,[2]),account(13,[2]),account(14,[]),account(11,[2],true)],groups:[{id:2,name:'VIP'}],legacy_count:0,restorable_count:0});api.saveSelection.mockImplementation(async value=>({...value,revision:4}));api.saveSettings.mockImplementation(async value=>({...value,revision:2}));api.refreshTarget.mockResolvedValue({});api.scanTarget.mockResolvedValue({})})
+beforeEach(()=>{sessionStorage.clear(); navigation.route.query = {}; vi.clearAllMocks(); api.statistics.mockResolvedValue(undefined); api.saveControls.mockImplementation(async input=>{const current=await api.settings();const value={...current,revision:(current.revision ?? 0)+1,...(input.running !== undefined ? {running:input.running} : {})};api.settings.mockResolvedValue(value);return value});api.rotations.mockResolvedValue([]);api.rotate.mockResolvedValue({id:"test",phase:"draining"});api.saveRotationPolicy.mockResolvedValue([]);api.sources.mockResolvedValue([]);api.targets.mockResolvedValue([]);api.events.mockResolvedValue([]);api.settings.mockResolvedValue({revision:1,running:false,route_pool_size:4,route_cooldown_seconds:120});api.selection.mockResolvedValue(config());api.sourceOptions.mockResolvedValue({accounts:[account(12,[2]),account(13,[2]),account(14,[]),account(11,[2],true)],groups:[{id:2,name:'VIP'}],legacy_count:0,restorable_count:0});api.saveSelection.mockImplementation(async value=>({...value,revision:4}));api.saveSettings.mockImplementation(async value=>({...value,revision:2}));api.refreshTarget.mockResolvedValue({});api.scanTarget.mockResolvedValue({})})
 describe('normal account borrowing selection',()=>{
  it('merges groups and individually selected accounts without duplicates and preserves model overrides',async()=>{
   api.selection.mockResolvedValue({...config(),model_overrides:{12:'gpt-6-sol'}})
@@ -39,7 +39,7 @@ describe('normal account borrowing selection',()=>{
   const w=mountPage();await flushPromises();await openScope(w);await w.get('[data-account-id="14"]').setValue(true); await w.get('[data-testid="scope-add"]').trigger('click');await w.get('form').trigger('submit');await flushPromises();expect(w.find('[data-source-account-id="14"]').exists()).toBe(true);expect(w.get('[role="alert"]').text()).toContain('borrow_configuration_conflict');w.unmount()
  })
  it('does not offer credential import and requires paused acquisition for ownership restoration',async()=>{
-  api.sourceOptions.mockResolvedValue({accounts:[],groups:[],legacy_count:50,restorable_count:50});api.settings.mockResolvedValue({running:true,ttl_seconds:230,prewarm_seconds:60})
+  api.sourceOptions.mockResolvedValue({accounts:[],groups:[],legacy_count:50,restorable_count:50});api.settings.mockResolvedValue({running:true,route_pool_size: 230, route_cooldown_seconds:120})
   const w=mountPage();await flushPromises();await openScope(w);expect(w.find('textarea').exists()).toBe(false);const restore=w.findAll('button').find(b=>b.text().startsWith('ticketBorrowing.restore{'))!;expect(restore.attributes('disabled')).toBeDefined();expect(api.restoreSources).not.toHaveBeenCalled();w.unmount()
  })
 })
@@ -61,19 +61,19 @@ describe('borrowing configuration workflow', () => {
   w.unmount()
  })
 
- it('saves the admission window and independent advanced concurrency', async () => {
+ it('saves the route pool size and independent advanced concurrency', async () => {
   const w = mountPage(); await flushPromises(); await w.get('[data-testid="open-settings"]').trigger('click')
   expect((w.get('[data-testid="global-probe-concurrency"]').element as HTMLInputElement).value).toBe('2')
-  expect((w.get('[data-testid="admission-window"]').element as HTMLInputElement).value).toBe('80')
+  expect((w.get('[data-testid="route-pool-size"]').element as HTMLInputElement).value).toBe('4')
   await w.get('[data-testid="global-probe-concurrency"]').setValue(4)
-  await w.get('[data-testid="admission-window"]').setValue(90)
+  await w.get('[data-testid="route-pool-size"]').setValue(90)
   await refresh(w)
   expect((w.get('[data-testid="global-probe-concurrency"]').element as HTMLInputElement).value).toBe('4')
   await w.get('form').trigger('submit'); await flushPromises()
-  expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ probe_concurrency: 4, admission_window_seconds: 90 }))
+  expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ probe_concurrency: 4, route_pool_size: 90 }))
   w.unmount()
  })
- it.each([['global-probe-concurrency', 0], ['global-probe-concurrency', 33], ['global-probe-concurrency', 1.5], ['admission-window', 0], ['admission-window', 241], ['admission-window', 1.5]])('rejects invalid global %s = %s', async (field, value) => {
+ it.each([['global-probe-concurrency', 0], ['global-probe-concurrency', 33], ['global-probe-concurrency', 1.5], ['route-pool-size', 0], ['route-pool-size', 257], ['route-pool-size', 1.5]])('rejects invalid global %s = %s', async (field, value) => {
   const w = mountPage(); await flushPromises(); await w.get('[data-testid="open-settings"]').trigger('click')
   await w.get(`[data-testid="${field}"]`).setValue(value)
   expect(w.get('[data-testid="settings-save"]').attributes('disabled')).toBeDefined()
@@ -81,26 +81,26 @@ describe('borrowing configuration workflow', () => {
   expect(api.saveSettings).not.toHaveBeenCalled()
   w.unmount()
  })
- it('saves the global admission window and preserves its draft across refresh', async () => {
+ it('saves the global route pool size and preserves its draft across refresh', async () => {
   const w = mountPage(); await flushPromises(); await w.get('[data-testid="open-settings"]').trigger('click')
-  expect((w.get('[data-testid="admission-window"]').element as HTMLInputElement).value).toBe('80')
-  await w.get('[data-testid="admission-window"]').setValue(90)
+  expect((w.get('[data-testid="route-pool-size"]').element as HTMLInputElement).value).toBe('4')
+  await w.get('[data-testid="route-pool-size"]').setValue(90)
   await refresh(w)
-  expect((w.get('[data-testid="admission-window"]').element as HTMLInputElement).value).toBe('90')
+  expect((w.get('[data-testid="route-pool-size"]').element as HTMLInputElement).value).toBe('90')
   expect(w.get('[data-testid="settings-save"]').attributes('disabled')).toBeUndefined()
   await w.get('form').trigger('submit'); await flushPromises()
-  expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ admission_window_seconds: 90 }))
+  expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ route_pool_size: 90 }))
   w.unmount()
  })
- it.each([-1, 120.5, 241, ''])('rejects an invalid global admission window: %s', async value => {
+ it.each([-1, 120.5, 257, ''])('rejects an invalid global route pool size: %s', async value => {
   const w = mountPage(); await flushPromises(); await w.get('[data-testid="open-settings"]').trigger('click')
-  await w.get('[data-testid="admission-window"]').setValue(value)
+  await w.get('[data-testid="route-pool-size"]').setValue(value)
   expect(w.get('[data-testid="settings-save"]').attributes('disabled')).toBeDefined()
   await w.get('form').trigger('submit'); await flushPromises()
   expect(api.saveSettings).not.toHaveBeenCalled()
   w.unmount()
  })
- it('shows only the admission window and collapses advanced resource limits', async () => {
+ it('shows only the route pool size and collapses advanced resource limits', async () => {
   const w = mountPage(); await flushPromises(); await w.get('[data-testid="open-settings"]').trigger('click')
   expect(w.find('[data-testid="ttl"]').exists()).toBe(false)
   expect(w.find('[data-testid="min-route-remaining"]').exists()).toBe(false)
@@ -112,11 +112,11 @@ describe('borrowing configuration workflow', () => {
   const w = mountPage(); await flushPromises(); await openScope(w)
   await w.get('[data-account-id="14"]').setValue(true); await w.get('[data-testid="scope-add"]').trigger('click')
   await w.get('[data-testid="open-settings"]').trigger('click')
-  await w.get('[data-testid="admission-window"]').setValue(200)
+  await w.get('[data-testid="route-pool-size"]').setValue(200)
   api.selection.mockResolvedValue({...config(), revision: 4, account_ids: [13]})
-  api.settings.mockResolvedValue({revision: 2, running: true, ttl_seconds: 220, prewarm_seconds: 60})
+  api.settings.mockResolvedValue({revision: 2, running: true, route_pool_size: 220, route_cooldown_seconds:120})
   await refresh(w)
-  expect((w.get('[data-testid="admission-window"]').element as HTMLInputElement).value).toBe('200')
+  expect((w.get('[data-testid="route-pool-size"]').element as HTMLInputElement).value).toBe('200')
   expect(w.text()).toContain('ticketBorrowing.remoteChange')
   await w.get('[data-tab="sources"]').trigger('click'); await openScope(w)
   expect(w.find('[data-source-account-id="14"]').exists()).toBe(true)
@@ -130,14 +130,14 @@ describe('borrowing configuration workflow', () => {
  it('saving sources does not discard an unsaved settings draft', async () => {
   const w = mountPage(); await flushPromises(); await openScope(w)
   await w.get('[data-testid="open-settings"]').trigger('click')
-  await w.get('[data-testid="admission-window"]').setValue(200)
+  await w.get('[data-testid="route-pool-size"]').setValue(200)
   await w.get('[data-tab="sources"]').trigger('click'); await openScope(w)
   await w.get('[data-account-id="14"]').setValue(true); await w.get('[data-testid="scope-add"]').trigger('click')
   api.selection.mockResolvedValue({...config(), revision: 4, account_ids: [14]})
   await w.get('form').trigger('submit'); await flushPromises()
   expect(api.saveSelection).toHaveBeenCalledOnce()
   await w.get('[data-testid="open-settings"]').trigger('click')
-  expect((w.get('[data-testid="admission-window"]').element as HTMLInputElement).value).toBe('200')
+  expect((w.get('[data-testid="route-pool-size"]').element as HTMLInputElement).value).toBe('200')
   expect(w.text()).toContain('ticketBorrowing.unsavedHint')
   w.unmount()
  })
@@ -145,8 +145,8 @@ describe('borrowing configuration workflow', () => {
   const w = mountPage(); await flushPromises(); await openScope(w)
   await w.get('[data-account-id="14"]').setValue(true); await w.get('[data-testid="scope-add"]').trigger('click')
   await w.get('[data-testid="open-settings"]').trigger('click')
-  await w.get('[data-testid="admission-window"]').setValue(200)
-  api.settings.mockResolvedValue({revision: 2, running: false, ttl_seconds: 200, prewarm_seconds: 60})
+  await w.get('[data-testid="route-pool-size"]').setValue(200)
+  api.settings.mockResolvedValue({revision: 2, running: false, route_pool_size: 200, route_cooldown_seconds:120})
   await w.get('form').trigger('submit'); await flushPromises()
   expect(api.saveSettings).toHaveBeenCalledOnce()
   await w.get('[data-tab="sources"]').trigger('click'); await openScope(w)
@@ -246,7 +246,7 @@ describe('independent request budgets', () => {
  })
  it('shows saved source usage independently of the edited limit and rejects fractional limits', async () => {
   const now = Date.now()
-  api.settings.mockResolvedValue({ revision: 1, running: true, ttl_seconds: 230, prewarm_seconds: 0, source_budget: { used: 12, limit: 12, available_at: new Date(now + 45000).toISOString() }, server_now: new Date(now).toISOString() })
+  api.settings.mockResolvedValue({ revision: 1, running: true, route_pool_size: 230, route_cooldown_seconds:120, source_budget: { used: 12, limit: 12, available_at: new Date(now + 45000).toISOString() }, server_now: new Date(now).toISOString() })
   const w = mountPage(); await flushPromises(); await openScope(w); await w.get('[data-testid="open-settings"]').trigger('click')
   expect(w.get('[data-testid="source-budget-status"]').text()).toContain('12 / 12')
   expect(w.get('[data-testid="source-budget-status"]').text()).toContain('ticketBorrowing.budgetWaitRemaining')
@@ -258,7 +258,7 @@ describe('independent request budgets', () => {
   w.unmount()
  })
  it('fills the source default for older settings without losing the target limit', async () => {
-  api.settings.mockResolvedValue({ revision:1, running:false, ttl_seconds:230, prewarm_seconds:0, recovery:{enabled:false,failure_threshold:0,cooldown_seconds:[],probe_requests_per_minute:9} })
+  api.settings.mockResolvedValue({ revision:1, running:false, route_pool_size: 230, route_cooldown_seconds:120, recovery:{enabled:false,failure_threshold:0,cooldown_seconds:[],probe_requests_per_minute:9} })
   const w=mountPage();await flushPromises();await openScope(w);await w.get('[data-testid="open-settings"]').trigger('click')
   expect((w.get('[data-testid="probe-budget"]').element as HTMLInputElement).value).toBe('9')
   expect((w.get('[data-testid="source-budget"]').element as HTMLInputElement).value).toBe('12')
@@ -376,10 +376,10 @@ describe('policy and history maintenance', () => {
    vi.useRealTimers()
   }
  })
- it.each([0, 240.5, 241])('rejects invalid admission window %s before calling the settings API', async value => {
+ it.each([0, 240.5, 257])('rejects invalid route pool size %s before calling the settings API', async value => {
   const w=mountPage(); await flushPromises(); await w.get('[data-testid="open-settings"]').trigger('click')
-  await w.get('[data-testid="admission-window"]').setValue(value)
-  expect(w.get('[data-testid="admission-window"]').attributes('aria-invalid')).toBe('true')
+  await w.get('[data-testid="route-pool-size"]').setValue(value)
+  expect(w.get('[data-testid="route-pool-size"]').attributes('aria-invalid')).toBe('true')
   expect(w.get('[data-testid="settings-save"]').attributes('disabled')).toBeDefined()
   await w.get('form').trigger('submit'); await flushPromises()
   expect(api.saveSettings).not.toHaveBeenCalled()
@@ -540,14 +540,22 @@ describe('continuation request timeout policy', () => {
 })
 
 
-describe('automatic replenishment controls', () => {
- it('defaults off and exposes no environment retention or maintenance parameters', async () => {
+describe('available route pool settings', () => {
+ it('uses one refill target and cooldown without the old rolling toggle', async () => {
   const w = mountPage(); await flushPromises(); await w.get('[data-testid="open-settings"]').trigger('click')
-  expect(w.get('[data-testid="replenishment-enabled"]').attributes('aria-checked')).toBe('false')
-  for (const id of ['replenishment-hold','replenishment-interval','replenishment-maintenance','replenishment-inventory']) expect(w.find(`#${id}`).exists()).toBe(false)
-  await w.get('[data-testid="replenishment-enabled"]').trigger('click'); await flushPromises(); await refresh(w)
-  expect(w.get('[data-testid="replenishment-enabled"]').attributes('aria-checked')).toBe('true')
-  expect(api.saveControls).toHaveBeenCalledWith({revision:1,replenishment_enabled:true})
+  for (const id of ['replenishment-enabled', 'admission-window', 'replenishment-hold', 'replenishment-interval', 'replenishment-maintenance', 'replenishment-inventory']) expect(w.find(`[data-testid="${id}"]`).exists()).toBe(false)
+  expect((w.get('[data-testid="route-pool-size"]').element as HTMLInputElement).value).toBe('4')
+  expect((w.get('[data-testid="route-cooldown"]').element as HTMLInputElement).value).toBe('120')
+  await w.get('[data-testid="route-cooldown"]').setValue(180)
+  await w.get('form').trigger('submit'); await flushPromises()
+  expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({route_pool_size:4,route_cooldown_seconds:180}))
+  expect(api.saveControls).not.toHaveBeenCalled()
+  w.unmount()
+ })
+ it.each([0, 86401, 1.5, ''])('rejects invalid route cooldown %s', async value => {
+  const w = mountPage(); await flushPromises(); await w.get('[data-testid="open-settings"]').trigger('click')
+  await w.get('[data-testid="route-cooldown"]').setValue(value)
+  await w.get('form').trigger('submit'); await flushPromises()
   expect(api.saveSettings).not.toHaveBeenCalled()
   w.unmount()
  })
@@ -639,14 +647,14 @@ describe('direct controls and server history', () => {
   const w=mountPage(); await flushPromises()
   expect(w.get('[data-tab="targets"]').attributes('aria-current')).toBe('page')
   await w.get('[data-testid="open-settings"]').trigger('click')
-  await w.get('[data-testid="admission-window"]').setValue(0)
+  await w.get('[data-testid="route-pool-size"]').setValue(0)
   await w.get('[data-testid="background-running"]').trigger('click'); await flushPromises()
   expect(api.saveControls).toHaveBeenCalledWith({revision:1,running:true})
   expect(api.saveSettings).not.toHaveBeenCalled()
-  expect((w.get('[data-testid="admission-window"]').element as HTMLInputElement).value).toBe('0')
-  await w.get('[data-testid="admission-window"]').setValue(200)
+  expect((w.get('[data-testid="route-pool-size"]').element as HTMLInputElement).value).toBe('0')
+  await w.get('[data-testid="route-pool-size"]').setValue(200)
   await w.get('[data-testid="borrow-settings"]').trigger('submit'); await flushPromises()
-  expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({revision:2,running:true,admission_window_seconds:200}))
+  expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({revision:2,running:true,route_pool_size:200}))
   w.unmount()
  })
  it('polls the target summary on the source tab and marks a failed refresh as stale', async () => {
@@ -716,16 +724,16 @@ describe('direct controls and server history', () => {
 describe('configuration conflict detail', () => {
  it('shows server and draft values and retains the draft until discarded', async () => {
   const w = mountPage(); await flushPromises(); await w.get('[data-testid="open-settings"]').trigger('click')
-  await w.get('[data-testid="admission-window"]').setValue(210)
-  api.settings.mockResolvedValue({ revision: 2, running: false, admission_window_seconds: 220, ttl_seconds: 220, prewarm_seconds: 0 })
+  await w.get('[data-testid="route-pool-size"]').setValue(210)
+  api.settings.mockResolvedValue({ revision: 2, running: false, route_pool_size: 220, route_cooldown_seconds:120 })
   await refresh(w)
   const diff = w.get('[data-testid="settings-conflict-diff"]')
   expect(diff.text()).toContain('210'); expect(diff.text()).toContain('220')
   expect(w.get('[data-testid="settings-save"]').attributes('disabled')).toBeDefined()
-  expect((w.get('[data-testid="admission-window"]').element as HTMLInputElement).value).toBe('210')
+  expect((w.get('[data-testid="route-pool-size"]').element as HTMLInputElement).value).toBe('210')
   await w.get('[data-testid="settings-revert"]').trigger('click')
   expect(w.find('[data-testid="settings-conflict-diff"]').exists()).toBe(false)
-  expect((w.get('[data-testid="admission-window"]').element as HTMLInputElement).value).toBe('220')
+  expect((w.get('[data-testid="route-pool-size"]').element as HTMLInputElement).value).toBe('220')
   w.unmount()
  })
 })

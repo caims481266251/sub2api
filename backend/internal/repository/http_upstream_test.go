@@ -694,16 +694,16 @@ func (s *HTTPUpstreamSuite) TestOpenAIProfileHTTP2DisabledUsesHTTP1Transport() {
 	require.Equal(s.T(), upstreamProtocolModeOpenAIH1, entry.protocolMode)
 }
 
-func (s *HTTPUpstreamSuite) TestOpenAIHarvestProfileDisablesKeepAlives() {
+func (s *HTTPUpstreamSuite) TestOpenAIHarvestProfileUsesHTTP2KeepAlives() {
 	svc := s.newService()
 	entry, err := svc.getClientEntry("socks5h://user:pass@harvest.example:31", 41, 5, service.HTTPUpstreamProfileOpenAIHarvest, false, false)
 	require.NoError(s.T(), err)
-	require.Equal(s.T(), upstreamProtocolModeOpenAIH1NoReuse, entry.protocolMode)
+	require.Equal(s.T(), upstreamProtocolModeOpenAIH2, entry.protocolMode)
 	transport, ok := entry.client.Transport.(*http.Transport)
 	require.True(s.T(), ok, "expected *http.Transport")
-	require.True(s.T(), transport.DisableKeepAlives)
-	require.False(s.T(), transport.ForceAttemptHTTP2)
-	require.Equal(s.T(), 0, transport.MaxIdleConns)
+	require.False(s.T(), transport.DisableKeepAlives)
+	require.True(s.T(), transport.ForceAttemptHTTP2)
+	require.Greater(s.T(), transport.MaxIdleConns, 0)
 }
 
 func (s *HTTPUpstreamSuite) TestOpenAIHeaderTimeoutChangeRebuildsClient() {

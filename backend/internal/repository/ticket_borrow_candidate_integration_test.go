@@ -32,8 +32,7 @@ func candidateFixture(t *testing.T) (*ticketBorrowRepository, service.BorrowAcqu
 		_, e = integrationDB.Exec(`DELETE FROM ticket_borrow_source_attempts WHERE target_id=$1`, id)
 		require.NoError(t, e)
 	})
-	w := 80
-	require.NoError(t, r.SaveSettings(t.Context(), service.BorrowSettings{Revision: old.Revision, Running: true, AdmissionWindowSeconds: &w, Replenishment: &service.BorrowReplenishmentSettings{Enabled: false}}))
+	require.NoError(t, r.SaveSettings(t.Context(), service.BorrowSettings{Revision: old.Revision, Running: true}))
 	target, err := r.Target(t.Context(), id)
 	require.NoError(t, err)
 	require.Equal(t, service.BorrowAcquisitionSelf, target.AcquisitionIdentity)
@@ -59,9 +58,6 @@ func TestBorrowCandidateSelfPermitWithoutSourceInventory(t *testing.T) {
 	require.NoError(t, integrationDB.QueryRow(`SELECT source_id,acquisition_account_id FROM ticket_borrow_source_attempts WHERE intent_id=$1`, permit).Scan(&source, &account))
 	require.Nil(t, source)
 	require.Equal(t, a.TargetID, account)
-	state, err := r.Replenishment(ctx, a.TargetID, a.Identity)
-	require.NoError(t, err)
-	require.Nil(t, state)
 }
 
 func TestBorrowCandidateConcurrentFairnessCancellationAndRestart(t *testing.T) {
@@ -128,9 +124,12 @@ func TestBorrowCandidateAdmissionModeFencesAndInflightCompletion(t *testing.T) {
 		AcquisitionIdentity: service.BorrowAcquisitionSelf, AcquisitionAccountID: a.TargetID, AcquisitionStartedAt: &start, AdmissionUntil: start.Add(80 * time.Second),
 		CookieHash: uuid.NewString(), ExpiresAt: time.Now().Add(time.Hour)}
 	require.NoError(t, r.Publish(ctx, route, a.Lease))
+	passBorrowFixtureQuality(t)
+	// Pin one slot so this test isolates preservation of the admitted lease.
+	rotationExec(t, `UPDATE ticket_borrow_routes SET dispatch_limit=1 WHERE id=$1`, route.ID)
 	got, err := r.Route(ctx, a.TargetID, a.Identity, route.ID)
 	require.NoError(t, err)
-	require.WithinDuration(t, start.Add(80*time.Second), got.UsableUntil, time.Millisecond)
+	require.WithinDuration(t, route.ExpiresAt, got.UsableUntil, time.Millisecond)
 	lease := uuid.NewString()
 	_, err = r.ReserveRoute(ctx, a.TargetID, a.Identity, route.ID, "", lease)
 	require.NoError(t, err)
@@ -139,29 +138,12 @@ func TestBorrowCandidateAdmissionModeFencesAndInflightCompletion(t *testing.T) {
 	require.NoError(t, r.SetTargetIdentity(ctx, a.TargetID, true, target.Revision, target.AcquisitionRevision, service.BorrowAcquisitionSource))
 	require.Error(t, r.CheckAcquisition(ctx, a), "mode change fences the old candidate batch")
 	_, err = r.Route(ctx, a.TargetID, a.Identity, route.ID)
-	require.NoError(t, err, "published route survives acquisition mode change")
+	require.ErrorIs(t, err, service.ErrBorrowUnavailable, "route dispatch slot remains occupied; mode change does not cancel its lease")
 	require.ErrorIs(t, r.SetTargetIdentity(ctx, a.TargetID, true, target.Revision, target.AcquisitionRevision, service.BorrowAcquisitionSelf), service.ErrBorrowConflict)
-	settings, err := r.Settings(ctx)
-	require.NoError(t, err)
-	_, err = integrationDB.Exec(`UPDATE ticket_borrow_routes SET admission_started_at=clock_timestamp()-interval '5 seconds' WHERE id=$1`, route.ID)
-	require.NoError(t, err)
-	w := 1
-	settings.AdmissionWindowSeconds = &w
-	settings.TTLSeconds = 0
-	settings.MinRouteRemainingSeconds = nil
-	require.NoError(t, r.SaveSettings(ctx, settings))
+	rotationExec(t, `UPDATE ticket_borrow_routes SET expires_at=clock_timestamp()-INTERVAL '1 second' WHERE id=$1`, route.ID)
 	_, err = r.Route(ctx, a.TargetID, a.Identity, route.ID)
 	require.ErrorIs(t, err, service.ErrBorrowUnavailable)
-	require.NoError(t, r.RenewRoute(ctx, lease), "an admitted response survives the admission cutoff")
-	settings, err = r.Settings(ctx)
-	require.NoError(t, err)
-	w = 240
-	settings.AdmissionWindowSeconds = &w
-	settings.TTLSeconds = 0
-	settings.MinRouteRemainingSeconds = nil
-	require.NoError(t, r.SaveSettings(ctx, settings))
-	_, err = r.Route(ctx, a.TargetID, a.Identity, route.ID)
-	require.ErrorIs(t, err, service.ErrBorrowUnavailable, "increasing the window cannot revive an old route")
+	require.NoError(t, r.RenewRoute(ctx, lease), "admitted response survives expiry")
 	require.NoError(t, r.ReleaseRoute(ctx, lease))
 }
 
@@ -203,6 +185,7 @@ func TestBorrowCandidateSourcePermitAndCredentialFence(t *testing.T) {
 		AcquisitionStartedAt: &start, AdmissionUntil: start.Add(80 * time.Second), ExpiresAt: start.Add(time.Hour), CookieHash: uuid.NewString()}
 	require.NoError(t, integrationDB.QueryRow(`SELECT encode(sha256(convert_to(credentials->>'access_token','UTF8')),'hex'),encode(sha256(convert_to(COALESCE(credentials->>'chatgpt_account_id','')||':'||COALESCE(credentials->>'chatgpt_user_id',''),'UTF8')),'hex') FROM accounts WHERE id=$1`, account.ID).Scan(&route.SourceCredentialHash, &route.SourceSubjectHash))
 	require.NoError(t, r.Publish(ctx, route, a.Lease))
+	passBorrowFixtureQuality(t)
 	require.NoError(t, r.FinishJob(ctx, "source", source.ID, permit, "source_cookie_acquired", 0))
 	_, err = integrationDB.Exec(`UPDATE accounts SET credentials=jsonb_set(credentials,'{access_token}','"replacement"') WHERE id=$1`, account.ID)
 	require.NoError(t, err)
@@ -264,7 +247,11 @@ func TestBorrowCandidateCookieDeadlineAndRollingInventory(t *testing.T) {
 			r, a := candidateFixture(t)
 			settings, err := r.Settings(t.Context())
 			require.NoError(t, err)
-			settings.Replenishment.Enabled = rolling
+			size := 1
+			if rolling {
+				size = 2
+			}
+			settings.RoutePoolSize = &size
 			require.NoError(t, r.SaveSettings(t.Context(), settings))
 			a = inventoryRestart(t, r, a)
 			ctx := service.WithBorrowAcquisition(t.Context(), a)
@@ -276,6 +263,7 @@ func TestBorrowCandidateCookieDeadlineAndRollingInventory(t *testing.T) {
 				deadline, err := r.ObserveCookie(ctx, route.CookieHash, 30*time.Second)
 				require.NoError(t, err)
 				require.NoError(t, r.Publish(ctx, route, a.Lease))
+				passBorrowFixtureQuality(t)
 				got, err := r.Route(ctx, a.TargetID, a.Identity, route.ID)
 				require.NoError(t, err)
 				require.WithinDuration(t, deadline, got.UsableUntil, time.Millisecond)
@@ -288,13 +276,10 @@ func TestBorrowCandidateCookieDeadlineAndRollingInventory(t *testing.T) {
 			if rolling {
 				expected = 2
 			}
-			require.Equal(t, expected, inventory.Count)
+			require.Equal(t, 3, inventory.Count)
 			require.Equal(t, expected, inventory.Desired)
 			require.Equal(t, "healthy", inventory.State)
 			require.True(t, inventory.NextAt.After(inventory.ServerNow), "healthy inventory sends no periodic maintenance request")
-			state, err := r.Replenishment(ctx, a.TargetID, a.Identity)
-			require.NoError(t, err)
-			require.Nil(t, state)
 		})
 	}
 }

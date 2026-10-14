@@ -11,7 +11,7 @@ import BorrowEventList from '@/components/admin/BorrowEventList.vue'
 const api = vi.hoisted(() => Object.fromEntries(['statistics','saveControls','target','setTarget','saveProbePolicy','saveProbePolicies','sources','targets','settings','events','selection','sourceOptions','saveSelection','restoreSources','saveSettings','refreshTarget','scanTarget'].map(k => [k,vi.fn()])))
 const timing = vi.hoisted(() => ({getUsageTiming:vi.fn()}))
 const navigation = vi.hoisted(() => ({route:{query:{} as Record<string,string>},replace:vi.fn(),push:vi.fn()}))
-vi.mock('@/api/admin/ticketBorrowing', () => ({ticketBorrowing:api,defaultBorrowReplenishment:()=>({enabled:false,inventory:2,interval_seconds:1,hold_seconds:0})}))
+vi.mock('@/api/admin/ticketBorrowing', () => ({ticketBorrowing:api}))
 vi.mock('@/api/admin/usageTiming',()=>timing)
 vi.mock('@/stores/app',()=>({useAppStore:()=>({showSuccess:vi.fn(),showError:vi.fn(),showWarning:vi.fn()})}))
 vi.mock('vue-router',async original=>({...await original<typeof import('vue-router')>(),useRoute:()=>navigation.route,useRouter:()=>({replace:navigation.replace,push:navigation.push}),onBeforeRouteLeave:vi.fn()}))
@@ -36,7 +36,7 @@ const refresh = async(w:any)=>{await btn(w,'ticketBorrowing.refresh').trigger('c
 beforeEach(()=>{
  vi.resetAllMocks();vi.useFakeTimers();sessionStorage.clear();navigation.route.query={}
  api.sources.mockResolvedValue([source()]);api.targets.mockResolvedValue([target()]);api.events.mockResolvedValue([])
- api.settings.mockResolvedValue({revision:1,running:false,admission_window_seconds:80,ttl_seconds:80,prewarm_seconds:0})
+ api.settings.mockResolvedValue({revision:1,running:false,route_pool_size:4,route_cooldown_seconds:120})
  api.selection.mockResolvedValue(config());api.statistics.mockResolvedValue(undefined)
  api.sourceOptions.mockResolvedValue({accounts:[{id:12,name:'Source 12',group_ids:[2],status:'active',schedulable:true,request_eligible:true,is_target:false},{id:11,name:'Target 11',group_ids:[],status:'active',is_target:true}],groups:[{id:2,name:'VIP'}],legacy_count:0,restorable_count:0})
  api.saveSelection.mockImplementation(async(v:any)=>({...v,revision:4}));api.saveSettings.mockImplementation(async(v:any)=>({...v,revision:2}));timing.getUsageTiming.mockResolvedValue({traces:[]})

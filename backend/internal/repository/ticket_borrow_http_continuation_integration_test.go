@@ -18,6 +18,8 @@ func TestBorrowHTTPContinuationLifecycleAndLineage(t *testing.T) {
 	for _, invalidation := range []string{"expiry", "cookie_expiry", "revocation", "identity", "revision"} {
 		t.Run(invalidation, func(t *testing.T) {
 			r, id, routes := borrowRouteLoadFixture(t)
+			rotationExec(t, `UPDATE accounts SET concurrency=64 WHERE id=$1`, id)
+			rotationExec(t, `UPDATE ticket_borrow_routes SET dispatch_limit=32 WHERE target_id=$1`, id)
 			ctx := t.Context()
 			_, err := r.BindSession(ctx, id, "original-response", routes[0].ID)
 			require.NoError(t, err)
@@ -75,6 +77,8 @@ func TestBorrowHTTPContinuationNoGenericFallback(t *testing.T) {
 	for _, block := range []string{"unknown", "disabled", "unhealthy", "no_inventory", "validation_only"} {
 		t.Run(block, func(t *testing.T) {
 			r, id, routes := borrowRouteLoadFixture(t)
+			rotationExec(t, `UPDATE accounts SET concurrency=64 WHERE id=$1`, id)
+			rotationExec(t, `UPDATE ticket_borrow_routes SET dispatch_limit=32 WHERE target_id=$1`, id)
 			ctx := t.Context()
 			_, err := r.BindSession(ctx, id, "response", routes[0].ID)
 			require.NoError(t, err)
@@ -112,6 +116,8 @@ func TestBorrowHTTPContinuationNoGenericFallback(t *testing.T) {
 
 func TestBorrowHTTPContinuationPrefersLatestWithOrdinaryReservations(t *testing.T) {
 	r, id, routes := borrowRouteLoadFixture(t)
+	rotationExec(t, `UPDATE accounts SET concurrency=64 WHERE id=$1`, id)
+	rotationExec(t, `UPDATE ticket_borrow_routes SET dispatch_limit=32 WHERE target_id=$1`, id)
 	ctx := t.Context()
 	_, err := r.BindSession(ctx, id, "response", routes[0].ID)
 	require.NoError(t, err)
@@ -140,12 +146,20 @@ func TestBorrowHTTPContinuationPrefersLatestWithOrdinaryReservations(t *testing.
 	}
 	states, err := r.RouteStatuses(ctx, id, "identity")
 	require.NoError(t, err)
-	require.Len(t, states, 2)
+	require.Len(t, states, 3)
+	total := 0
 	for _, state := range states {
-		if state.ID == routes[1].ID {
-			require.Equal(t, 30, state.Inflight)
-		} else {
+		total += state.Inflight
+		if state.ID == routes[0].ID {
 			require.Zero(t, state.Inflight)
+			require.Equal(t, "expired", state.State)
+		}
+		if state.ID == routes[1].ID {
+			require.GreaterOrEqual(t, state.Inflight, 15)
+		}
+		if state.ID == routes[2].ID {
+			require.Positive(t, state.Inflight, "new sessions use the less loaded route")
 		}
 	}
+	require.Equal(t, 30, total)
 }

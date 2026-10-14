@@ -257,10 +257,11 @@ func (r *ticketBorrowRepository) ClaimCandidatePool(ctx context.Context, a servi
 	if err = tx.QueryRowContext(ctx, `SELECT consumer_cursor FROM ticket_borrow_candidate_pool_control WHERE id=1`).Scan(&cursor); err != nil {
 		return nil, err
 	}
-	available := borrowPoolDemandFrom + ` AND (SELECT count(*) FROM ticket_borrow_candidate_pool p WHERE p.target_id=t.account_id AND p.state='claimed')<d.slots
- AND (SELECT count(*) FROM ticket_borrow_requests q WHERE q.target_id=t.account_id AND q.kind='probe' AND q.finished_at IS NULL AND q.lease_until>clock_timestamp())<d.slots
+	available := borrowPoolDemandFrom + ` AND (` + replaceBorrowTarget(borrowBackgroundInflight, "t.account_id") + `)<d.slots
+ AND (` + replaceBorrowTarget(borrowBackgroundInflight+" + "+borrowBusinessInflight, "t.account_id") + `)<GREATEST(1,a.concurrency)
+ AND ` + borrowCandidateHasTurn + `
  AND (SELECT count(*) FROM ticket_borrow_requests q WHERE q.target_id=t.account_id AND q.kind='probe' AND q.reserved_at>clock_timestamp()-INTERVAL '60 seconds')
- +2*(1+(SELECT count(*) FROM ticket_borrow_candidate_pool p WHERE p.target_id=t.account_id AND p.state='claimed'))
+ +(` + replaceBorrowTarget(borrowCandidateBudgetReserved, "t.account_id") + `)+2
  <=GREATEST(1,COALESCE((cfg.recovery->>'probe_requests_per_minute')::int,12))`
 	var winner int64
 	// Two search turns followed by one oldest waiter of any category. A target
@@ -322,6 +323,18 @@ func (r *ticketBorrowRepository) ClaimCandidatePool(ctx context.Context, a servi
 	}
 	if c.ID != id || c.Details == nil || c.Environment == nil || c.Environment.Fingerprint == nil {
 		return nil, service.ErrBorrowUnavailable
+	}
+	// The persisted environment is authoritative after a protocol migration;
+	// the encrypted queued payload may still contain the old fingerprint.
+	var fingerprint []byte
+	if err = tx.QueryRowContext(ctx, `SELECT fingerprint FROM ticket_borrow_candidate_environments WHERE id=$1`, id).Scan(&fingerprint); err != nil {
+		return nil, err
+	}
+	if err = json.Unmarshal(fingerprint, &c.Environment.Fingerprint); err != nil {
+		return nil, err
+	}
+	if err = service.ValidateBorrowFingerprint(c.Environment.Fingerprint); err != nil {
+		return nil, err
 	}
 	c.Details.GatewayPriority = "normal"
 	c.Details.GatewaySelection = selection

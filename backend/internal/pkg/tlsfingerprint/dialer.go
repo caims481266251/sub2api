@@ -28,7 +28,7 @@ type Profile struct {
 	PointFormats        []uint16
 	EnableGREASE        bool
 	SignatureAlgorithms []uint16 // Empty uses defaultSignatureAlgorithms
-	ALPNProtocols       []string // Empty uses ["http/1.1"]
+	ALPNProtocols       []string // Empty uses ["h2", "http/1.1"]
 	SupportedVersions   []uint16 // Empty uses [TLS1.3, TLS1.2]
 	KeyShareGroups      []uint16 // Empty uses [X25519]
 	PSKModes            []uint16 // Empty uses [psk_dhe_ke]
@@ -326,8 +326,12 @@ func performTLSHandshake(ctx context.Context, conn net.Conn, profile *Profile, a
 		host = addr
 	}
 
+	return handshakeFingerprint(ctx, conn, profile, &utls.Config{ServerName: host})
+}
+
+func handshakeFingerprint(ctx context.Context, conn net.Conn, profile *Profile, cfg *utls.Config) (net.Conn, error) {
 	spec := buildClientHelloSpecFromProfile(profile)
-	tlsConn := utls.UClient(conn, &utls.Config{ServerName: host}, utls.HelloCustom)
+	tlsConn := utls.UClient(conn, cfg, utls.HelloCustom)
 
 	if err := tlsConn.ApplyPreset(spec); err != nil {
 		_ = conn.Close()
@@ -350,12 +354,12 @@ func performTLSHandshake(ctx context.Context, conn net.Conn, profile *Profile, a
 
 	state := tlsConn.ConnectionState()
 	slog.Debug("tls_fingerprint_handshake_success",
-		"host", host,
+		"host", cfg.ServerName,
 		"version", state.Version,
 		"cipher_suite", state.CipherSuite,
 		"alpn", state.NegotiatedProtocol)
 
-	return tlsConn, nil
+	return &fingerprintConn{UConn: tlsConn}, nil
 }
 
 // toUTLSCurves converts uint16 slice to utls.CurveID slice.
@@ -418,7 +422,7 @@ func buildClientHelloSpecFromProfile(profile *Profile) *utls.ClientHelloSpec {
 		}
 	}
 
-	alpnProtocols := []string{"http/1.1"}
+	alpnProtocols := []string{"h2", "http/1.1"}
 	if profile != nil && len(profile.ALPNProtocols) > 0 {
 		alpnProtocols = profile.ALPNProtocols
 	}

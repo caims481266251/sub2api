@@ -121,7 +121,7 @@ func TestBorrowSource401UsesNormalAuthClassification(t *testing.T) {
 				}
 			}
 			s.owner.httpUpstream = up
-			_, _, err := s.acquireSource(borrowTestCandidateContext(ctx), r.source, BorrowSettings{TTLSeconds: 230})
+			_, _, err := s.acquireSource(borrowTestCandidateContext(ctx), r.source, BorrowSettings{})
 			require.Error(t, err)
 			require.Equal(t, 1, up.calls)
 			require.Equal(t, tc.permanent, accounts.permanent)
@@ -158,7 +158,7 @@ func TestBorrowSource429SynchronizesQuotaWithoutBusinessRetry(t *testing.T) {
 			}
 			s.owner.httpUpstream = up
 			before := time.Now()
-			_, _, err := s.acquireSource(borrowTestCandidateContext(ctx), r.source, BorrowSettings{TTLSeconds: 230})
+			_, _, err := s.acquireSource(borrowTestCandidateContext(ctx), r.source, BorrowSettings{})
 			require.Error(t, err)
 			require.Equal(t, 1, up.calls)
 			require.Zero(t, blocker.retryChecks)

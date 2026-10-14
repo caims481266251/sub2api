@@ -322,7 +322,7 @@ func TestBorrowSharedPoolSourceThroughNormalPublication(t *testing.T) {
 	require.NotContains(t, string(r.publicRaw), "http://pool.example")
 	require.Empty(t, r.released, "queued candidate retains its environment")
 
-	s.runTarget(ctx, BorrowTarget{AcquisitionIdentity: BorrowAcquisitionSource, AccountID: 11, Revision: 2}, BorrowSettings{Running: true, TTLSeconds: 230}, "target-owner")
+	s.runTarget(ctx, BorrowTarget{AcquisitionIdentity: BorrowAcquisitionSource, AccountID: 11, Revision: 2}, BorrowSettings{Running: true}, "target-owner")
 	require.NoError(t, ctx.Err())
 	require.Len(t, up.calls, 3, "both normal target validation phases are required")
 	require.Equal(t, "Bearer source-token", up.calls[0].header.Get("Authorization"))

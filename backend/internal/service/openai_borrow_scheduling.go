@@ -7,6 +7,15 @@ import (
 )
 
 type borrowSchedulingTierKey struct{}
+type borrowEndpointCapabilityKey struct{}
+
+// Admission must match the actual upstream path. PAT search is implemented
+// through Responses; native alpha/search cannot use a borrowed Responses route.
+func borrowSupportsEndpoint(ctx context.Context, account *Account) bool {
+	capability, _ := ctx.Value(borrowEndpointCapabilityKey{}).(OpenAIEndpointCapability)
+	return capability != OpenAIEndpointCapabilityAlphaSearch || account.IsOpenAIPersonalAccessToken()
+}
+
 type borrowSchedulingTier struct {
 	ids       map[int64]struct{}
 	preferred bool

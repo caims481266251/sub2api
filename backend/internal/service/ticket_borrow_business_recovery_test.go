@@ -51,12 +51,31 @@ func TestBorrowBusinessRecoverySharedBudgetAnd429(t *testing.T) {
 		require.Equal(t, "attempt_limit", r.stopReason)
 		require.ErrorIs(t, r.BeginTransport(ctx), ErrBorrowRecoveryBudget)
 	})
-	t.Run("late failure does not append another attempt", func(t *testing.T) {
+	t.Run("late explicit failure retains one recovery", func(t *testing.T) {
 		ctx, r := recoveryFixture(t)
 		r.WroteHeaders(ctx)
 		r.ExplicitFailure()
-		r.firstSend = time.Now().Add(-16 * time.Second)
+		r.firstSend = time.Now().Add(-179 * time.Second)
+		require.True(t, r.ReserveRecovery(ctx, 503))
+		require.NoError(t, r.BeginTransport(ctx))
+		r.WroteHeaders(ctx)
+		r.ExplicitFailure()
 		require.False(t, r.ReserveRecovery(ctx, 503))
+		require.Equal(t, "attempt_limit", r.stopReason)
+	})
+	t.Run("duplicate failure does not extend recovery initiation window", func(t *testing.T) {
+		ctx, r := recoveryFixture(t)
+		r.WroteHeaders(ctx)
+		r.ExplicitFailure()
+		r.failureAt = time.Now().Add(-16 * time.Second)
+		r.ExplicitFailure()
+		require.False(t, r.ReserveRecovery(ctx, 503))
+		require.Equal(t, "retry_window_elapsed", r.stopReason)
+	})
+	t.Run("late pre-write failure still has a bounded window", func(t *testing.T) {
+		ctx, r := recoveryFixture(t)
+		r.firstStart = time.Now().Add(-16 * time.Second)
+		require.False(t, r.ReserveRecovery(ctx, 502))
 		require.Equal(t, "retry_window_elapsed", r.stopReason)
 	})
 }
@@ -285,6 +304,7 @@ func TestBorrowBusinessRouteWait(t *testing.T) {
 	s.notifyRoutePublished()
 	require.True(t, r.waitForRoute(ctx, signal), "publication before waiting must not be lost")
 	deadline := r.routeWaitDeadline
+	require.InDelta(t, r.timeout.Seconds(), time.Until(deadline).Seconds(), 0.2)
 	require.True(t, r.waitForRoute(ctx, signal))
 	require.Equal(t, deadline, r.routeWaitDeadline)
 	r.routeWaitDeadline = time.Now().Add(10 * time.Millisecond)
@@ -293,6 +313,47 @@ func TestBorrowBusinessRouteWait(t *testing.T) {
 	ctx2, cancel := context.WithCancel(ctx)
 	cancel()
 	require.False(t, r.waitForRoute(ctx2, signal))
+}
+
+func TestBorrowBusinessRouteWaitUsesRequestBudget(t *testing.T) {
+	client, cancel := context.WithTimeout(t.Context(), 12*time.Second)
+	defer cancel()
+	ctx, r := WithBorrowBusinessRecovery(client, nil)
+	defer r.Close()
+	s := &TicketBorrowService{}
+	signal := s.routePublished()
+	s.notifyRoutePublished()
+	require.True(t, r.waitForRoute(context.WithoutCancel(ctx), signal))
+	deadline, _ := client.Deadline()
+	require.Equal(t, deadline, r.routeWaitDeadline, "client deadline clamps the shared wait even after detaching")
+	require.Greater(t, time.Until(r.routeWaitDeadline), 5*time.Second)
+	require.Zero(t, r.transports)
+	require.Zero(t, r.sends)
+	require.True(t, r.failureAt.IsZero(), "admission wait does not begin the upstream-failure recovery window")
+	cancel()
+	require.False(t, r.waitForRoute(context.WithoutCancel(ctx), s.routePublished()))
+}
+
+func TestBorrowBusinessRouteWaitExclusionsNeverAuthorizeReplay(t *testing.T) {
+	ctx, r := WithBorrowBusinessRecovery(t.Context(), nil)
+	defer r.Close()
+	err := &BorrowRouteAdmissionError{Reason: "route_busy"}
+	require.False(t, r.RememberAdmissionRetry(11, fmt.Errorf("database unavailable")))
+	require.True(t, r.RememberAdmissionRetry(11, err))
+	excluded := map[int64]struct{}{11: {}, 12: {}}
+	retry, ok := r.admissionRetryExclusions(excluded)
+	require.True(t, ok)
+	require.NotContains(t, retry, int64(11))
+	require.Contains(t, retry, int64(12), "other failed accounts stay excluded")
+	require.Len(t, excluded, 2, "normal selection still tries other accounts first")
+	deadline := r.routeWaitDeadline
+	require.True(t, r.RememberAdmissionRetry(11, err))
+	require.Equal(t, deadline, r.routeWaitDeadline)
+	require.NoError(t, r.Activate(11, false))
+	require.NoError(t, r.BeginTransport(ctx))
+	require.False(t, r.RememberAdmissionRetry(11, err))
+	_, ok = r.admissionRetryExclusions(excluded)
+	require.False(t, ok, "even ambiguous transport execution prohibits the admission fallback")
 }
 
 func TestBorrowBusinessRecoveryPartialSendDisarmsWait(t *testing.T) {

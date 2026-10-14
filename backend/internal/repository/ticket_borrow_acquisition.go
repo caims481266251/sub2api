@@ -28,9 +28,10 @@ func checkBorrowAcquisition(ctx context.Context, db borrowQueryer, a service.Bor
 	var budgetUntil sql.NullTime
 	var now time.Time
 	err := db.QueryRowContext(ctx, `SELECT s.running,`+borrowAcquisitionActive+`,
- NOT COALESCE((s.replenishment->>'enabled')::boolean,false) AND EXISTS(SELECT 1 FROM ticket_borrow_routes r LEFT JOIN ticket_borrow_cookie_deadlines d ON d.cookie_hash=r.cookie_hash
+ (SELECT count(*) FROM ticket_borrow_routes r LEFT JOIN ticket_borrow_cookie_deadlines d ON d.cookie_hash=r.cookie_hash
  WHERE r.target_id=t.account_id AND r.target_revision=t.revision AND r.revoked_at IS NULL AND r.inventory_eligible AND NOT r.validation_only
- AND ($4='' OR r.identity_hash=$4) AND LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at),r.admission_until)>clock_timestamp()+`+borrowRenewalLead+`*INTERVAL '1 second'),
+ AND ((r.state='normal' AND `+borrowQualityEligible+`) OR r.state IN ('pending_quality','pending_probe'))
+ AND ($4='' OR r.identity_hash=$4) AND LEAST(r.expires_at,COALESCE(d.expires_at,r.expires_at),r.admission_until)>clock_timestamp()+`+borrowRenewalLead+`*INTERVAL '1 second') >= s.route_pool_size,
  COALESCE(t.upstream_wait_until>clock_timestamp(),false),t.budget_wait_until,clock_timestamp()
  FROM ticket_borrow_targets t JOIN accounts a ON a.id=t.account_id CROSS JOIN ticket_borrow_settings s
  WHERE t.account_id=$1 AND s.id=1`, a.TargetID, a.Revision, a.Lease, a.Identity).Scan(&running, &active, &ready, &upstream, &budgetUntil, &now)

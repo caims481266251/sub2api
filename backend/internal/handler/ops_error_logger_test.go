@@ -9,14 +9,55 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+func TestOpsFinalOutcomePreservesFailedAndFinalAccounts(t *testing.T) {
+	for _, state := range []string{"recovered", "failed", "canceled"} {
+		t.Run(state, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(requesttiming.With(t.Context(), requesttiming.New(time.Now(), 0)))
+			defer cancel()
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(ctx)
+			_, trace := requesttiming.StartAttempt(c.Request, 2, 0)
+			trace.Response(&http.Response{StatusCode: 200}, nil)
+			requesttiming.BorrowRecovery(ctx, requesttiming.BorrowRecoverySnapshot{TransportAttempts: 2, RequestsSent: 2, Recovering: true, StopReason: "attempt_limit"})
+			original := &service.OpsUpstreamErrorEvent{AccountID: 1, UpstreamStatusCode: 503}
+			entry := &service.OpsInsertErrorLogInput{StatusCode: 200, UpstreamErrors: []*service.OpsUpstreamErrorEvent{original}}
+			if state == "canceled" {
+				cancel()
+			}
+			applyOpsFinalRequestOutcome(c, entry, state)
+			event := entry.UpstreamErrors[0]
+			require.EqualValues(t, 1, event.AccountID, "retain failed-provider attribution")
+			require.Equal(t, 503, event.UpstreamStatusCode)
+			require.EqualValues(t, 2, event.RequestOutcome.FinalAccountID)
+			require.Empty(t, event.RequestOutcome.Attempt.BorrowRouteID)
+			require.Equal(t, state, event.RequestOutcome.State, "wire 200 must not turn an in-band failure into success")
+			require.Equal(t, "attempt_limit", event.Recovery.StopReason)
+			require.Nil(t, original.RequestOutcome, "queued metadata must not mutate a shared stream snapshot")
+		})
+	}
+}
+
+func TestOpsFinalOutcomeExplainsFailureAfterOutput(t *testing.T) {
+	ctx := requesttiming.With(t.Context(), requesttiming.New(time.Now(), 0))
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(ctx)
+	requesttiming.BorrowRecovery(ctx, requesttiming.BorrowRecoverySnapshot{TransportAttempts: 2, RequestsSent: 2, Recovering: true, OutputStarted: true})
+	entry := &service.OpsInsertErrorLogInput{StatusCode: 200, UpstreamErrors: []*service.OpsUpstreamErrorEvent{{AccountID: 2, Message: "stream interrupted"}}}
+	applyOpsFinalRequestOutcome(c, entry, "failed")
+	require.Equal(t, "output_started", entry.UpstreamErrors[0].Recovery.StopReason)
+	require.Empty(t, requesttiming.RecoverySnapshot(ctx).StopReason, "logging must not change live recovery state")
+}
 
 type ingressRejectSettingRepo struct {
 	service.SettingRepository

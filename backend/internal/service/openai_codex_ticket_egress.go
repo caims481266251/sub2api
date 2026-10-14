@@ -266,7 +266,8 @@ func (s *OpenAIGatewayService) stickBoundCodexTicketRequest(req *http.Request, a
 		return req
 	}
 	req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAIHarvest))
-	req.Close = true
+	req.Close = false
+	req.Header.Del("Connection")
 	restoreBoundCodexTicketHarvestIdentity(req.Header, ticket)
 	pinBoundCodexTicketHarvestIdentityRequestBody(req, ticket)
 	return req

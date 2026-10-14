@@ -953,7 +953,14 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			}
 			injectBorrowWSCookie(headers, route)
 		}
-		dialCtx, cancelDial := context.WithTimeout(upstreamroute.WithAccountID(ctx, account.ID), s.openAIWSDialTimeout())
+		fingerprintCtx := ctx
+		if borrowing != nil {
+			fingerprintCtx, err = prepareBorrowWSDial(ctx, headers, borrowing.route, gjson.GetBytes(firstClientMessage, "model").String())
+			if err != nil {
+				return err
+			}
+		}
+		dialCtx, cancelDial := context.WithTimeout(upstreamroute.WithAccountID(fingerprintCtx, account.ID), s.openAIWSDialTimeout())
 		upstreamConn, statusCode, handshakeHeaders, err = dialer.Dial(dialCtx, wsURL, headers, proxyURL)
 		cancelDial()
 		if err == nil {

@@ -125,6 +125,13 @@ func (t *Trace) update(fn func(*Attempt)) {
 func (t *Trace) mark(name string) {
 	t.update(func(a *Attempt) { a.Events[name] = t.c.offset(time.Now()) })
 }
+func (t *Trace) markFirst(name string) {
+	t.update(func(a *Attempt) {
+		if _, exists := a.Events[name]; !exists {
+			a.Events[name] = t.c.offset(time.Now())
+		}
+	})
+}
 func (t *Trace) clientTrace() *httptrace.ClientTrace {
 	return &httptrace.ClientTrace{
 		GetConn: func(string) { t.mark("connection_start") },
@@ -133,7 +140,10 @@ func (t *Trace) clientTrace() *httptrace.ClientTrace {
 		},
 		DNSStart: func(httptrace.DNSStartInfo) { t.mark("dns_start") }, DNSDone: func(httptrace.DNSDoneInfo) { t.mark("dns_end") },
 		ConnectStart: func(string, string) { t.mark("tcp_start") }, ConnectDone: func(string, string, error) { t.mark("tcp_end") },
-		TLSHandshakeStart: func() { t.mark("tls_start") }, TLSHandshakeDone: func(tls.ConnectionState, error) { t.mark("tls_end") },
+		// The fingerprint dialer reports the real handshake. net/http can emit
+		// another pair while inspecting the already-handshaken custom connection.
+		// Keep the measured handshake instead of replacing it with that no-op.
+		TLSHandshakeStart: func() { t.markFirst("tls_start") }, TLSHandshakeDone: func(tls.ConnectionState, error) { t.markFirst("tls_end") },
 		WroteHeaders: func() { t.mark("headers_written") }, WroteRequest: func(i httptrace.WroteRequestInfo) {
 			if i.Err == nil {
 				t.mark("request_written")

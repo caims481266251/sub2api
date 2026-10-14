@@ -28,7 +28,7 @@ func borrowFingerprintTemplate() *Profile {
 		CipherSuites: []uint16{0x1301, 0x1302, 0x1303, 0xc02b, 0xc02f, 0xc02c, 0xc030, 0xcca9, 0xcca8, 0xc009, 0xc013, 0xc00a, 0xc014, 0x009c, 0x009d, 0x002f, 0x0035},
 		Curves:       []uint16{0x001d, 0x0017, 0x0018}, PointFormats: []uint16{0},
 		SignatureAlgorithms: []uint16{0x0403, 0x0804, 0x0401, 0x0503, 0x0805, 0x0501, 0x0806, 0x0601, 0x0201},
-		ALPNProtocols:       []string{"http/1.1"}, SupportedVersions: []uint16{0x0304, 0x0303},
+		ALPNProtocols:       []string{"h2"}, SupportedVersions: []uint16{0x0304, 0x0303},
 		KeyShareGroups: []uint16{0x001d}, PSKModes: []uint16{1},
 		Extensions: []uint16{0, 65037, 23, 65281, 10, 11, 35, 16, 5, 13, 18, 51, 45, 43},
 	}
@@ -46,7 +46,7 @@ func shuffleBorrowFingerprint(v []uint16) error {
 	return nil
 }
 
-// NewBorrowProfile generates a complete HTTP/1.1 profile from a constrained,
+// NewBorrowProfile generates a complete HTTP/2 profile from a constrained,
 // versioned family. It does not consume mutable runtime defaults.
 func NewBorrowProfile() (*Profile, error) {
 	p := borrowFingerprintTemplate()

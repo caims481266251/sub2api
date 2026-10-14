@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { borrowProbeState, borrowReady, borrowSeconds } from '../borrowStatus'
+import { borrowProbeState, borrowReady, borrowSeconds, borrowRouteState } from '../borrowStatus'
 import { observeBorrowAvailability } from '../borrowAvailability'
 import type { BorrowTarget } from '@/api/admin/ticketBorrowing'
 
@@ -7,6 +7,15 @@ const now = Date.parse('2026-10-11T10:00:00Z')
 const target = (patch: Partial<BorrowTarget> = {}): BorrowTarget => ({ account_id: 1, name: 'target', enabled: true, revision: 1, ready: true, expires_at: new Date(now + 180000).toISOString(), usable_until: new Date(now + 60000).toISOString(), server_now: new Date(now).toISOString(), next_attempt_at: new Date(now - 1000).toISOString(), next_probe_at: new Date(now - 1000).toISOString(), phase: 'waiting', reason: 'target_ticket_changed', maintenance_state: 'search', ...patch })
 
 describe('borrowing status and availability presentation', () => {
+  it('uses the same current route eligibility in target summaries and route details', () => {
+    const current = target({ business_routes: [{ id: 'r', state: 'normal', usable: true, inventory_eligible: true, usable_until: new Date(now + 60000).toISOString(), quality_valid_until: new Date(now + 1000).toISOString(), inflight: 0 }] } as Partial<BorrowTarget>)
+    expect(borrowReady(current, now)).toBe(true)
+    expect(borrowReady(current, now + 1000)).toBe(false)
+    const route = current.business_routes![0]
+    expect(borrowRouteState({ ...route, unavailable_reason: 'account_cooling', usable: false }, now)).toBe('account_cooling')
+    expect(borrowRouteState({ ...route, unavailable_reason: 'account_unavailable', usable: false }, now)).toBe('account_unavailable')
+    expect(borrowReady({ ...current, business_routes: [] }, now)).toBe(false)
+  })
   it('uses admission deadlines and never derives current state from the last verdict', () => {
     expect(borrowReady(target(), now + 59999)).toBe(true)
     expect(borrowReady(target(), now + 60000)).toBe(false)

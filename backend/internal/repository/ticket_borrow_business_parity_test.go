@@ -41,8 +41,9 @@ func (r *borrowBusinessCancelRepo) Target(context.Context, int64) (service.Borro
 	return service.BorrowTarget{AccountID: 11, Enabled: true}, nil
 }
 func (r *borrowBusinessCancelRepo) ReserveRoute(_ context.Context, id int64, identity, _, _, _ string) (*service.BorrowRoute, error) {
+	fingerprint, _ := service.NewBorrowFingerprint()
 	return &service.BorrowRoute{ID: "route-a", TargetID: id, IdentityHash: identity,
-		Secret: service.BorrowRouteSecret{Endpoint: r.endpoint, Cookie: http.Cookie{Name: "__oailb", Value: "test-ticket"}}}, nil
+		Secret: service.BorrowRouteSecret{Fingerprint: fingerprint, Endpoint: r.endpoint, Cookie: http.Cookie{Name: "__oailb", Value: "test-ticket"}}}, nil
 }
 func (r *borrowBusinessCancelRepo) Route(context.Context, int64, string, string) (*service.BorrowRoute, error) {
 	if r.checks.Add(1) >= 2 {
@@ -62,6 +63,12 @@ func (r *borrowBusinessCancelRepo) ReleaseRoute(context.Context, string) error {
 var _ service.BorrowRouteLeaseRepository = (*borrowBusinessCancelRepo)(nil)
 
 func TestBorrowBusinessCancellationPreservesSharedHTTP2Stream(t *testing.T) {
+	for _, profile := range []service.HTTPUpstreamProfile{service.HTTPUpstreamProfileOpenAI, service.HTTPUpstreamProfileOpenAIHarvest, service.HTTPUpstreamProfileBorrowProbe} {
+		t.Run(string(profile), func(t *testing.T) { testBorrowCancellationPreservesSharedHTTP2Stream(t, profile) })
+	}
+}
+
+func testBorrowCancellationPreservesSharedHTTP2Stream(t *testing.T, profile service.HTTPUpstreamProfile) {
 	var connections, rejectedPosts atomic.Int32
 	release := make(chan struct{})
 	var once sync.Once
@@ -91,7 +98,7 @@ func TestBorrowBusinessCancellationPreservesSharedHTTP2Stream(t *testing.T) {
 	defer unblock()
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
-	ctx = service.WithHTTPUpstreamProfile(ctx, service.HTTPUpstreamProfileOpenAI)
+	ctx = service.WithHTTPUpstreamProfile(ctx, profile)
 	client := server.Client()
 	normal, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL, nil)
 	require.NoError(t, err)

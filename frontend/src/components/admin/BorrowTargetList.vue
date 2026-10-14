@@ -17,15 +17,30 @@
       <button v-if="selected.length" class="borrow-link" :disabled="busy" @click="$emit('update:selected', [])">{{ t('ticketBorrowing.management.clearSelected') }}</button>
     </div>
     <p v-if="selectionCleared" role="status" class="px-4 py-2 text-xs text-amber-700 dark:text-amber-300">{{ t('ticketBorrowing.management.selectionCleared') }}</p>
-    <div v-if="rows.length" class="borrow-table-wrap"><table class="borrow-table"><thead><tr><th class="w-[20%]">{{ t('ticketBorrowing.name') }}</th><th class="w-[21%]">{{ t('ticketBorrowing.management.routeStatus') }}</th><th class="w-[13%]">{{ t('ticketBorrowing.management.businessInflight') }}</th><th class="w-[19%]">{{ t('ticketBorrowing.management.probing') }}</th><th class="w-[17%]">{{ t('ticketBorrowing.replenishment.lastResult') }}</th><th class="w-[10%]">{{ t('ticketBorrowing.management.actions') }}</th></tr></thead>
+    <div v-if="rows.length" class="borrow-table-wrap"><table class="borrow-table"><thead><tr><th class="w-[22%]">{{ t('ticketBorrowing.name') }}</th><th class="w-[25%]">{{ t('ticketBorrowing.management.routeStatus') }}</th><th class="w-[15%]">{{ t('ticketBorrowing.management.businessInflight') }}</th><th class="w-[25%]">{{ t('ticketBorrowing.management.probing') }}</th><th class="w-[13%]">{{ t('ticketBorrowing.management.actions') }}</th></tr></thead>
       <tbody><template v-for="target in rows" :key="target.account_id"><tr :data-target-row="target.account_id">
         <td class="borrow-account-cell"><div class="flex min-w-0 items-center gap-2"><input v-if="target.account_id > 0 && (target.probe_policy?.revision ?? 0) > 0" type="checkbox" :checked="selected.includes(target.account_id)" :disabled="busy" :aria-label="t('ticketBorrowing.probePolicy.bulk.select', { id: target.account_id })" :data-probe-select="target.account_id" @change="selectOne(target.account_id, ($event.target as HTMLInputElement).checked)" /><button class="borrow-account" :title="target.name" @click="$emit('open', target.account_id)">{{ target.name }}</button></div><span class="borrow-subline">#{{ target.account_id }}<BorrowTag v-if="dirtyIds[target.account_id]" class="ml-2" kind="state" value="unsaved" /></span><div v-if="target.probe_policy" class="mt-1"><BorrowTag kind="state" :value="target.probe_policy.use_global ? 'inherited' : 'overridden'" /></div></td>
-        <td :data-label="t('ticketBorrowing.management.routeStatus')"><BorrowTag kind="state" :value="!target.enabled ? 'disabled' : ready(target) ? 'ready' : 'noRoute'" /><span v-if="ready(target)" class="borrow-subline tabular-nums">{{ t('ticketBorrowing.management.admissionRemaining', { time: t('ticketBorrowing.seconds', { count: seconds(target.usable_until ?? target.expires_at) }) }) }}</span><button v-if="target.inventory_count !== undefined" class="borrow-subline tabular-nums borrow-link" :aria-expanded="expanded.includes(target.account_id)" :data-expand-routes="target.account_id" @click="expanded = expanded.includes(target.account_id) ? expanded.filter(id => id !== target.account_id) : [...expanded, target.account_id]">{{ t('ticketBorrowing.replenishment.stock', { count: target.inventory_count, desired: target.desired_inventory }) }}</button><span v-if="ready(target)" class="borrow-subline borrow-truncate font-mono" :title="`${t('ticketBorrowing.routes.preferred')}: ${target.gateway}`">{{ target.gateway }}</span></td>
-        <td :data-label="t('ticketBorrowing.management.businessInflight')"><strong class="tabular-nums">{{ target.business_inflight ?? 0 }}</strong><span class="borrow-subline !whitespace-normal">{{ t('ticketBorrowing.management.accountConcurrency', { count: target.business_concurrency ?? '—' }) }}</span></td>
-        <td :data-label="t('ticketBorrowing.management.probing')"><BorrowTargetStatus :target="target" :running="running" :now="now" :source-budget="sourceBudget" /></td>
-        <td :data-label="t('ticketBorrowing.reason')"><BorrowTag :value="target.reason" /><span class="borrow-subline">{{ target.last_request_finished_at ? new Date(target.last_request_finished_at).toLocaleTimeString() : '—' }}</span></td>
+        <td :data-label="t('ticketBorrowing.management.routeStatus')">
+          <BorrowTag kind="state" :value="borrowTargetAdmissionState(target, now)" data-testid="target-admission" />
+          <p v-if="target.business_routes !== undefined" class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400" data-testid="target-route-summary">{{ routeSummary(target) }}</p>
+          <button v-if="target.inventory_count !== undefined || target.business_routes?.length" class="borrow-subline tabular-nums borrow-link !whitespace-normal" :aria-expanded="expanded.includes(target.account_id)" :data-expand-routes="target.account_id" @click="expanded = expanded.includes(target.account_id) ? expanded.filter(id => id !== target.account_id) : [...expanded, target.account_id]">{{ t('ticketBorrowing.statusSummary.viewPool', borrowRouteCounts(target, now)) }}</button>
+        </td>
+        <td :data-label="t('ticketBorrowing.management.businessInflight')">
+          <strong class="tabular-nums">{{ t('ticketBorrowing.statusSummary.inflight', { count: target.business_inflight ?? 0 }) }}</strong>
+          <p v-if="(target.business_inflight ?? 0) > 0 && !ready(target)" class="mt-1 text-xs leading-5 text-blue-700 dark:text-blue-300" data-testid="target-natural-drain">{{ t('ticketBorrowing.statusSummary.existingContinue') }}</p>
+          <span class="borrow-subline !whitespace-normal">{{ t('ticketBorrowing.management.accountConcurrency', { count: target.business_concurrency ?? '—' }) }}</span>
+        </td>
+        <td :data-label="t('ticketBorrowing.management.probing')">
+          <BorrowTargetStatus :target="target" :running="running" :now="now" :source-budget="sourceBudget" />
+          <details v-if="target.reason" class="mt-2 text-xs text-gray-500 dark:text-gray-400" data-testid="target-last-result">
+            <summary class="cursor-pointer leading-5">{{ t('ticketBorrowing.statusSummary.lastProbeHistory') }}</summary>
+            <p class="mt-1">{{ t('ticketBorrowing.statusSummary.historyHint') }}</p>
+            <BorrowTag class="mt-1" :value="target.reason" />
+            <span class="borrow-subline">{{ target.last_request_finished_at ? new Date(target.last_request_finished_at).toLocaleTimeString() : '—' }}</span>
+          </details>
+        </td>
         <td class="borrow-actions"><button class="borrow-link" :data-target-open="target.account_id" @click="$emit('open', target.account_id)">{{ t('ticketBorrowing.management.detailsSettings') }}</button><button class="borrow-link mt-2" :data-target-records="target.account_id" @click="$emit('records', target.account_id)">{{ t('ticketBorrowing.management.relatedRecords') }}</button></td>
-      </tr><tr v-if="expanded.includes(target.account_id)"><td colspan="6" class="col-span-2 min-w-0 !block md:!table-cell"><BorrowBusinessRoutes :target="target" :now="now" @records="$emit('records', target.account_id, $event)" /></td></tr></template></tbody>
+      </tr><tr v-if="expanded.includes(target.account_id)"><td colspan="5" class="col-span-2 min-w-0 !block md:!table-cell"><BorrowBusinessRoutes :target="target" :now="now" @records="$emit('records', target.account_id, $event)" /></td></tr></template></tbody>
     </table></div>
     <div v-else class="borrow-empty"><p>{{ t(targets.length ? 'ticketBorrowing.noMatches' : 'ticketBorrowing.emptyTargets') }}</p><button v-if="targets.length" class="borrow-link mt-2" @click="search = ''; filter = 'all'; phase = 'all'">{{ t('ticketBorrowing.management.resetFilters') }}</button></div>
     <BorrowListPagination v-if="filtered.length" v-model:page="page" v-model:page-size="pageSize" :total="filtered.length" />
@@ -38,7 +53,7 @@ import { useBorrowPreference } from '@/composables/useBorrowPreference'
 import { useI18n } from 'vue-i18n'
 import BorrowTargetStatus from './BorrowTargetStatus.vue'
 import BorrowBusinessRoutes from './BorrowBusinessRoutes.vue'
-import { borrowProbeState, borrowSeconds, borrowReady } from '@/composables/borrowStatus'
+import { borrowProbeState, borrowSeconds, borrowReady, borrowRouteCounts, borrowTargetAdmissionState, borrowAdmissionDeadline } from '@/composables/borrowStatus'
 import type { BorrowTarget, BorrowSettings } from '@/api/admin/ticketBorrowing'
 import Select from '@/components/common/Select.vue'
 import BorrowListPagination from './BorrowListPagination.vue'
@@ -49,7 +64,13 @@ const expanded = ref<number[]>([])
 const search = useBorrowPreference<string>('target:search', ''), filter = useBorrowPreference<string>('target:filter', 'all'), phase = useBorrowPreference<string>('target:phase', 'all'), sort = useBorrowPreference<string>('target:sort', 'id'), page = useBorrowPreference<number>('target:page', 1), pageSize = useBorrowPreference<number>('target:pageSize', 20), selectionCleared = ref(false)
 function seconds(time?: string) { return borrowSeconds(time, props.now) }
 function ready(target: BorrowTarget) { return borrowReady(target, props.now) }
-function matches(target: BorrowTarget, state: string) { return state === 'ready' ? ready(target) : state === 'waiting' ? target.enabled && !ready(target) : state === 'expiring' ? ready(target) && seconds(target.usable_until ?? target.expires_at) <= (target.probe_policy?.renew_before_seconds ?? 180) : state === 'disabled' ? !target.enabled : true }
+function routeSummary(target: BorrowTarget) {
+  const counts = borrowRouteCounts(target, props.now)
+  const parts = (['accepting', 'busy', 'pending', 'cooling', 'unavailable'] as const)
+    .filter(key => counts[key] > 0).map(key => t(`ticketBorrowing.statusSummary.${key}`, { count: counts[key] }))
+  return parts.join(' · ') || t('ticketBorrowing.statusSummary.accepting', { count: 0 })
+}
+function matches(target: BorrowTarget, state: string) { return state === 'ready' ? ready(target) : state === 'waiting' ? target.enabled && !ready(target) : state === 'expiring' ? ready(target) && seconds(borrowAdmissionDeadline(target, props.now)) <= (target.probe_policy?.renew_before_seconds ?? 180) : state === 'disabled' ? !target.enabled : true }
 function count(state: string) { return props.targets.filter(target => matches(target, state)).length }
 function phaseOf(target: BorrowTarget) { return borrowProbeState(target, props.running, props.now).phase }
 const filtered = computed(() => props.targets.filter(target => `${target.account_id} ${target.name} ${target.gateway || ''}`.toLowerCase().includes(search.value.trim().toLowerCase()) && matches(target, filter.value) && (phase.value === 'all' || phaseOf(target) === phase.value)).sort((a,b) => sort.value === 'name' ? a.name.localeCompare(b.name) || a.account_id-b.account_id : a.account_id-b.account_id))

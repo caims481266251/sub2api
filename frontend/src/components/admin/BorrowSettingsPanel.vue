@@ -6,11 +6,22 @@
     </div>
     <fieldset :disabled="busy || !saved" class="min-w-0 space-y-4">
       <legend class="sr-only">{{ t('ticketBorrowing.settings') }}</legend>
-      <section class="card space-y-3 p-5" data-testid="settings-admission">
-        <label for="borrow-admission-window" class="input-label">{{ t('ticketBorrowing.simplified.admissionWindow') }}</label>
-        <div class="relative max-w-xs"><input id="borrow-admission-window" v-model.number="admissionWindow" type="number" min="1" max="240" step="1" class="input pr-12 tabular-nums" :aria-invalid="!admissionValid" aria-describedby="borrow-admission-hint" required data-testid="admission-window" /><span class="pointer-events-none absolute inset-y-0 right-4 flex items-center text-sm text-gray-500">{{ t('ticketBorrowing.secondsUnit') }}</span></div>
-        <p id="borrow-admission-hint" class="text-xs leading-5" :class="admissionValid ? 'text-gray-500 dark:text-gray-400' : 'text-red-600'">{{ t(admissionValid ? 'ticketBorrowing.simplified.admissionHint' : 'ticketBorrowing.simplified.admissionError') }}</p>
-        <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('ticketBorrowing.simplified.automaticRefill') }}</p>
+      <section class="card space-y-3 p-5" data-testid="settings-route-pool">
+        <div class="grid gap-4 sm:grid-cols-2">
+          <div><label for="borrow-pool-size" class="input-label">{{ t('ticketBorrowing.routePool.size') }}</label><input id="borrow-pool-size" v-model.number="poolSize" type="number" min="1" max="256" step="1" class="input tabular-nums" :aria-invalid="!poolValid" required data-testid="route-pool-size" /><p class="mt-2 text-xs text-gray-500">{{ t('ticketBorrowing.routePool.sizeHint') }}</p></div>
+          <div><label for="borrow-route-cooldown" class="input-label">{{ t('ticketBorrowing.routePool.cooldown') }}</label><input id="borrow-route-cooldown" v-model.number="cooldown" type="number" min="1" max="86400" step="1" class="input tabular-nums" :aria-invalid="!cooldownValid" required data-testid="route-cooldown" /><p class="mt-2 text-xs text-gray-500">{{ t('ticketBorrowing.routePool.cooldownHint') }}</p></div>
+        </div>
+        <p v-if="!poolValid || !cooldownValid" role="alert" class="text-xs text-red-600">{{ t('ticketBorrowing.routePool.invalidSettings') }}</p>
+      </section>
+      <section class="card space-y-3 p-5" data-testid="settings-route-quality">
+        <h3 class="font-semibold">{{ t('ticketBorrowing.quality.title') }}</h3>
+        <p class="text-xs text-gray-500">{{ t('ticketBorrowing.quality.hint') }}</p>
+        <div class="grid gap-4 sm:grid-cols-3">
+          <div><label for="borrow-quality-model" class="input-label">{{ t('ticketBorrowing.quality.model') }}</label><select id="borrow-quality-model" v-model="qualityModel" class="input" data-testid="quality-model"><option v-for="item in qualityModels" :key="item" :value="item">{{ item }}</option></select></div>
+          <div><label for="borrow-quality-effort" class="input-label">{{ t('ticketBorrowing.quality.effort') }}</label><select id="borrow-quality-effort" v-model="qualityEffort" class="input" data-testid="quality-effort"><option v-for="item in qualityEfforts" :key="item" :value="item">{{ item }}</option></select></div>
+          <div><label for="borrow-quality-interval" class="input-label">{{ t('ticketBorrowing.quality.interval') }}</label><input id="borrow-quality-interval" v-model.number="qualityInterval" type="number" min="5" max="3600" step="1" class="input" :aria-invalid="!qualityValid" data-testid="quality-interval" required /></div>
+        </div>
+        <p v-if="!qualityValid" role="alert" class="text-xs text-red-600">{{ t('ticketBorrowing.quality.invalid') }}</p>
       </section>
       <section class="card min-w-0 overflow-hidden" data-testid="settings-limits">
           <details class="rounded-lg bg-blue-50 p-3 text-sm dark:bg-blue-900/20" data-testid="global-policy-impact"><summary class="cursor-pointer">{{ t('ticketBorrowing.management.policyImpact', { inherited: targets?.filter(v => v.enabled && v.probe_policy?.use_global).length ?? 0, overridden: targets?.filter(v => v.enabled && !v.probe_policy?.use_global).length ?? 0 }) }}</summary><ul class="mt-2 space-y-1 text-xs"><li v-for="target in targets?.filter(v => v.enabled)" :key="target.account_id"><button type="button" class="text-primary-600 underline" @click="$emit('target', target.account_id)">{{ target.name }} #{{ target.account_id }}</button> <BorrowTag kind="state" :value="target.probe_policy?.use_global ? 'inherited' : 'overridden'" /></li></ul></details>
@@ -66,7 +77,15 @@ defineEmits<{ save: []; revert: []; targets: []; target: [id: number] }>()
 const { t } = useI18n()
 // Emit a fresh draft for every edit. A concurrent server refresh may have
 // replaced the parent snapshot before the child receives its updated props.
-const admissionWindow = computed({ get: () => model.value.admission_window_seconds ?? Math.max(1, model.value.ttl_seconds - (model.value.min_route_remaining_seconds ?? 0)), set: value => { model.value = { ...model.value, admission_window_seconds: value } } })
+const poolSize = computed({ get: () => model.value.route_pool_size ?? 128, set: value => { model.value = { ...model.value, route_pool_size: value } } })
+const cooldown = computed({ get: () => model.value.route_cooldown_seconds ?? 120, set: value => { model.value = { ...model.value, route_cooldown_seconds: value } } })
+const qualityModels = ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-sol', 'gpt-5.6-sol']
+const qualityEfforts = ['low', 'medium', 'high', 'xhigh', 'max']
+const qualityConfig = computed(() => model.value.route_quality ?? { model: 'gpt-6-astra', reasoning_effort: 'medium', interval_seconds: 30 })
+const qualityModel = computed({ get: () => qualityConfig.value.model, set: value => { model.value = { ...model.value, route_quality: { ...qualityConfig.value, model: value } } } })
+const qualityEffort = computed({ get: () => qualityConfig.value.reasoning_effort, set: value => { model.value = { ...model.value, route_quality: { ...qualityConfig.value, reasoning_effort: value } } } })
+const qualityInterval = computed({ get: () => qualityConfig.value.interval_seconds, set: value => { model.value = { ...model.value, route_quality: { ...qualityConfig.value, interval_seconds: value } } } })
+const qualityValid = computed(() => qualityModels.includes(qualityModel.value) && qualityEfforts.includes(qualityEffort.value) && inRange(qualityInterval.value, 5, 3600))
 const continueTimeout = computed({ get: () => model.value.continue_timeout_seconds ?? 7, set: value => { model.value = { ...model.value, continue_timeout_seconds: value } } })
 const globalProbeConcurrency = computed({ get: () => model.value.probe_concurrency ?? 2, set: value => { model.value = { ...model.value, probe_concurrency: value } } })
 const sourceBudget = computed({ get: () => model.value.recovery.source_requests_per_minute, set: value => { model.value = { ...model.value, recovery: { ...model.value.recovery, source_requests_per_minute: value } } } })
@@ -74,7 +93,8 @@ const probeBudget = computed({ get: () => model.value.recovery.probe_requests_pe
 
 const inRange = (value: unknown, min: number, max: number) => typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max
 const continueTimeoutValid = computed(() => inRange(continueTimeout.value, 1, 45))
-const admissionValid = computed(() => inRange(admissionWindow.value, 1, 240))
+const poolValid = computed(() => inRange(poolSize.value, 1, 256))
+const cooldownValid = computed(() => inRange(cooldown.value, 1, 86400))
 const globalProbeValid = computed(() => inRange(globalProbeConcurrency.value, 1, 32))
 const sourceValid = computed(() => inRange(model.value.recovery.source_requests_per_minute, 1, 120))
 const probeValid = computed(() => inRange(model.value.recovery.probe_requests_per_minute, 2, 60))
@@ -82,14 +102,17 @@ const advancedOpen = ref(false)
 watch([sourceValid, probeValid, globalProbeValid, continueTimeoutValid], validity => {
   if (validity.some(value => !value)) advancedOpen.value = true
 }, { immediate: true })
-const valid = computed(() => continueTimeoutValid.value && admissionValid.value && globalProbeValid.value && sourceValid.value && probeValid.value)
+const valid = computed(() => qualityValid.value && continueTimeoutValid.value && poolValid.value && cooldownValid.value && globalProbeValid.value && sourceValid.value && probeValid.value)
 const waitSeconds = computed(() => props.saved?.source_budget?.available_at ? Math.max(0, Math.ceil((Date.parse(props.saved.source_budget.available_at)-props.now)/1000)) : 0)
 const budgetPercent = computed(() => { const budget = props.saved?.source_budget; return budget && budget.limit > 0 ? Math.min(100, Math.max(0, budget.used / budget.limit * 100)) : 0 })
 
 const differenceFields: Array<[string, (value: BorrowSettings) => unknown]> = [
- ['ticketBorrowing.simplified.admissionWindow', v => v.admission_window_seconds],
+ ['ticketBorrowing.quality.model', v => v.route_quality?.model ?? 'gpt-6-astra'],
+ ['ticketBorrowing.quality.effort', v => v.route_quality?.reasoning_effort ?? 'medium'],
+ ['ticketBorrowing.quality.interval', v => v.route_quality?.interval_seconds ?? 30],
+ ['ticketBorrowing.routePool.size', v => v.route_pool_size ?? 128],
+ ['ticketBorrowing.routePool.cooldown', v => v.route_cooldown_seconds ?? 120],
  ['ticketBorrowing.background', v => v.running],
- ['ticketBorrowing.replenishment.title', v => v.replenishment?.enabled ?? false],
  ['ticketBorrowing.probePolicy.concurrency', v => v.probe_concurrency ?? 2],
  ['ticketBorrowing.probePolicy.continueTimeout', v => v.continue_timeout_seconds ?? 7],
  ['ticketBorrowing.policyPage.sourceBudgetLabel', v => v.recovery?.source_requests_per_minute ?? 12],

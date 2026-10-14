@@ -283,6 +283,8 @@ export default {
         phase: '阶段',
         id: 'ID：',
         typeUpstream: '上游',
+        typeRecovered: '已恢复成功',
+        recoveredHint: '本次请求最终成功。以下保留中途上游故障及最终接手帐号，便于排查；这条记录不计入请求失败率。',
         typeRequest: '请求',
         typeAuth: '认证',
         typeAccountAuth: '账号认证',

@@ -309,7 +309,7 @@ func snapshotOpsStreamErrorContext(c *gin.Context, streamErr *OpsStreamError) {
 		streamErr.UpstreamDetail = strings.TrimSpace(streamErr.UpstreamDetail)
 	}
 	if c.Request != nil {
-		if a := requesttiming.LatestAttempt(c.Request.Context()); a != nil && a.Status >= 200 && a.Status < 300 && a.Terminal != "completed" && a.BorrowRouteID != "" && (streamErr.AccountID == 0 || a.AccountID == streamErr.AccountID) {
+		if a := requesttiming.LatestAttempt(c.Request.Context()); a != nil && a.Status >= 200 && a.Status < 300 && a.Terminal != "completed" && (a.BorrowRouteID != "" || requesttiming.RecoverySnapshot(c.Request.Context()) != nil) && (streamErr.AccountID == 0 || a.AccountID == streamErr.AccountID) {
 			// A stream failure's semantic 502/503 is not its wire HTTP status.
 			streamErr.UpstreamStatus = a.Status
 			found := false
@@ -432,9 +432,10 @@ func setOpsUpstreamError(c *gin.Context, upstreamStatusCode int, upstreamMessage
 // OpsUpstreamErrorEvent describes one upstream error attempt during a single gateway request.
 // It is stored in ops_error_logs.upstream_errors as a JSON array.
 type OpsUpstreamErrorEvent struct {
-	Attempt  *requesttiming.Attempt                `json:"attempt,omitempty"`
-	Recovery *requesttiming.BorrowRecoverySnapshot `json:"borrow_recovery,omitempty"`
-	AtUnixMs int64                                 `json:"at_unix_ms,omitempty"`
+	Attempt        *requesttiming.Attempt                `json:"attempt,omitempty"`
+	Recovery       *requesttiming.BorrowRecoverySnapshot `json:"borrow_recovery,omitempty"`
+	RequestOutcome *OpsUpstreamRequestOutcome            `json:"request_outcome,omitempty"`
+	AtUnixMs       int64                                 `json:"at_unix_ms,omitempty"`
 
 	// Passthrough 表示本次请求是否命中“原样透传（仅替换认证）”分支。
 	// 该字段用于排障与灰度评估；存入 JSON，不涉及 DB schema 变更。
@@ -485,6 +486,15 @@ type OpsUpstreamErrorEvent struct {
 	SkipMonitoring bool `json:"-"`
 }
 
+// RequestOutcome is separate from the failed provider attempt. A successful
+// fallback must not replace that attempt's account/status in health telemetry.
+type OpsUpstreamRequestOutcome struct {
+	State          string                 `json:"state"`
+	StatusCode     int                    `json:"status_code"`
+	FinalAccountID int64                  `json:"final_account_id,omitempty"`
+	Attempt        *requesttiming.Attempt `json:"attempt,omitempty"`
+}
+
 const (
 	opsProxyNameDirect  = "direct/no_proxy"
 	opsProxyNameUnknown = "unknown"
@@ -499,7 +509,7 @@ func appendOpsUpstreamError(c *gin.Context, ev OpsUpstreamErrorEvent) {
 	}
 	if c.Request != nil {
 		a := requesttiming.LatestAttempt(c.Request.Context())
-		if a != nil && a.BorrowRouteID != "" && a.AccountID == ev.AccountID {
+		if a != nil && a.AccountID == ev.AccountID {
 			ev.Attempt = a
 			ev.Recovery = requesttiming.RecoverySnapshot(c.Request.Context())
 		}

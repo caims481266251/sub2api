@@ -94,22 +94,13 @@ func TestBorrowCandidateProxySessionAndIdentity(t *testing.T) {
 	require.Equal(t, ordinary, got)
 }
 
-func TestBorrowCandidateAdmissionConsumesAcquisitionAndVerification(t *testing.T) {
-	start := time.Now().Add(-12 * time.Second)
-	deadline := borrowAdmissionDeadline(start, 80, time.Now().Add(time.Hour))
-	require.WithinDuration(t, time.Now().Add(68*time.Second), deadline, time.Second)
-	earlier := start.Add(25 * time.Second)
-	require.Equal(t, earlier, borrowAdmissionDeadline(start, 80, earlier))
-	w := 1
-	s := BorrowSettings{AdmissionWindowSeconds: &w}
-	require.NoError(t, ResolveBorrowAdmissionSettings(&s, BorrowSettings{TTLSeconds: 230}))
-	require.Equal(t, 1, s.AdmissionSeconds())
-	require.Equal(t, 30, s.TTLSeconds)
-	require.Equal(t, 29, *s.MinRouteRemainingSeconds)
-	p := BorrowSettings{Replenishment: &BorrowReplenishmentSettings{Enabled: true, Inventory: 4, HoldSeconds: 150, IntervalSeconds: 60}}
-	NormalizeBorrowSettings(&p)
-	require.Equal(t, 2, p.Replenishment.Inventory)
-	require.Zero(t, p.Replenishment.HoldSeconds)
+func TestBorrowPoolSettingsDefaultsAndValidation(t *testing.T) {
+	var s BorrowSettings
+	require.NoError(t, ResolveBorrowPoolSettings(&s, BorrowSettings{}))
+	require.Equal(t, 128, *s.RoutePoolSize)
+	require.Equal(t, 120, *s.RouteCooldownSeconds)
+	s.RouteCooldownSeconds = new(0)
+	require.Error(t, ResolveBorrowPoolSettings(&s, BorrowSettings{}))
 }
 
 func TestBorrowCandidateUsageIsRecordedOnlyAfterHeaders(t *testing.T) {

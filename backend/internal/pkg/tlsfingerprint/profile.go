@@ -30,7 +30,7 @@ func EffectiveProfile(profile *Profile) *Profile {
 	p.SignatureAlgorithms = resolve(p.SignatureAlgorithms, signatures)
 	p.ALPNProtocols = slices.Clone(p.ALPNProtocols)
 	if len(p.ALPNProtocols) == 0 {
-		p.ALPNProtocols = []string{"http/1.1"}
+		p.ALPNProtocols = []string{"h2", "http/1.1"}
 	}
 	p.SupportedVersions = resolve(p.SupportedVersions, []uint16{0x0304, 0x0303})
 	p.KeyShareGroups = resolve(p.KeyShareGroups, []uint16{0x001d})

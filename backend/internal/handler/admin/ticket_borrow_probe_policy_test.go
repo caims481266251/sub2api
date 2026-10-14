@@ -66,7 +66,7 @@ func TestTicketBorrowProbeBatchAPIValidationScopeAndRedaction(t *testing.T) {
 				require.Contains(t, w.Body.String(), `"status":"failed"`)
 			}
 			if tc.name == "valid-zero" {
-				require.Equal(t, service.BorrowProbePolicy{Revision: 1, Concurrency: 2, RenewBeforeSeconds: 0}, repo.policy)
+				require.Equal(t, service.BorrowProbePolicy{Revision: 1, Concurrency: 2, RenewBeforeSeconds: 15}, repo.policy)
 			}
 		})
 	}
@@ -85,10 +85,10 @@ func TestTicketBorrowProbePolicyAPIValidationAndScope(t *testing.T) {
 		{name: "zero-window", body: `{"revision":1,"concurrency":32,"renew_before_seconds":0}`, status: 200},
 		{name: "automatic-window", body: `{"revision":1,"concurrency":3}`, status: 200},
 		{name: "fractional", body: `{"revision":1,"concurrency":1.5,"renew_before_seconds":15}`, status: 400},
-		{name: "fractional-seconds", body: `{"revision":1,"concurrency":3,"renew_before_seconds":1.5}`, status: 400},
+		{name: "retired-field-ignored", body: `{"revision":1,"concurrency":3,"renew_before_seconds":1.5}`, status: 200},
 		{name: "zero-concurrency", body: `{"revision":1,"concurrency":0,"renew_before_seconds":15}`, status: 400},
 		{name: "too-high", body: `{"revision":1,"concurrency":33,"renew_before_seconds":15}`, status: 400},
-		{name: "negative-window", body: `{"revision":1,"concurrency":3,"renew_before_seconds":-1}`, status: 400},
+		{name: "retired-negative-ignored", body: `{"revision":1,"concurrency":3,"renew_before_seconds":-1}`, status: 200},
 		{name: "observer", observer: true, status: 403},
 		{name: "stale", body: `{"revision":1,"concurrency":3,"renew_before_seconds":15}`, err: service.ErrBorrowConflict, status: 409},
 		{name: "storage-redacted", body: `{"revision":1,"concurrency":3,"renew_before_seconds":15}`, err: errors.New("SECRET_DATABASE"), status: 503},

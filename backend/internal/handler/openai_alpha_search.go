@@ -115,6 +115,7 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 	failedAccountIDs := make(map[int64]struct{})
 	sameAccountRetryCount := make(map[int64]int)
 	var lastFailoverErr *service.UpstreamFailoverError
+	var lastAdmissionErr error
 	var rpmAdmission openAIRPMAdmission
 	switchCount := 0
 	var oauth429FailoverState service.OpenAIOAuth429FailoverState
@@ -162,6 +163,9 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 			}
 			if lastFailoverErr != nil {
 				h.handleFailoverExhausted(c, lastFailoverErr, false)
+			} else if lastAdmissionErr != nil {
+				status, code, message := openAIAdmissionClientError(lastAdmissionErr)
+				h.errorResponse(c, status, code, message)
 			} else {
 				h.errorResponse(c, http.StatusBadGateway, "upstream_error", "Upstream request failed")
 			}
@@ -201,6 +205,18 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 			}
 			return h.gatewayService.ForwardAlphaSearch(rpmAdmission.forwardContext(c.Request.Context(), account), c, account, forwardBody)
 		}()
+		if retryOpenAIInitialAdmission(c, err, result, body, account.ID, failedAccountIDs, &switchCount, h.maxAccountSwitches) {
+			lastAdmissionErr = err
+			reqLog.Info("openai_alpha_search.admission_reselecting", zap.Int64("account_id", account.ID), zap.Int("switch_count", switchCount))
+			continue
+		}
+		if service.IsOpenAITurnAdmissionError(err) {
+			if !failoverClientGone(c) && !c.Writer.Written() {
+				status, code, message := openAIAdmissionClientError(err)
+				h.errorResponse(c, status, code, message)
+			}
+			return
+		}
 		if h.handleOpenAIRPMForwardError(c, err, streamStarted, false) {
 			return
 		}
