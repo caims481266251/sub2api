@@ -132,6 +132,8 @@ type apiKeyAllByUserIDLister interface {
 
 // APIKeyRateLimitData holds rate limit usage and window state for an API key.
 type APIKeyRateLimitData struct {
+	// QuotaUsed 是总额度已用量（quota_used）。
+	QuotaUsed     float64
 	Usage5h       float64
 	Usage1d       float64
 	Usage7d       float64
@@ -224,6 +226,7 @@ type CreateAPIKeyRequest struct {
 	CustomKey              *string  `json:"custom_key"`   // 可选的自定义key
 	IPWhitelist            []string `json:"ip_whitelist"` // IP 白名单
 	IPBlacklist            []string `json:"ip_blacklist"` // IP 黑名单
+	GroupIDs               []int64  `json:"group_ids"`
 
 	// Quota fields
 	Quota         float64 `json:"quota"`           // Quota limit in USD (0 = unlimited)
@@ -247,6 +250,7 @@ type UpdateAPIKeyRequest struct {
 	Status                 *string   `json:"status"`
 	IPWhitelist            *[]string `json:"ip_whitelist"` // IP 白名单（nil 不修改，空数组清空）
 	IPBlacklist            *[]string `json:"ip_blacklist"` // IP 黑名单（nil 不修改，空数组清空）
+	GroupIDs               *[]int64  `json:"group_ids"`
 
 	// Quota fields
 	Quota           *float64   `json:"quota"`       // Quota limit in USD (nil = no change, 0 = unlimited)
@@ -299,8 +303,12 @@ type RateLimitCacheInvalidator interface {
 
 type APIKeyService struct {
 	hostingService            *HostingService
+	localAuth                 *RegionalAuthReader
+	regionalAuthRuntime       *regionalSchedulerRuntime
 	apiKeyRepo                APIKeyRepository
 	userRepo                  UserRepository
+	groupRouter               APIKeyGroupRouter
+	securityPenalties         *SecurityPenaltyService
 	groupRepo                 GroupRepository
 	userSubRepo               UserSubscriptionRepository
 	userGroupRateRepo         UserGroupRateRepository
@@ -494,6 +502,9 @@ func (s *APIKeyService) incrementAPIKeyErrorCount(ctx context.Context, userID in
 func (s *APIKeyService) canUserBindGroup(ctx context.Context, user *User, group *Group) bool {
 	// 订阅类型分组：需要有效订阅
 	if group.IsSubscriptionType() {
+		if s.userSubRepo == nil {
+			return false
+		}
 		_, err := s.userSubRepo.GetActiveByUserIDAndGroupID(ctx, user.ID, group.ID)
 		return err == nil // 有有效订阅则允许
 	}
@@ -544,6 +555,7 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 			return nil, err
 		}
 		req.GroupID = nil
+		req.GroupIDs = nil
 		req.HostingPoolID = normalizeHostingPoolID(req.HostingPoolID)
 		if err := s.hostingService.ResolvePool(ctx, userID, req.HostingPoolID); err != nil {
 			return nil, err
@@ -562,19 +574,16 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 		return nil, ErrHostingFallbackInvalid
 	}
 
-	// 验证分组权限（如果指定了分组）
-	if req.GroupID != nil {
-		group, err := s.groupRepo.GetByID(ctx, *req.GroupID)
-		if err != nil {
-			return nil, fmt.Errorf("get group: %w", err)
-		}
-
-		// 检查用户是否可以绑定该分组
-		if !s.canUserBindGroup(ctx, user, group) {
-			return nil, ErrGroupNotAllowed
-		}
+	groupIDs, err := normalizeAPIKeyGroupIDs(req.GroupID, req.GroupIDs)
+	if err != nil {
+		return nil, err
 	}
-
+	if err := s.validateAPIKeyGroups(ctx, user, groupIDs); err != nil {
+		return nil, err
+	}
+	if len(groupIDs) > 0 {
+		req.GroupID = &groupIDs[0]
+	}
 	var key string
 
 	// 判断是否使用自定义Key
@@ -632,6 +641,7 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 		RateLimit5h:            req.RateLimit5h,
 		RateLimit1d:            req.RateLimit1d,
 		RateLimit7d:            req.RateLimit7d,
+		GroupIDs:               groupIDs,
 	}
 
 	// Set expiration time if specified
@@ -808,6 +818,12 @@ func (s *APIKeyService) GetByID(ctx context.Context, id int64) (*APIKey, error) 
 
 // GetByKey 根据Key字符串获取API Key（用于认证）
 func (s *APIKeyService) GetByKey(ctx context.Context, key string) (*APIKey, error) {
+	if s.localAuth != nil {
+		return s.localAuth.GetByKey(ctx, key)
+	}
+	if s.cfg != nil && s.cfg.Runtime.Role == config.RuntimeRoleGateway && s.cfg.Runtime.RegionalAuthFile != "" {
+		return nil, ErrRegionalAuthUnavailable
+	}
 	if len(key) == 0 || len(key) > MaxAPIKeyCredentialBytes {
 		return nil, ErrAPIKeyNotFound
 	}
@@ -867,6 +883,12 @@ func (s *APIKeyService) GetByKey(ctx context.Context, key string) (*APIKey, erro
 // not a prerequisite for revocation. The normal auth lookup concurrency bound
 // and the caller's admission timeout still apply.
 func (s *APIKeyService) GetByKeyUncached(ctx context.Context, key string) (*APIKey, error) {
+	if s.localAuth != nil {
+		return s.localAuth.GetByKey(ctx, key)
+	}
+	if s.cfg != nil && s.cfg.Runtime.Role == config.RuntimeRoleGateway && s.cfg.Runtime.RegionalAuthFile != "" {
+		return nil, ErrRegionalAuthUnavailable
+	}
 	if len(key) == 0 || len(key) > MaxAPIKeyCredentialBytes {
 		return nil, ErrAPIKeyNotFound
 	}
@@ -965,6 +987,7 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 				return nil, err
 			}
 			apiKey.GroupID = nil
+			apiKey.GroupIDs = nil
 			apiKey.Group = nil
 			fields.GroupID = true
 			req.GroupID = nil
@@ -978,8 +1001,17 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 		apiKey.RouteMode = mode
 		fields.HostingRoute = true
 	}
-	if apiKey.RouteMode == RouteModeHosted && req.GroupID != nil {
+	if apiKey.RouteMode == RouteModeHosted && (req.GroupID != nil || (req.GroupIDs != nil && len(*req.GroupIDs) > 0)) {
 		return nil, infraerrors.BadRequest("API_KEY_ROUTE_INVALID", "托管模式不能绑定普通分组")
+	}
+
+	if apiKey.RouteMode == RouteModeHosted {
+		// Hosted keys have no ordinary group binding, including the multi-group table.
+		if len(apiKey.GroupIDs) > 0 {
+			apiKey.GroupIDs = nil
+			fields.GroupID = true
+		}
+		req.GroupIDs = nil
 	}
 
 	// 更新字段
@@ -988,23 +1020,28 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 		fields.Name = true
 	}
 
-	if req.GroupID != nil {
-		// 验证分组权限
+	if req.GroupID != nil || req.GroupIDs != nil {
 		user, err := s.userRepo.GetByID(ctx, userID)
 		if err != nil {
 			return nil, fmt.Errorf("get user: %w", err)
 		}
-
-		group, err := s.groupRepo.GetByID(ctx, *req.GroupID)
+		var requested []int64
+		if req.GroupIDs != nil {
+			requested = *req.GroupIDs
+		}
+		ids, err := normalizeAPIKeyGroupIDs(req.GroupID, requested)
 		if err != nil {
-			return nil, fmt.Errorf("get group: %w", err)
+			return nil, err
 		}
-
-		if !s.canUserBindGroup(ctx, user, group) {
-			return nil, ErrGroupNotAllowed
+		if err := s.validateAPIKeyGroups(ctx, user, ids); err != nil {
+			return nil, err
 		}
-
-		apiKey.GroupID = req.GroupID
+		apiKey.GroupIDs = ids
+		apiKey.GroupID = nil
+		apiKey.Group = nil
+		if len(ids) > 0 {
+			apiKey.GroupID = &ids[0]
+		}
 		fields.GroupID = true
 	}
 

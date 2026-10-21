@@ -1441,6 +1441,7 @@
 
         <!-- Tab: Security — Registration, Turnstile, LinuxDo -->
         <div v-show="activeTab === 'security'" class="space-y-6">
+          <IPRiskSettings />
           <!-- Registration Settings -->
           <div class="card">
             <div
@@ -1635,6 +1636,24 @@
                 <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
                   {{ t("admin.settings.registration.frontendUrlHint") }}
                 </p>
+              </div>
+
+              <!-- Login rate limits -->
+              <div
+                class="flex items-start justify-between gap-4 border-t border-gray-100 pt-4 dark:border-dark-700"
+              >
+                <div>
+                  <label class="font-medium text-gray-900 dark:text-white">
+                    {{ t("admin.settings.security.loginRateLimit") }}
+                  </label>
+                  <p class="text-sm text-gray-500 dark:text-gray-400">
+                    {{ t("admin.settings.security.loginRateLimitHint") }}
+                  </p>
+                </div>
+                <Toggle
+                  v-model="form.login_rate_limit_enabled"
+                  data-testid="login-rate-limit-toggle"
+                />
               </div>
 
               <!-- TOTP 2FA -->
@@ -4073,7 +4092,7 @@
                       </tr>
                     </thead>
                     <tbody class="space-y-2">
-                      <tr v-for="p in (['anthropic', 'openai', 'gemini', 'antigravity', 'grok', 'typesafe'] as const)" :key="p" class="align-top">
+                      <tr v-for="p in platformQuotaRows(form.default_platform_quotas)" :key="p" class="align-top">
                         <td class="pr-4 py-1">
                           <span class="font-mono text-xs text-gray-700 dark:text-gray-300">{{ p }}</span>
                         </td>
@@ -4408,7 +4427,7 @@
                             </tr>
                           </thead>
                           <tbody>
-                            <tr v-for="p in (['anthropic', 'openai', 'gemini', 'antigravity', 'grok', 'typesafe'] as const)" :key="`${authSource.source}-pq-${p}`" class="align-top">
+                            <tr v-for="p in platformQuotaRows(authSourceDefaults[authSource.source].platform_quotas)" :key="`${authSource.source}-pq-${p}`" class="align-top">
                               <td class="pr-4 py-1">
                                 <span class="font-mono text-xs text-gray-700 dark:text-gray-300">{{ p }}</span>
                               </td>
@@ -4520,183 +4539,13 @@
               </h2>
             </div>
             <div class="p-6 space-y-4">
-                <div class="flex items-center justify-between gap-4">
-                  <div class="min-w-0">
-                    <h3 class="text-base font-semibold text-gray-900 dark:text-white">
-                      {{ t("admin.settings.gatewayForwarding.codexTicketEnabled") }}
-                    </h3>
-                    <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                      {{ t("admin.settings.gatewayForwarding.codexTicketEnabledDesc") }}
-                    </p>
+                <RequestTimezoneSettings v-model="form.openai_request_timezone_enabled" v-model:auto="form.openai_request_timezone_auto" />
+                <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-600" data-testid="codex-management-links">
+                  <p class="text-sm text-gray-500 dark:text-gray-400">{{ localText('自动打票、模型与票据策略在「打票全流程」管理；采票出口、订阅与节点在「IP 管理」管理。', 'Manage automatic harvesting, models and ticket policies in Harvest Flow; manage exits, subscriptions and nodes in IP Management.') }}</p>
+                  <div class="mt-3 flex flex-wrap gap-2">
+                    <router-link to="/admin/harvest-flow" class="btn btn-secondary btn-sm">{{ t('nav.harvestFlow') }}</router-link>
+                    <router-link to="/admin/proxies#harvest" class="btn btn-secondary btn-sm">{{ localText('IP 管理', 'IP Management') }}</router-link>
                   </div>
-                  <Toggle
-                    id="codex-ticket-enabled"
-                    v-model="form.openai_codex_ticket_enabled"
-                  />
-                </div>
-                <div class="flex items-center justify-between gap-4 rounded-lg border border-gray-200 p-4 dark:border-dark-600">
-                  <div class="min-w-0">
-                    <h3 class="text-sm font-semibold text-gray-900 dark:text-white">
-                      {{ t("admin.settings.gatewayForwarding.codexTicketFailClosed") }}
-                    </h3>
-                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                      {{ t("admin.settings.gatewayForwarding.codexTicketFailClosedDesc") }}
-                    </p>
-                  </div>
-                  <Toggle
-                    id="codex-ticket-fail-closed"
-                    v-model="form.openai_codex_ticket_fail_closed"
-                  />
-                </div>
-                <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
-                  <h3 class="text-sm font-semibold text-gray-900 dark:text-white">
-                    {{ t("admin.settings.gatewayForwarding.codexTicketModels") }}
-                  </h3>
-                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                    {{ t("admin.settings.gatewayForwarding.codexTicketModelsDesc") }}
-                  </p>
-                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                    {{ t("admin.settings.gatewayForwarding.codexTicketShapeNotice") }}
-                  </p>
-                  <fieldset class="mt-3 rounded-lg border border-gray-200 p-3 dark:border-dark-600">
-                    <legend class="px-1 text-sm font-semibold">{{ localText('自动打票范围', 'Automatic harvest scope') }}</legend>
-                    <select id="codex-ticket-harvest-scope" v-model="form.openai_codex_ticket_harvest_scope.mode" class="input">
-                      <option value="all">{{ localText('全部 OpenAI 账号（兼容原设置）', 'All OpenAI accounts (legacy default)') }}</option>
-                      <option value="selected">{{ localText('仅指定分组', 'Selected groups only') }}</option>
-                    </select>
-                    <label class="mt-3 block text-sm" for="codex-ticket-account-policy">{{ localText('账号采集策略', 'Account harvest policy') }}</label>
-                    <select id="codex-ticket-account-policy" v-model="form.openai_codex_ticket_harvest_scope.account_policy" class="input mt-2">
-                      <option value="schedulable_only">{{ localText('仅可调度账号（默认）', 'Schedulable accounts only (default)') }}</option>
-                      <option value="prioritize_schedulable">{{ localText('可调度优先，手动停调账号排队', 'Prioritize schedulable; queue manually disabled accounts') }}</option>
-                    </select>
-                    <div v-if="form.openai_codex_ticket_harvest_scope.mode === 'selected'" class="mt-3 space-y-2">
-                      <p v-if="codexHarvestGroupsLoadFailed" class="text-sm text-amber-600">{{ localText('分组加载失败，已选范围保留，请刷新后重试。', 'Could not load groups. Saved selection is preserved; refresh to retry.') }}</p>
-                      <label v-for="group in codexHarvestGroupChoices" :key="group.id" class="flex items-center gap-2 text-sm">
-                        <input :id="'codex-ticket-group-' + group.id" v-model="form.openai_codex_ticket_harvest_scope.group_ids" type="checkbox" :value="group.id" />
-                        <span>{{ group.name }} (#{{ group.id }})</span>
-                      </label>
-                      <p v-if="form.openai_codex_ticket_harvest_scope.group_ids.length === 0" class="text-sm text-amber-600">{{ localText('未选择分组：不会自动打票，不会退回全部账号。', 'No groups selected: automatic harvesting is paused, not broadened to all accounts.') }}</p>
-                    </div>
-                    <p class="mt-2 text-xs text-gray-500">{{ localText('控制后台采集。范围外账号不再自动补票；缺票拦截开启时，范围外遗留门票也不再参与门控选号。账号级「不打票」只停采集，不停调度，也不等于降智。限流、过载、临时冷却、过期和配额耗尽账号始终跳过。兼容模式只会把手动关闭「参与调度」的账号放到后排。保存后下轮生效。', 'Controls background harvesting. Out-of-scope accounts are not probed, and fail-closed routing will not spend leftover tickets on them. Per-account skip-harvest only stops probing — the account stays schedulable and is not treated as paused or 降智. Rate-limited, overloaded, cooling-down, expired, and quota-exhausted accounts are always skipped. Compatibility mode only defers accounts whose scheduling switch was manually disabled. Changes apply next round.') }}</p>
-                  </fieldset>
-                  <label class="mt-3 block text-sm" for="codex-ticket-strategy">{{ localText('票据刷新策略', 'Ticket refresh strategy') }}</label>
-                  <select id="codex-ticket-strategy" v-model="form.openai_codex_ticket_strategy" class="input mt-2">
-                    <option value="standby">{{ localText('提前准备备用（默认）', 'Prepare standby (default)') }}</option>
-                    <option value="fixed">{{ localText('固定主用，失效后再采集', 'Keep primary until invalid') }}</option>
-                  </select>
-                  <label class="mt-3 flex items-center gap-2 text-sm"><input id="codex-ticket-strict" type="checkbox" v-model="form.openai_codex_ticket_strict_response" />{{ localText('严格拦截票据响应不匹配（默认关闭）', 'Reject mismatched ticket responses (off by default)') }}</label>
-                  <p class="mt-1 text-xs text-gray-500">{{ localText('仅在 HTTP 响应头明确不匹配时拦截正文；当前请求可能已计费，不会自动重放。关闭时只更新后续票据调度。', 'Rejects the body when HTTP response state headers mismatch. The upstream may have charged; the request is not replayed. When off, only future ticket scheduling changes.') }}</p>
-                  <p class="mt-1 text-xs text-gray-500">{{ localText('切换策略保留有效主备票据和冷却。固定主用可能在失效后短暂等待新票。', 'Switching preserves valid tickets and cooldowns. Fixed primary may briefly wait for a new ticket after expiry.') }}</p>
-                  <div class="mt-3 grid gap-3 sm:grid-cols-2">
-                    <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-                      <input
-                        id="codex-ticket-model-astra"
-                        type="checkbox"
-                        :checked="form.openai_codex_ticket_models.includes('gpt-6-astra')"
-                        @change="toggleCodexTicketModel('gpt-6-astra', ($event.target as HTMLInputElement).checked)"
-                      />
-                      <span>Astra (gpt-6-astra)</span>
-                    </label>
-                    <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-                      <input
-                        id="codex-ticket-model-sol"
-                        type="checkbox"
-                        :checked="form.openai_codex_ticket_models.includes('gpt-5.6-sol')"
-                        @change="toggleCodexTicketModel('gpt-5.6-sol', ($event.target as HTMLInputElement).checked)"
-                      />
-                      <span>Sol (gpt-5.6-sol)</span>
-                    </label>
-                  </div>
-                </div>
-                <div>
-                  <h3 class="text-base font-semibold text-gray-900 dark:text-white">
-                    {{ t("admin.settings.gatewayForwarding.codexTicketHarvestProxy") }}
-                  </h3>
-                  <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                    {{ t("admin.settings.gatewayForwarding.codexTicketHarvestProxyDesc") }}
-                  </p>
-                  <div class="mt-3 flex flex-wrap gap-2" role="radiogroup" :aria-label="t('admin.settings.gatewayForwarding.codexTicketProxyMode')">
-                    <label
-                      class="inline-flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm transition-colors"
-                      :class="codexTicketProxyMode === 'mihomo'
-                        ? 'border-primary-500 bg-primary-50 text-primary-700 dark:bg-primary-900/30 dark:text-primary-300'
-                        : 'border-gray-200 text-gray-600 hover:border-primary-300 dark:border-dark-600 dark:text-gray-400'"
-                    >
-                      <input
-                        class="sr-only"
-                        type="radio"
-                        name="codex-ticket-proxy-mode"
-                        value="mihomo"
-                        :checked="codexTicketProxyMode === 'mihomo'"
-                        @change="selectCodexTicketProxyMode('mihomo')"
-                      />
-                      <span>{{ t("admin.settings.gatewayForwarding.codexTicketProxyModeMihomo") }}</span>
-                    </label>
-                    <label
-                      class="inline-flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm transition-colors"
-                      :class="codexTicketProxyMode === 'static'
-                        ? 'border-primary-500 bg-primary-50 text-primary-700 dark:bg-primary-900/30 dark:text-primary-300'
-                        : 'border-gray-200 text-gray-600 hover:border-primary-300 dark:border-dark-600 dark:text-gray-400'"
-                    >
-                      <input
-                        class="sr-only"
-                        type="radio"
-                        name="codex-ticket-proxy-mode"
-                        value="static"
-                        :checked="codexTicketProxyMode === 'static'"
-                        @change="selectCodexTicketProxyMode('static')"
-                      />
-                      <span>{{ t("admin.settings.gatewayForwarding.codexTicketProxyModeStatic") }}</span>
-                    </label>
-                    <label
-                      class="inline-flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm transition-colors"
-                      :class="codexTicketProxyMode === 'ip_pool'
-                        ? 'border-primary-500 bg-primary-50 text-primary-700 dark:bg-primary-900/30 dark:text-primary-300'
-                        : 'border-gray-200 text-gray-600 hover:border-primary-300 dark:border-dark-600 dark:text-gray-400'"
-                    >
-                      <input
-                        class="sr-only"
-                        type="radio"
-                        name="codex-ticket-proxy-mode"
-                        value="ip_pool"
-                        :checked="codexTicketProxyMode === 'ip_pool'"
-                        @change="selectCodexTicketProxyMode('ip_pool')"
-                      />
-                      <span>{{ t("admin.settings.gatewayForwarding.codexTicketProxyModeIPPool") }}</span>
-                    </label>
-                  </div>
-                  <div
-                    v-if="codexTicketProxyMode === 'mihomo'"
-                    class="mt-3 rounded-md border border-primary-200 bg-primary-50/60 px-3 py-2.5 dark:border-primary-800 dark:bg-primary-900/20"
-                  >
-                    <div class="flex flex-wrap items-center gap-2 text-sm text-primary-800 dark:text-primary-200">
-                      <span>{{ t("admin.settings.gatewayForwarding.codexTicketProxyMihomoEndpoint") }}</span>
-                      <code class="rounded bg-white/70 px-1.5 py-0.5 font-mono text-xs dark:bg-dark-800/70">{{ CODEX_TICKET_MIHOMO_PROXY_URL }}</code>
-                    </div>
-                    <MihomoProxySelector @ready="selectMihomoHarvestProxy" />
-                  </div>
-                  <p
-                    v-else-if="codexTicketProxyMode === 'ip_pool'"
-                    data-testid="codex-ticket-proxy-ip-pool-hint"
-                    class="mt-3 rounded-md border border-primary-200 bg-primary-50/60 px-3 py-2.5 text-sm text-primary-800 dark:border-primary-800 dark:bg-primary-900/20 dark:text-primary-200"
-                  >
-                    {{ t("admin.settings.gatewayForwarding.codexTicketProxyIPPoolHint") }}
-                  </p>
-                  <input
-                    v-else
-                    id="codex-ticket-harvest-proxy"
-                    v-model="form.openai_codex_ticket_harvest_proxy_url"
-                    type="text"
-                    class="input mt-3 w-full font-mono text-sm"
-                    :placeholder="t('admin.settings.gatewayForwarding.codexTicketHarvestProxyPlaceholder')"
-                    autocomplete="off"
-                  />
-                  <p
-                    v-if="form.openai_codex_ticket_harvest_proxy_configured && codexTicketProxyMode === 'static'"
-                    class="mt-1.5 text-xs text-gray-500 dark:text-gray-400"
-                  >
-                    {{ t("admin.settings.gatewayForwarding.codexTicketHarvestProxyConfigured") }}
-                  </p>
                 </div>
                 <div>
                   <h3 class="text-base font-semibold text-gray-900 dark:text-white">
@@ -5545,6 +5394,20 @@
                   <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
                     {{ t("admin.settings.gatewayForwarding.grokDefaultBaseURLModeHint") }}
                   </p>
+                </div>
+                <div class="flex items-center justify-between gap-5 md:col-span-2">
+                  <div>
+                    <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.gatewayForwarding.grokVideoSourceURL") }}
+                    </label>
+                    <p class="mt-0.5 max-w-xl text-xs text-gray-500 dark:text-gray-400">
+                      {{ t("admin.settings.gatewayForwarding.grokVideoSourceURLHint") }}
+                    </p>
+                  </div>
+                  <Toggle
+                    v-model="form.grok_video_source_url_enabled"
+                    data-testid="grok-video-source-url-toggle"
+                  />
                 </div>
 
               <!-- OpenAI Responses 首 token 统计 -->
@@ -6588,6 +6451,65 @@
               </div>
               <label class="toggle">
                 <input v-model="form.usage_show_long_context_badge" type="checkbox" />
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+
+            <div class="flex items-center justify-between">
+              <div>
+                <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  {{ t('admin.settings.cache_rate.label') }}
+                </label>
+                <p class="text-xs text-gray-500 dark:text-gray-400">
+                  {{ t('admin.settings.cache_rate.description') }}
+                </p>
+              </div>
+              <label class="toggle">
+                <input
+                  v-model="form.usage_show_cache_rate"
+                  data-testid="usage-show-cache-rate"
+                  type="checkbox"
+                  @change="form.usage_show_cache_rate_to_users = form.usage_show_cache_rate && form.usage_show_cache_rate_to_users"
+                />
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+
+            <div class="flex items-center justify-between" :class="form.usage_show_cache_rate ? '' : 'opacity-60'">
+              <div>
+                <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  {{ t('admin.settings.cache_rate_to_users.label') }}
+                </label>
+                <p class="text-xs text-gray-500 dark:text-gray-400">
+                  {{ t('admin.settings.cache_rate_to_users.description') }}
+                </p>
+              </div>
+              <label class="toggle">
+                <input
+                  v-model="form.usage_show_cache_rate_to_users"
+                  data-testid="usage-show-cache-rate-to-users"
+                  type="checkbox"
+                  :disabled="!form.usage_show_cache_rate"
+                />
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+
+            <div class="flex items-center justify-between">
+              <div>
+                <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  {{ t('admin.settings.upstream_response_model_to_users.label') }}
+                </label>
+                <p class="text-xs text-gray-500 dark:text-gray-400">
+                  {{ t('admin.settings.upstream_response_model_to_users.description') }}
+                </p>
+              </div>
+              <label class="toggle">
+                <input
+                  v-model="form.usage_show_upstream_response_model_to_users"
+                  data-testid="usage-show-upstream-response-model-to-users"
+                  type="checkbox"
+                />
                 <span class="toggle-slider"></span>
               </label>
             </div>
@@ -9473,6 +9395,7 @@
 <script setup lang="ts">
 import { excelBPSImageLimits } from "@/utils/excelBPSImageLimits";
 import { ref, reactive, computed, onMounted, watch } from "vue";
+import { listPlatformIds } from "@/constants/platformCatalog";
 import { useI18n } from "vue-i18n";
 import { useSettingsNavigation } from "@/composables/useSettingsNavigation";
 import type { SettingsTab } from "@/utils/settingsSearch";
@@ -9531,11 +9454,13 @@ import PaymentProviderList from "@/components/payment/PaymentProviderList.vue";
 import PaymentProviderDialog from "@/components/payment/PaymentProviderDialog.vue";
 import GroupBadge from "@/components/common/GroupBadge.vue";
 import GroupOptionItem from "@/components/common/GroupOptionItem.vue";
+import RequestTimezoneSettings from "@/components/settings/RequestTimezoneSettings.vue";
 import Toggle from "@/components/common/Toggle.vue";
 import ProxySelector from "@/components/common/ProxySelector.vue";
 import ImageUpload from "@/components/common/ImageUpload.vue";
 import BackupSettings from "@/views/admin/BackupView.vue";
 import ServerlessSettings from "@/components/settings/ServerlessSettings.vue";
+import IPRiskSettings from "@/features/ip-risk/IPRiskSettings.vue";
 import EmailTemplateEditor from "@/views/admin/settings/EmailTemplateEditor.vue";
 import RechargeBonusTierEditor from "@/components/admin/settings/RechargeBonusTierEditor.vue";
 import {
@@ -9546,7 +9471,6 @@ import {
   type RechargeBonusTierDraft,
 } from "@/utils/rechargeBonus";
 import OpenAIFastPolicyUserSelector from "@/views/admin/settings/OpenAIFastPolicyUserSelector.vue";
-import MihomoProxySelector from "@/views/admin/settings/MihomoProxySelector.vue";
 import { useClipboard } from "@/composables/useClipboard";
 import {
   useStepUp,
@@ -9676,18 +9600,6 @@ const adminApiKeyMasked = ref("");
 const adminApiKeyOperating = ref(false);
 const newAdminApiKey = ref("");
 const subscriptionGroups = ref<AdminGroup[]>([]);
-const codexHarvestGroups = ref<AdminGroup[]>([]);
-const codexHarvestGroupsLoadFailed = ref(false);
-const codexHarvestGroupChoices = computed(() => {
-  const known = new Set(codexHarvestGroups.value.map(group => group.id));
-  return [
-    ...codexHarvestGroups.value.map(group => ({ id: group.id, name: group.name })),
-    ...form.openai_codex_ticket_harvest_scope.group_ids.filter(id => !known.has(id)).map(id => ({
-      id, name: localText('不可用或已删除的分组', 'Unavailable or deleted group') + ' #' + id,
-    })),
-  ];
-});
-
 // Upstream billing probe state
 const upstreamBillingProbeLoading = ref(true);
 const upstreamBillingProbeSaving = ref(false);
@@ -10215,12 +10127,12 @@ interface DefaultSubscriptionGroupOption {
 
 type SettingsForm = Omit<
   SystemSettings,
+  | `openai_codex_ticket_${string}`
   | "wechat_connect_open_enabled"
   | "wechat_connect_mp_enabled"
   | "wechat_connect_mobile_enabled"
   | "openai_oauth_scheduling_rate_multiplier"
 > & {
-  openai_codex_ticket_harvest_scope: { mode: "all" | "selected"; group_ids: number[]; account_policy: "schedulable_only" | "prioritize_schedulable" };
   /** Form always binds a concrete boolean (SystemSettings marks this optional). */
   channel_monitor_hide_throughput: boolean;
   channel_monitor_show_quota: boolean;
@@ -10264,7 +10176,7 @@ type SettingsForm = Omit<
   payment_recharge_bonus_tiers: RechargeBonusTierDraft[];
   payment_recharge_bonus_mode: RechargeBonusMode;
   payment_recharge_bonus_notice: string;
-  // 系统全局平台限额 map；form 内始终归一化为全 4 平台对象（模板非空绑定依赖此不变量）
+  // 系统全局平台限额 map；form 内始终归一化为全部平台对象（模板非空绑定依赖此不变量）
   default_platform_quotas: DefaultPlatformQuotasMap;
   account_scheduling_thresholds: ReturnType<typeof normalizeAccountSchedulingThresholdsMap>;
   prism_browser_api_key: string;
@@ -10276,6 +10188,11 @@ const schedulingThresholdPlatforms = SCHEDULING_THRESHOLD_PLATFORMS;
 // made on the monitor page is not overwritten by this page's older copy.
 let loadedChannelMonitorMode: 'v1' | 'v2' | 'v3' = 'v1'
 const channelMonitorModes = ['v1', 'v2', 'v3'] as const
+// 平台限额表格的行：平台清单顺序中、已在归一化 map 里的平台（清单晚于设置加载时
+// 不渲染尚未归一化的平台，保持模板非空绑定）。
+function platformQuotaRows(map: DefaultPlatformQuotasMap | undefined): string[] {
+  return listPlatformIds().filter((platform) => !!map?.[platform]);
+}
 
 const form = reactive<SettingsForm>({
   excel_bps_enabled: true,
@@ -10284,6 +10201,7 @@ const form = reactive<SettingsForm>({
   prism_browser_api_key_configured: false,
   prism_browser_api_key: "",
   registration_enabled: true,
+  login_rate_limit_enabled: true,
   email_verify_enabled: false,
   registration_email_suffix_whitelist: [],
   registration_email_domain_quota_enabled: false,
@@ -10494,6 +10412,7 @@ const form = reactive<SettingsForm>({
   grok_default_text_model: "grok-4.5",
   grok_cross_client_model_map_enabled: false,
   grok_default_base_url_mode: "cli",
+  grok_video_source_url_enabled: false,
   // Identity patch (Claude -> Gemini)
   enable_identity_patch: true,
   identity_patch_prompt: "",
@@ -10540,14 +10459,8 @@ const form = reactive<SettingsForm>({
   // 只读展示：自动同步任务写入的官方最新稳定版，不参与提交（提交载荷按字段显式构造）
   openai_codex_client_version_synced: "",
   openai_codex_version_auto_sync_enabled: true,
-  openai_codex_ticket_enabled: false,
-  openai_codex_ticket_fail_closed: false,
-  openai_codex_ticket_strategy: 'standby',
-  openai_codex_ticket_harvest_scope: { mode: 'all' as 'all' | 'selected', group_ids: [] as number[], account_policy: 'schedulable_only' as 'schedulable_only' | 'prioritize_schedulable' },
-  openai_codex_ticket_strict_response: false,
-  openai_codex_ticket_harvest_proxy_url: "",
-  openai_codex_ticket_harvest_proxy_configured: false,
-  openai_codex_ticket_models: ["gpt-6-astra", "gpt-5.6-sol"],
+  openai_request_timezone_enabled: true,
+  openai_request_timezone_auto: true,
   claude_code_client_version: "",
   // 只读展示：自动同步任务写入的官方最新稳定版，不参与提交（提交载荷按字段显式构造）
   claude_code_client_version_synced: "",
@@ -10592,6 +10505,9 @@ const form = reactive<SettingsForm>({
   allow_user_view_error_requests: false,
   // 使用详情中长上下文计费 x2 徽标展示（默认开启）
   usage_show_long_context_badge: true,
+  usage_show_cache_rate: true,
+  usage_show_cache_rate_to_users: false,
+  usage_show_upstream_response_model_to_users: false,
   request_capture_enabled: false,
   request_capture_quota_mib: 1024,
   request_capture_retention_days: 7,
@@ -11575,54 +11491,6 @@ const codexSyncedVersionLabel = computed(() => {
   });
 });
 
-const CODEX_TICKET_MIHOMO_PROXY_URL = "http://127.0.0.1:3101";
-const CODEX_TICKET_IP_POOL_PROXY_URL = "ippool://active";
-type CodexTicketProxyMode = "mihomo" | "static" | "ip_pool";
-const codexTicketProxyMode = ref<CodexTicketProxyMode>("static");
-const codexTicketStaticProxyDraft = ref("");
-
-function isCodexTicketMihomoProxyURL(value: string): boolean {
-  return value.trim().replace(/\/+$/, "") === CODEX_TICKET_MIHOMO_PROXY_URL;
-}
-
-function isCodexTicketIPPoolProxyURL(value: string): boolean {
-  return value.trim() === CODEX_TICKET_IP_POOL_PROXY_URL;
-}
-
-function codexTicketProxyModeOf(value: string): CodexTicketProxyMode {
-  if (isCodexTicketMihomoProxyURL(value)) return "mihomo";
-  if (isCodexTicketIPPoolProxyURL(value)) return "ip_pool";
-  return "static";
-}
-
-function selectMihomoHarvestProxy(endpoint: string): void {
-  form.openai_codex_ticket_harvest_proxy_url = endpoint;
-  appStore.showSuccess(t("admin.settings.gatewayForwarding.codexTicketProxyMihomoSelected"));
-}
-
-function syncCodexTicketProxyMode(): void {
-  const current = form.openai_codex_ticket_harvest_proxy_url;
-  const mode = codexTicketProxyModeOf(current);
-  codexTicketProxyMode.value = mode;
-  codexTicketStaticProxyDraft.value = mode === "static" ? current : form.openai_codex_ticket_static_proxy_url || "";
-}
-
-function selectCodexTicketProxyMode(mode: CodexTicketProxyMode): void {
-  const previous = codexTicketProxyModeOf(form.openai_codex_ticket_harvest_proxy_url);
-  if (previous === "static") {
-    codexTicketStaticProxyDraft.value =
-      form.openai_codex_ticket_harvest_proxy_url;
-  }
-  codexTicketProxyMode.value = mode;
-  if (mode === "ip_pool") {
-    form.openai_codex_ticket_harvest_proxy_url = CODEX_TICKET_IP_POOL_PROXY_URL;
-  } else if (previous !== "static" && previous !== mode) {
-    // Mihomo writes its endpoint only once the kernel reports ready, so until
-    // then the form keeps the static address rather than the pool sentinel.
-    form.openai_codex_ticket_harvest_proxy_url =
-      codexTicketStaticProxyDraft.value;
-  }
-}
 const claudeSyncedVersionLabel = computed(() => {
   const synced = form.claude_code_client_version_synced?.trim();
   if (!synced) return "";
@@ -11640,13 +11508,10 @@ async function loadSettings() {
       settings.payment_load_balance_strategy || "round-robin";
     // Only assign non-null values from backend (null means unconfigured, keep defaults)
     for (const [key, value] of Object.entries(settings)) {
-      if (value !== null && value !== undefined) {
+      if (!key.startsWith("openai_codex_ticket_") && value !== null && value !== undefined) {
         (form as Record<string, unknown>)[key] = value;
       }
     }
-    form.openai_codex_ticket_harvest_scope.account_policy =
-      form.openai_codex_ticket_harvest_scope.account_policy || 'schedulable_only';
-    syncCodexTicketProxyMode();
     // For this optional override, null explicitly selects per-account rates.
     if (settings.openai_oauth_scheduling_rate_multiplier === null) {
       form.openai_oauth_scheduling_rate_multiplier = null;
@@ -11833,16 +11698,12 @@ async function loadSettings() {
 async function loadSubscriptionGroups() {
   try {
     const groups = await adminAPI.groups.getAll();
-    codexHarvestGroups.value = groups.filter(group => group.platform === 'openai');
-    codexHarvestGroupsLoadFailed.value = false;
     subscriptionGroups.value = groups.filter(
       (group) =>
         group.subscription_type === "subscription" && group.status === "active",
     );
   } catch (_error: unknown) {
     subscriptionGroups.value = [];
-    codexHarvestGroups.value = [];
-    codexHarvestGroupsLoadFailed.value = true;
   }
 }
 
@@ -11919,16 +11780,6 @@ const siteBillingMode = computed<SiteBillingMode>({
 const siteBillingModeHint = computed(() =>
   t(`admin.settings.features.siteBillingMode.hints.${SITE_BILLING_MODE_I18N_KEYS[siteBillingMode.value]}`),
 );
-
-function toggleCodexTicketModel(model: string, enabled: boolean) {
-  const models = new Set(form.openai_codex_ticket_models);
-  if (enabled) {
-    models.add(model);
-  } else {
-    models.delete(model);
-  }
-  form.openai_codex_ticket_models = [...models];
-}
 
 async function saveSettings() {
   saving.value = true;
@@ -12134,6 +11985,7 @@ async function saveSettings() {
       prism_browser_base_url: form.prism_browser_base_url,
       ...(form.prism_browser_api_key ? { prism_browser_api_key: form.prism_browser_api_key } : {}),
       registration_enabled: form.registration_enabled,
+      login_rate_limit_enabled: form.login_rate_limit_enabled,
       email_verify_enabled: form.email_verify_enabled,
       registration_email_suffix_whitelist:
         registrationEmailSuffixWhitelistTags.value.map((suffix) =>
@@ -12310,6 +12162,7 @@ async function saveSettings() {
       grok_cross_client_model_map_enabled:
         form.grok_cross_client_model_map_enabled,
       grok_default_base_url_mode: form.grok_default_base_url_mode,
+      grok_video_source_url_enabled: form.grok_video_source_url_enabled,
       enable_identity_patch: form.enable_identity_patch,
       identity_patch_prompt: form.identity_patch_prompt,
       min_claude_code_version: form.min_claude_code_version,
@@ -12339,19 +12192,8 @@ async function saveSettings() {
         form.openai_codex_client_version?.trim() || "",
       openai_codex_version_auto_sync_enabled:
         form.openai_codex_version_auto_sync_enabled,
-      openai_codex_ticket_enabled: form.openai_codex_ticket_enabled,
-      openai_codex_ticket_fail_closed: form.openai_codex_ticket_fail_closed,
-      openai_codex_ticket_strategy: form.openai_codex_ticket_strategy || 'standby',
-      openai_codex_ticket_harvest_scope: {
-        mode: form.openai_codex_ticket_harvest_scope.mode,
-        group_ids: [...form.openai_codex_ticket_harvest_scope.group_ids],
-        account_policy: form.openai_codex_ticket_harvest_scope.account_policy,
-      },
-      openai_codex_ticket_strict_response: form.openai_codex_ticket_strict_response || false,
-      openai_codex_ticket_harvest_proxy_url:
-        form.openai_codex_ticket_harvest_proxy_url?.trim() || "",
-      openai_codex_ticket_use_saved_static_proxy: codexTicketProxyMode.value === 'static',
-      openai_codex_ticket_models: [...form.openai_codex_ticket_models],
+      openai_request_timezone_enabled: form.openai_request_timezone_enabled,
+      openai_request_timezone_auto: form.openai_request_timezone_auto,
       claude_code_client_version: form.claude_code_client_version?.trim() || "",
       claude_code_version_auto_sync_enabled:
         form.claude_code_version_auto_sync_enabled,
@@ -12484,6 +12326,9 @@ async function saveSettings() {
       affiliate_enabled: form.affiliate_enabled,
       allow_user_view_error_requests: form.allow_user_view_error_requests,
       usage_show_long_context_badge: form.usage_show_long_context_badge,
+      usage_show_cache_rate: form.usage_show_cache_rate,
+      usage_show_cache_rate_to_users: form.usage_show_cache_rate_to_users,
+      usage_show_upstream_response_model_to_users: form.usage_show_upstream_response_model_to_users,
       request_capture_enabled: form.request_capture_enabled,
       request_capture_quota_mib: form.request_capture_quota_mib,
       request_capture_retention_days: form.request_capture_retention_days,

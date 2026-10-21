@@ -1,11 +1,14 @@
 import ticketBorrowing from './ticketBorrowing'
 import proxyPool from './proxyPool'
+import securityRecords from './securityRecords'
+import siwc from './siwc'
 import priorityScheduling from './priorityScheduling'
 import qualityOps from './qualityOps'
 import controlledExperiments from './controlledExperiments'
 import accountOps from './accountOps'
 import tokenGuard from './tokenGuard'
 import pelicanTests from './pelicanTests'
+import modelTrace from './modelTrace'
 import tokenGuardV2 from './tokenGuardV2'
 import landing from './landing'
 import common from './common'
@@ -27,6 +30,8 @@ export default {
   hosting,
   ticketBorrowing,
   proxyPool,
+  securityRecords,
+  siwc,
   autoConfig,
   priorityScheduling,
   qualityOps,
@@ -34,6 +39,7 @@ export default {
   accountOps,
   tokenGuard,
   pelicanTests,
+  modelTrace,
   tokenGuardV2,
   requestTiming,
   ...landing,

@@ -46,6 +46,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	if s == nil || account == nil {
 		return nil, wrapOpenAIWSFallback("invalid_state", errors.New("service or account is nil"))
 	}
+	ctx = withOpenAITransportMode(ctx, "ctx_pool")
 	responseModelObserver := &upstreamResponseModelObserver{}
 
 	wsURL, err := s.buildOpenAIResponsesWSURL(account)
@@ -72,9 +73,6 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 
 	payload := s.buildOpenAIWSCreatePayload(reqBody, account)
 	accelerateHTTPSSE := decision.Reason == openAIOAuthWSSSEAccelerationReason
-	if accelerateHTTPSSE && hasOpenAIWSSSEUnsupportedTool(payload) {
-		return nil, errOpenAIWSSSEUnsupportedTool
-	}
 	payloadStrategy, removedKeys := applyOpenAIWSRetryPayloadStrategy(payload, attempt)
 	turnState := ""
 	turnMetadata := ""
@@ -230,7 +228,9 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		return nil, wrapOpenAIWSFallback("codex_ticket_unavailable", pinErr)
 	}
 	defer releaseHarvest()
-	if anchor != nil && anchor.connID == "" {
+	// A bound ticket already supplied the complete Cookie pair and pinned exit.
+	// Do not acquire a second lease or overlay a gateway cookie on that bundle.
+	if anchor != nil && anchor.connID == "" && (!s.UnifiedAstraTicketsEnabled(ctx) || s.boundCodexTicketFromHeader(ctx, wsHeaders, account) == nil) {
 		if pool, ok := s.httpUpstream.(interface {
 			CodexGatewayPinWSRequest(context.Context, http.Header, string, int64, int) (string, string, func(), error)
 		}); ok {
@@ -492,6 +492,18 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		return nil, err
 	}
 	sendRequest := func(value any) error {
+		if regionalMeterAttemptFrom(ctx) != nil {
+			raw, err := json.Marshal(value)
+			if err != nil {
+				return err
+			}
+			if err = regionalMeterValidatePayload(ctx, raw); err != nil {
+				return err
+			}
+		}
+		if err := regionalMeterBeforeSend(ctx); err != nil {
+			return err
+		}
 		if err := s.acquireOpenAIRPMForSend(ctx, account); err != nil {
 			return err
 		}
@@ -837,6 +849,7 @@ readLoop:
 			message = restoreCodexToolNamesFromContext(c, message)
 		}
 		if openAIWSMessageShouldParseUsage(eventType, message) {
+			regionalMeterObserveUsage(ctx, message, eventType)
 			parseOpenAIWSResponseUsageFromCompletedEvent(message, usage)
 		}
 		imageCounter.AddSSEData(message)
@@ -854,6 +867,10 @@ readLoop:
 				errMsg = "Upstream websocket error"
 			}
 			fallbackReason, canFallback := classifyOpenAIWSErrorEventFromRaw(errCodeRaw, errTypeRaw, errMsgRaw)
+			if fallbackReason == openAIWSFallbackReasonInvalidEncryptedContent {
+				// 已向下游写出时返回的普通错误不携带 fallback reason，由 Forward 读取该标记补记 lineage。
+				markOpenAIStreamInvalidEncryptedContent(c)
+			}
 			errCode, errType, errMessage := summarizeOpenAIWSErrorEventFieldsFromRaw(errCodeRaw, errTypeRaw, errMsgRaw)
 			logOpenAIWSModeInfo(
 				"error_event account_id=%d conn_id=%s idx=%d fallback_reason=%s can_fallback=%v err_code=%s err_type=%s err_message=%s",

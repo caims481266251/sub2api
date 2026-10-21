@@ -33,6 +33,27 @@ describe('Usage timing details', () => {
     expect(wrapper.find('[data-testid="session-affinity"]').exists()).toBe(false)
     wrapper.unmount()
   })
+
+  it('reacts to viewport changes between centered mobile and desktop drawer', async () => {
+    mocks.get.mockResolvedValue({ traces: [], retention_days: 30 })
+    const resize = async (width: number) => {
+      Object.defineProperty(window, 'innerWidth', { value: width, configurable: true })
+      window.dispatchEvent(new Event('resize'))
+      await flushPromises()
+    }
+    await resize(390)
+    const wrapper = mount(UsageTimingDialog, { attachTo: document.body, props: { record: row(1) }, global: { stubs: { Icon: true } } })
+    try {
+      await flushPromises()
+      expect(document.body.querySelector('.modal-overlay')?.classList.contains('drawer-overlay')).toBe(false)
+      await resize(1024)
+      expect(document.body.querySelector('.modal-overlay')?.classList.contains('drawer-overlay')).toBe(true)
+      await resize(320)
+      expect(document.body.querySelector('.modal-overlay')?.classList.contains('drawer-overlay')).toBe(false)
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+      expect(wrapper.emitted('close')).toHaveLength(1)
+    } finally { wrapper.unmount(); await resize(1024) }
+  })
   it('keeps historical values and marks missing details instead of inventing zeros', async () => {
     mocks.get.mockResolvedValue({ traces: [], retention_days: 30 })
     const wrapper = mount(UsageTimingDialog, { props: { record: row(1) }, ...options })

@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type rotationTestRepo struct {
+type borrowRotationTestRepo struct {
 	*borrowWorkerRepo
 	BorrowRotationRepository
 	env    BorrowTargetEnvironment
@@ -19,20 +19,20 @@ type rotationTestRepo struct {
 	queued BorrowRotationInput
 }
 
-func (r *rotationTestRepo) TargetEnvironment(context.Context, int64) (BorrowTargetEnvironment, error) {
+func (r *borrowRotationTestRepo) TargetEnvironment(context.Context, int64) (BorrowTargetEnvironment, error) {
 	return r.env, r.envErr
 }
-func (r *rotationTestRepo) QueueRotation(_ context.Context, in BorrowRotationInput, _ string) (*BorrowRotationJob, error) {
+func (r *borrowRotationTestRepo) QueueRotation(_ context.Context, in BorrowRotationInput, _ string) (*BorrowRotationJob, error) {
 	r.queued = in
 	return &BorrowRotationJob{ID: in.ID}, nil
 }
-func (r *rotationTestRepo) SaveRotationPolicy(context.Context, int64, BorrowRotationPolicy) error {
+func (r *borrowRotationTestRepo) SaveRotationPolicy(context.Context, int64, BorrowRotationPolicy) error {
 	return nil
 }
-func rotationServiceFixture() (*TicketBorrowService, *rotationTestRepo) {
+func rotationServiceFixture() (*TicketBorrowService, *borrowRotationTestRepo) {
 	s, base := borrowFixture()
 	base.route = nil
-	r := &rotationTestRepo{borrowWorkerRepo: &borrowWorkerRepo{borrowTestRepo: base, source: boundBorrowTestSource(BorrowSource{ID: 1, Enabled: true, Model: "gpt-6-luna", Secret: BorrowSourceSecret{Credentials: map[string]any{"access_token": "source-token", "chatgpt_account_id": "source"}, DeviceID: "source-device"}})}, env: BorrowTargetEnvironment{EntryID: 7, Version: 1, DeviceID: "target-fixed-device", Proxy: "http://target.example:80"}}
+	r := &borrowRotationTestRepo{borrowWorkerRepo: &borrowWorkerRepo{borrowTestRepo: base, source: boundBorrowTestSource(BorrowSource{ID: 1, Enabled: true, Model: "gpt-6-luna", Secret: BorrowSourceSecret{Credentials: map[string]any{"access_token": "source-token", "chatgpt_account_id": "source"}, DeviceID: "source-device"}})}, env: BorrowTargetEnvironment{EntryID: 7, Version: 1, DeviceID: "target-fixed-device", Proxy: "http://target.example:80"}}
 	s.repo = r
 	s.owner.openaiGatewayService = &OpenAIGatewayService{accountRepo: s.owner.accountRepo}
 	return s, r

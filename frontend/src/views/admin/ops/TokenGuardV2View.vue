@@ -107,6 +107,7 @@
                     <button class="link-btn" @click="openEdit(item)">{{ t('tokenGuardV2.edit') }}</button>
                     <button class="link-btn" :disabled="busyId === item.account_id" @click="probe(item)">{{ t('tokenGuardV2.inspectNow') }}</button>
                     <button class="link-btn" :disabled="busyId === item.account_id" @click="relogin(item)">{{ t('tokenGuardV2.reloginNow') }}</button>
+                    <OpenAITOTPDialog :account-id="item.account_id" :account-name="item.account_name" :configured="!!(item.login_config?.password_configured && item.login_config?.totp_configured)" />
                     <button class="link-btn danger-text" :disabled="busyId === item.account_id" @click="remove(item)">{{ t('tokenGuardV2.remove') }}</button>
                   </div>
                 </td>
@@ -213,6 +214,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import CredentialEncryptionSetup from '@/components/account/CredentialEncryptionSetup.vue'
+import OpenAITOTPDialog from '@/components/account/OpenAITOTPDialog.vue'
 import SmartOpsNav from '@/components/admin/operations/SmartOpsNav.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { BaseDialog, Pagination } from '@/components/common'
@@ -242,7 +244,7 @@ import {
   type TokenGuardV2Task
 } from '@/api/admin/accountTokenGuardV2'
 
-const { t } = useI18n()
+const { t, te } = useI18n()
 const encryptionReady = ref(false)
 const emptyStatus = (): TokenGuardV2Status => ({
   accounts: [],
@@ -389,7 +391,11 @@ const proxyLabel = (source: TokenGuardV2ProxySource = 'account', proxyId?: numbe
   return proxy ? proxyOptionLabel(proxy) : `#${proxyId}`
 }
 const probeClass = (state: string) => state === 'ok' ? 'ok' : state === 'auth' ? 'danger' : ''
-const taskLabel = (task: TokenGuardV2Task) => task.error ? `${task.status}: ${task.error}` : `${task.status} · ${task.stage}`
+const taskErrorLabel = (errorCode: string) => {
+  const path = `tokenGuardV2.reauthErrors.${errorCode}`
+  return te(path) ? t(path) : errorCode
+}
+const taskLabel = (task: TokenGuardV2Task) => task.error ? `${task.status}: ${taskErrorLabel(task.error)}` : `${task.status} · ${task.stage}`
 const configurationDetail = (item: TokenGuardV2Account) => {
   const config = item.login_config
   if (!config) return '-'

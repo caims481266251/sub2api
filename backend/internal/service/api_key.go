@@ -44,6 +44,7 @@ type APIKey struct {
 	Status                string
 	IPWhitelist           []string
 	IPBlacklist           []string
+	GroupIDs              []int64 // Configured groups; GroupID is the selected group for a request.
 	// 预编译的 IP 规则，用于认证热路径避免重复 ParseIP/ParseCIDR。
 	CompiledIPWhitelist *ip.CompiledIPRules `json:"-"`
 	CompiledIPBlacklist *ip.CompiledIPRules `json:"-"`

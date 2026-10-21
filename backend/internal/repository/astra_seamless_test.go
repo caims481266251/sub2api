@@ -25,7 +25,7 @@ func seamlessFixture(t *testing.T) (*astraRoutingUpstream, *codexGatewayPinUpstr
 	}}}
 	pool := s.current(t.Context())
 	t.Cleanup(s.StopAstraSeamless)
-	entry, err := pool.seamless.identity(rotationTarget(t), "exit", 300, 1, nil, true, time.Now())
+	entry, err := pool.seamless.identity(rotationBusinessTarget(t), "exit", 300, 1, nil, true, time.Now())
 	require.NoError(t, err)
 	return s, pool, entry
 }
@@ -59,7 +59,7 @@ func TestSeamlessKeepsPrimaryWhenSourceChangesAndBackupFails(t *testing.T) {
 	require.Error(t, s.fillSeamless(t.Context(), pool, e, false))
 	require.Len(t, e.passes, 1)
 	require.Equal(t, "primary", e.passes[0].candidate.route.cookie.Value)
-	cookie, _, _, release, err := s.seamlessTargetRoute(rotationTarget(t), "exit", 300, 1, nil, pool)
+	cookie, _, _, release, err := s.seamlessTargetRoute(rotationBusinessTarget(t), "exit", 300, 1, nil, pool)
 	defer release()
 	require.NoError(t, err)
 	require.Equal(t, "primary", cookie.Value)
@@ -71,7 +71,7 @@ func TestSeamlessIndependentTargetRejectionAndInventory(t *testing.T) {
 	p := pool.seamless
 	seamlessRecord(p, 299, "route", time.Now().Add(230*time.Second))
 	require.NoError(t, s.fillSeamless(t.Context(), pool, e, true))
-	other, err := p.identity(rotationTarget(t), "exit", 301, 1, nil, true, time.Now())
+	other, err := p.identity(rotationBusinessTarget(t), "exit", 301, 1, nil, true, time.Now())
 	require.NoError(t, err)
 	s.delegate = gatewayPinDelegate{call: func(*http.Request, string, int64, int, *tlsfingerprint.Profile) (*http.Response, error) {
 		return &http.Response{StatusCode: 403, Header: http.Header{}, Body: http.NoBody}, nil
@@ -119,7 +119,7 @@ func TestSeamlessPrewarmUsesFreshestAndSwitchesBeforeExpiry(t *testing.T) {
 	p.mu.Lock()
 	e.passes[0].candidate.route.expires = now.Add(10 * time.Second)
 	p.mu.Unlock()
-	cookie, _, _, release, err := s.seamlessTargetRoute(rotationTarget(t), "exit", 300, 1, nil, pool)
+	cookie, _, _, release, err := s.seamlessTargetRoute(rotationBusinessTarget(t), "exit", 300, 1, nil, pool)
 	release()
 	require.NoError(t, err)
 	require.Equal(t, "new", cookie.Value)
@@ -130,7 +130,7 @@ func TestSeamlessCredentialsAndProfileNeverReuseUnmatchedPass(t *testing.T) {
 	p := pool.seamless
 	seamlessRecord(p, 299, "route", time.Now().Add(230*time.Second))
 	require.NoError(t, s.fillSeamless(t.Context(), pool, e, true))
-	req := rotationTarget(t)
+	req := rotationBusinessTarget(t)
 	req.Header.Set("Version", "different")
 	other, err := p.identity(req, "exit", 300, 1, nil, false, time.Now())
 	require.NoError(t, err)
@@ -142,7 +142,7 @@ func TestSeamlessCredentialsAndProfileNeverReuseUnmatchedPass(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, fresh.passes)
 	require.Len(t, p.identities[300], 1)
-	_, err = p.identity(rotationTarget(t), "exit", 300, 1, nil, false, time.Now())
+	_, err = p.identity(rotationBusinessTarget(t), "exit", 300, 1, nil, false, time.Now())
 	require.ErrorContains(t, err, "identity_changed")
 }
 
@@ -168,13 +168,13 @@ func TestSeamlessBackgroundSurvivesWaiterCancelAndPublishesNoStaleResults(t *tes
 	<-entered
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	req := rotationTarget(t).Clone(ctx)
+	req := rotationBusinessTarget(t).Clone(ctx)
 	_, _, _, release, err := s.seamlessTargetRoute(req, "exit", 300, 1, nil, pool)
 	release()
 	require.ErrorIs(t, err, context.Canceled)
 	require.NoError(t, p.ctx.Err())
 	// A credential generation change cancels the old worker and rejects its result.
-	freshReq := rotationTarget(t)
+	freshReq := rotationBusinessTarget(t)
 	freshReq.Header.Set("Authorization", "Bearer new")
 	fresh, err := p.identity(freshReq, "exit", 300, 1, nil, true, time.Now())
 	require.NoError(t, err)
@@ -213,7 +213,7 @@ func TestSeamlessTenBusinessRequestsContinueDuringBackupProbe(t *testing.T) {
 	results := make(chan error, 10)
 	for range 10 {
 		go func() {
-			resp, err := s.Do(rotationTarget(t), "exit", 300, 1)
+			resp, err := s.Do(rotationBusinessTarget(t), "exit", 300, 1)
 			if resp != nil {
 				_ = resp.Body.Close()
 			}
@@ -274,7 +274,7 @@ func TestSeamlessFourRenewalWindowsKeepBusinessReady(t *testing.T) {
 		p.mu.Lock()
 		e.passes[0].candidate.route.expires = now.Add(10 * time.Second)
 		p.mu.Unlock()
-		cookie, _, _, release, err := s.seamlessTargetRoute(rotationTarget(t), "exit", 300, 1, nil, pool)
+		cookie, _, _, release, err := s.seamlessTargetRoute(rotationBusinessTarget(t), "exit", 300, 1, nil, pool)
 		release()
 		require.NoError(t, err)
 		require.NotEmpty(t, cookie.Value)
@@ -297,7 +297,7 @@ func TestSeamlessBusinessRouteChangeRevokesOnlyMatchingPass(t *testing.T) {
 	require.NoError(t, s.fillSeamless(t.Context(), pool, e, false))
 	resp := pinResponse("__oailb=changed; Path=/; Secure")
 	defer resp.Body.Close()
-	p.observeBusiness(rotationTarget(t), "exit", 300, nil, &http.Cookie{Name: "__oailb", Value: "primary"}, resp)
+	p.observeBusiness(rotationBusinessTarget(t), "exit", 300, nil, &http.Cookie{Name: "__oailb", Value: "primary"}, resp)
 	require.Len(t, e.passes, 1)
 	require.Equal(t, "backup", e.passes[0].candidate.route.cookie.Value)
 }
@@ -323,7 +323,7 @@ func TestSeamlessInFlightProbeCannotUndoBusinessRevocation(t *testing.T) {
 	}}
 	done := s.startSeamlessJob(pool, e, true)
 	<-entered
-	p.observeBusiness(rotationTarget(t), "exit", 300, nil, &http.Cookie{Value: "primary"}, &http.Response{StatusCode: 401, Header: http.Header{}})
+	p.observeBusiness(rotationBusinessTarget(t), "exit", 300, nil, &http.Cookie{Value: "primary"}, &http.Response{StatusCode: 401, Header: http.Header{}})
 	close(resume)
 	seamlessWait(t, done)
 	require.Empty(t, e.passes)
@@ -336,10 +336,10 @@ func TestSeamlessUpstreamRetryAfterPreventsAdditionalSends(t *testing.T) {
 		calls.Add(1)
 		return &http.Response{StatusCode: 429, Header: http.Header{"Retry-After": []string{"120"}}, Body: http.NoBody}, nil
 	}}, p: p}
-	resp, err := up.Do(rotationTarget(t), "exit", 300, 1)
+	resp, err := up.Do(rotationBusinessTarget(t), "exit", 300, 1)
 	require.NoError(t, err)
 	_ = resp.Body.Close()
-	_, err = up.Do(rotationTarget(t), "exit", 300, 1)
+	_, err = up.Do(rotationBusinessTarget(t), "exit", 300, 1)
 	require.Error(t, err)
 	require.EqualValues(t, 1, calls.Load())
 	require.True(t, p.cooling[300].After(time.Now().Add(119*time.Second)))

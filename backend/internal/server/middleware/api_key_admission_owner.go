@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
@@ -14,6 +15,33 @@ import (
 )
 
 func nextWithAPIKeyAdmissionOwner(c *gin.Context, apiKeyService *service.APIKeyService, credential string, trustedClientIP string, key *service.APIKey, googleStyle bool) {
+	var lookup func(context.Context, string) (*service.APIKey, error)
+	if apiKeyService != nil {
+		lookup = apiKeyService.GetByKey
+		if isResponsesWebSocketRoute(c) {
+			lookup = apiKeyService.GetByKeyUncached
+		}
+	}
+	if apiKeyService != nil && lookup != nil && len(key.ConfiguredGroupIDs()) > 1 && key.GroupID != nil {
+		baseLookup, groupID := lookup, *key.GroupID
+		lookup = func(ctx context.Context, credential string) (*service.APIKey, error) {
+			latest, err := baseLookup(ctx, credential)
+			if err != nil {
+				return nil, err
+			}
+			return apiKeyService.PinAPIKeyGroup(ctx, latest, groupID)
+		}
+	}
+	if lookup != nil {
+		lookup = hostedAuthLookup(apiKeyService, lookup)
+	}
+	nextWithAPIKeyAdmissionLookup(c, lookup, credential, trustedClientIP, key, googleStyle)
+}
+
+// A regional lookup uses the authenticated local stream directly. Sharing the
+// owner/revalidation lifecycle preserves revocation and key-slot cancellation
+// without introducing the primary-backed API Key middleware.
+func nextWithAPIKeyAdmissionLookup(c *gin.Context, lookup func(context.Context, string) (*service.APIKey, error), credential string, trustedClientIP string, key *service.APIKey, googleStyle bool) {
 	var writer *apiKeyAdmissionWriter
 	// A WS connection outlives one capacity decision: install the revalidator
 	// (and its lightweight control owner) even when the handshake key is
@@ -21,12 +49,7 @@ func nextWithAPIKeyAdmissionOwner(c *gin.Context, apiKeyService *service.APIKeyS
 	// HTTP non-queue requests keep their existing shape.
 	installRevalidator := key.ConcurrencyLimit > 0 || isResponsesWebSocketRoute(c)
 	if installRevalidator {
-		revalidate := newAPIKeyQueueAuthRevalidator(apiKeyService, credential, trustedClientIP, key)
-		if isResponsesWebSocketRoute(c) && apiKeyService != nil {
-			// WS sessions must observe revocation even when an auth-cache
-			// invalidation is delayed or lost on this instance.
-			revalidate = newAPIKeyAuthRevalidator(hostedAuthLookup(apiKeyService, apiKeyService.GetByKeyUncached), credential, trustedClientIP, key)
-		}
+		revalidate := newAPIKeyAuthRevalidator(lookup, credential, trustedClientIP, key)
 		base := service.WithAPIKeyQueueAuthRevalidator(
 			c.Request.Context(),
 			revalidate,
@@ -154,14 +177,19 @@ func newAPIKeyAuthRevalidator(lookup func(context.Context, string) (*service.API
 // value when the revalidator is installed. It deliberately excludes everything
 // that may legitimately change without affecting this request's permissions.
 type apiKeyQueueInitialIdentity struct {
-	keyID            int64
-	userID           int64
-	groupID          *int64
-	platform         string
-	subscriptionType string
-	routeMode        string
-	fallbackGroupID  *int64
-	hostingPoolID    *int64
+	keyID              int64
+	userID             int64
+	groupID            *int64
+	platform           string
+	subscriptionType   string
+	routeMode          string
+	fallbackGroupID    *int64
+	hostingPoolID      *int64
+	codexCLIOnly       bool
+	blockSubagents     bool
+	maxReasoningEffort string
+	reasoningOverLimit string
+	reasoningMappings  []service.ReasoningEffortMapping
 }
 
 func captureAPIKeyQueueIdentity(initial *service.APIKey) apiKeyQueueInitialIdentity {
@@ -187,14 +215,19 @@ func captureAPIKeyQueueIdentity(initial *service.APIKey) apiKeyQueueInitialIdent
 	if initial.Group != nil {
 		identity.platform = initial.Group.Platform
 		identity.subscriptionType = initial.Group.SubscriptionType
+		identity.codexCLIOnly = initial.Group.CodexCLIOnly
+		identity.blockSubagents = initial.Group.BlockSubagents
+		identity.maxReasoningEffort = initial.Group.MaxReasoningEffort
+		identity.reasoningOverLimit = initial.Group.MaxReasoningEffortOverLimit
+		identity.reasoningMappings = append([]service.ReasoningEffortMapping(nil), initial.Group.ReasoningEffortMappings...)
 	}
 	return identity
 }
 
-// apiKeyQueueCoreIdentityChanged reports a genuine binding/platform/charging
-// change. Group existence and ID are compared, but no field snapshots: name,
-// pricing, routing, permission tweaks and nil/empty collection shapes are not
-// authorization identity.
+// apiKeyQueueCoreIdentityChanged reports binding, platform, charging or employee
+// usage policy changes that require fresh admission. Names, pricing, routing,
+// other permissions and nil/empty collection shapes remain outside this
+// identity. A WS session opened before enforcement must re-enter admission.
 func apiKeyQueueCoreIdentityChanged(initial apiKeyQueueInitialIdentity, latest *service.APIKey) bool {
 	if latest == nil {
 		return true
@@ -218,11 +251,20 @@ func apiKeyQueueCoreIdentityChanged(initial apiKeyQueueInitialIdentity, latest *
 		return true
 	}
 	platform, subscriptionType := "", ""
+	codexCLIOnly := false
+	blockSubagents := false
 	if latest.Group != nil {
 		platform = latest.Group.Platform
 		subscriptionType = latest.Group.SubscriptionType
+		codexCLIOnly = latest.Group.CodexCLIOnly
+		blockSubagents = latest.Group.BlockSubagents
+		if initial.maxReasoningEffort != latest.Group.MaxReasoningEffort || initial.reasoningOverLimit != latest.Group.MaxReasoningEffortOverLimit || !slices.Equal(initial.reasoningMappings, latest.Group.ReasoningEffortMappings) {
+			return true
+		}
 	}
-	return initial.platform != platform || initial.subscriptionType != subscriptionType
+	// A queued request or persistent WS connection must re-enter the public
+	// client gate after this policy changes, including off -> on transitions.
+	return initial.platform != platform || initial.subscriptionType != subscriptionType || initial.codexCLIOnly != codexCLIOnly || initial.blockSubagents != blockSubagents
 }
 
 // apiKeyQueueBlockedModel re-checks only the client-written model candidates

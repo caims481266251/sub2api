@@ -1,4 +1,79 @@
 export default {
+  totpManage: {
+  "close": "关闭",
+  "title": "2FA 管理",
+  "hint": "使用已保存的密码和当前 2FA 验证身份，再更换绑定。新凭据会加密保存；已有登录会话不会自动退出。关闭窗口不会中断任务。",
+  "status": "更换状态",
+  "uncertainHint": "结果尚未确认。新旧凭据会保留，请先验证或导出恢复凭据，不要重新更换。",
+  "keptOld": "已确认原密钥可用，继续使用原绑定。",
+  "completed": "已确认新密钥可登录、旧密钥被拒绝，自动重登已更新。",
+  "rotate": "更换 2FA",
+  "verifyNew": "验证新密钥",
+  "verifyOld": "验证原密钥",
+  "exportSource": "导出内容",
+  "current": "当前凭据",
+  "candidate": "待确认的新凭据（恢复用）",
+  "previous": "原凭据（恢复用）",
+  "includePassword": "包含登录密码",
+  "export": "显示并导出凭据",
+sessionExport: {
+        button: "使用 2FA 导出 ChatGPT Session",
+        title: "使用 2FA 导出 ChatGPT Session",
+        hint: "系统将使用凭证运营中保存的邮箱、密码和 TOTP，通过本地 Worker 登录 ChatGPT 并下载经过身份校验的 Session。密码、TOTP 和 Cookie 不会写入任务或日志。",
+        starting: "正在启动导出任务…",
+        exporting: "正在登录并导出…",
+        download: "重新导出",
+        failed: "Session 导出失败，请稍后重试。",
+        stages: {
+          queued: "排队中",
+          starting: "准备凭证",
+          connecting: "连接本地 Worker",
+          passwordSubmitted: "提交密码",
+          totpSubmitted: "验证 TOTP",
+          sessionRequest: "请求 ChatGPT Session",
+          identityVerification: "校验账号身份",
+          succeeded: "导出完成",
+          failed: "导出失败"
+        },
+        errors: {
+          password_rejected: "密码错误或已被 ChatGPT 拒绝。",
+          totp_rejected: "TOTP 验证失败，请检查凭证运营配置。",
+          identity_mismatch: "登录身份与托管账号不匹配。",
+          upstream_rejected: "ChatGPT 拒绝了登录或 Session 请求。",
+          worker_timeout: "本地 Worker 执行超时。",
+          worker_offline: "没有可用的本地 Worker。",
+          proxy_unavailable: "账号代理不可用，请启动 127.0.0.1:7890 的代理或更新账号代理配置。",
+          session_token_missing: "ChatGPT 没有返回可用的 Web Session Token。",
+          OPENAI_SESSION_EXPORT_CONFIG_REQUIRED: "账号尚未配置邮箱、密码和 TOTP。",
+          OPENAI_REAUTH_WORKER_UNAVAILABLE: "没有可用的本地 Worker。",
+          OPENAI_SESSION_EXPORT_ACCOUNT_INVALID: "仅支持独立的 OpenAI OAuth 父账号。",
+          credentials_required: "账号尚未配置邮箱、密码和 TOTP。",
+          task_expired: "导出任务已过期，请重新发起。",
+          expired: "导出任务已过期，请重新发起。",
+          failed: "Session 导出失败，请稍后重试。"
+        }
+      },
+  "recoveryLabel": "待确认凭据：请保留文件，验证成功前不要覆盖验证器中的现有条目。",
+  "qr": "2FA 验证器二维码",
+  "secret": "2FA 密钥",
+  "downloadJSON": "下载 JSON",
+  "downloadCombo": "下载邮箱 / 密码 / 2FA",
+  "downloadSecret": "下载密钥",
+  "confirm": "确认更换 {account} 的 2FA？成功后旧密钥将失效，新密钥会保存并用于自动重登。",
+  "useJSON": "密码包含分隔符或换行，请下载 JSON 以完整保存。",
+  "states": {
+    "queued": "等待执行",
+    "running": "验证登录",
+    "enrolling": "申请新密钥",
+    "prepared": "新密钥已保存",
+    "activating": "激活新密钥",
+    "verifying": "验证新旧凭据",
+    "uncertain": "待确认，可恢复",
+    "succeeded": "已确认",
+    "failed": "未更换"
+  }
+},
+
   legacyEngine: "沿用已有账号设置",
   legacyEngineHint: "尚未统一设置引擎，已有账号保持原选择，新账号使用本地 Worker。切换后统一应用到所有账密 / TOTP 账号，邮箱链接仍使用本地流程。",
   sessionStudioGlobalHint: "所有账密 / TOTP 账号的后续重登会将邮箱、密码和 TOTP 密钥发送到凭证守护配置的 Session Studio 服务，使用服务端出口，不使用账号代理。邮箱链接仍使用本地流程；失败不会切换引擎。",
@@ -33,6 +108,13 @@ export default {
     running: '已就绪，正在处理重登队列',
     unavailable: '暂时不可用，程序会自动重试',
     stopped: '服务正在停止'
+  },
+  reauthErrors: {
+    proxy_unavailable: '账号代理不可用，请启动代理或更新账号代理配置。',
+    password_rejected: '密码被 ChatGPT 拒绝，请重新保存正确的网页登录密码。',
+    totp_rejected: 'TOTP 验证失败，请检查凭证运营中的 2FA 密钥。',
+    upstream_rejected: 'OpenAI 登录请求被上游拒绝，请检查代理和账号状态。',
+    worker_timeout: 'Worker 执行超时，请检查 Worker 运行状态。'
   },
 
   encryption: {

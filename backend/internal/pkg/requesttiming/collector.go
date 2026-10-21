@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/util/transportdiag"
 	"github.com/google/uuid"
 )
 
@@ -18,36 +19,37 @@ type Span struct {
 	Attempt int     `json:"attempt,omitempty"`
 }
 type Attempt struct {
-	Transport                  TransportInfo      `json:"transport,omitzero"`
-	Protocol                   string             `json:"protocol,omitempty"`
-	ALPN                       string             `json:"alpn,omitempty"`
-	TLSHandshake               string             `json:"tls_handshake,omitempty"`
-	BorrowLeaseHash            string             `json:"borrow_lease_hash,omitempty"`
-	BorrowLeaseState           string             `json:"borrow_lease_state,omitempty"`
-	BorrowLeaseEnd             string             `json:"borrow_lease_end,omitempty"`
-	BorrowLeaseReleaseAttempts int                `json:"borrow_lease_release_attempts,omitempty"`
-	Model                      string             `json:"model,omitempty"`
-	ReasoningEffort            string             `json:"reasoning_effort,omitempty"`
-	RetryAfterMS               int64              `json:"retry_after_ms,omitempty"`
-	ReasoningEvents            int                `json:"reasoning_events,omitempty"`
-	NoTextLongTail             bool               `json:"no_text_long_tail,omitempty"`
-	BorrowRouteID              string             `json:"borrow_route_id,omitempty"`
-	Terminal                   string             `json:"terminal,omitempty"`
-	CleanupCanceled            bool               `json:"cleanup_canceled,omitempty"`
-	Kind                       string             `json:"kind"`
-	Parent                     int                `json:"parent,omitempty"`
-	Number                     int                `json:"number"`
-	AccountID                  int64              `json:"account_id"`
-	ProxyID                    int64              `json:"proxy_id"`
-	StartMS                    float64            `json:"start_ms"`
-	EndMS                      *float64           `json:"end_ms"`
-	Status                     int                `json:"status"`
-	Error                      string             `json:"error,omitempty"`
-	Reused                     *bool              `json:"reused"`
-	RequestBytes               int64              `json:"request_bytes"`
-	ResponseBytes              int64              `json:"response_bytes"`
-	BodyEOF                    bool               `json:"body_eof"`
-	Events                     map[string]float64 `json:"events"`
+	Transport                  TransportInfo       `json:"transport,omitzero"`
+	Protocol                   string              `json:"protocol,omitempty"`
+	ALPN                       string              `json:"alpn,omitempty"`
+	TLSHandshake               string              `json:"tls_handshake,omitempty"`
+	BorrowLeaseHash            string              `json:"borrow_lease_hash,omitempty"`
+	BorrowLeaseState           string              `json:"borrow_lease_state,omitempty"`
+	BorrowLeaseEnd             string              `json:"borrow_lease_end,omitempty"`
+	BorrowLeaseReleaseAttempts int                 `json:"borrow_lease_release_attempts,omitempty"`
+	Model                      string              `json:"model,omitempty"`
+	ReasoningEffort            string              `json:"reasoning_effort,omitempty"`
+	RetryAfterMS               int64               `json:"retry_after_ms,omitempty"`
+	ReasoningEvents            int                 `json:"reasoning_events,omitempty"`
+	NoTextLongTail             bool                `json:"no_text_long_tail,omitempty"`
+	BorrowRouteID              string              `json:"borrow_route_id,omitempty"`
+	Terminal                   string              `json:"terminal,omitempty"`
+	CleanupCanceled            bool                `json:"cleanup_canceled,omitempty"`
+	Kind                       string              `json:"kind"`
+	Parent                     int                 `json:"parent,omitempty"`
+	Number                     int                 `json:"number"`
+	AccountID                  int64               `json:"account_id"`
+	ProxyID                    int64               `json:"proxy_id"`
+	StartMS                    float64             `json:"start_ms"`
+	EndMS                      *float64            `json:"end_ms"`
+	Status                     int                 `json:"status"`
+	Error                      string              `json:"error,omitempty"`
+	Reused                     *bool               `json:"reused"`
+	RequestBytes               int64               `json:"request_bytes"`
+	ResponseBytes              int64               `json:"response_bytes"`
+	BodyEOF                    bool                `json:"body_eof"`
+	Events                     map[string]float64  `json:"events"`
+	Route                      transportdiag.Route `json:"route"`
 }
 type BorrowRecoverySnapshot struct {
 	TransportAttempts int    `json:"transport_attempts"`
@@ -93,6 +95,7 @@ type Snapshot struct {
 	Events            map[string]float64       `json:"events"`
 	Spans             []Span                   `json:"spans"`
 	Attempts          []Attempt                `json:"attempts"`
+	Routes            []RouteObservation       `json:"routes,omitempty"`
 }
 type Collector struct {
 	mu        sync.Mutex
@@ -230,6 +233,7 @@ func (c *Collector) snapshot() Snapshot {
 		v := *d.BorrowRecovery
 		d.BorrowRecovery = &v
 	}
+	d.Routes = append([]RouteObservation(nil), d.Routes...)
 	d.Events = cloneEvents(d.Events)
 	d.Spans = append([]Span{}, d.Spans...)
 	d.Attempts = append([]Attempt{}, d.Attempts...)

@@ -14,9 +14,11 @@ func firstNonEmpty(values ...string) string {
 type SystemSettings struct {
 	OpenAICodexTicketHarvestScope       CodexTicketHarvestScope
 	OpenAICodexTicketStrictResponse     bool
+	OpenAICodexTicketCandyObservation   bool
 	OpenAICodexTicketFailClosed         bool
 	OpenAICodexTicketStrategy           string
 	RegistrationEnabled                 bool
+	LoginRateLimitEnabled               bool // 登录频率限制与失败 IP 封禁（默认开启）
 	EmailVerifyEnabled                  bool
 	RegistrationEmailSuffixWhitelist    []string
 	RegistrationEmailDomainQuotaEnabled bool // 白名单非空时放行非白名单域名限量注册（默认关闭）
@@ -220,6 +222,7 @@ type SystemSettings struct {
 	GrokDefaultTextModel           string `json:"grok_default_text_model"`
 	GrokCrossClientModelMapEnabled bool   `json:"grok_cross_client_model_map_enabled"`
 	GrokDefaultBaseURLMode         string `json:"grok_default_base_url_mode"`
+	GrokVideoSourceURLEnabled      bool   `json:"grok_video_source_url_enabled"`
 
 	// Available Channels feature (user-facing aggregate view)
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
@@ -270,6 +273,8 @@ type SystemSettings struct {
 	OpenAICodexClientVersion               string // 出站声明的 Codex 客户端版本号（管理员覆写）；空值跟随自动同步值
 	OpenAICodexClientVersionSynced         string // 自动同步到的官方最新稳定版版本号（只读展示）
 	OpenAICodexVersionAutoSyncEnabled      bool   // 是否启用 Codex 客户端版本号自动同步（默认 true）
+	OpenAIRequestTimezoneEnabled           bool   // Rewrite request timezones; enabled by default.
+	OpenAIRequestTimezoneAuto              bool   // Resolve timezone through actual egress by default; false retains manual mode.
 	OpenAICodexTicketEnabled               bool   // Codex 292 打票总开关；关闭则不打票不注入
 	OpenAICodexTicketHarvestProxyURL       string // Codex 292 打票代理 URL；空则回退 yaml/env
 	OpenAICodexTicketStaticProxyURL        string
@@ -346,22 +351,25 @@ type SystemSettings struct {
 	RequestCaptureQuotaMiB      int64
 	RequestCaptureRetentionDays int
 	// 使用详情中长上下文计费 x2 徽标的展示开关（默认开启）
-	ExcelBPSImageMode             string
-	UsageShowLongContextBadge     bool
-	ExcelBPSImageRelayEnabled     bool
-	ExcelBPSImageBaseURL          string
-	ExcelBPSImageBodyLimitMiB     int
-	ExcelBPSImageBudgetMiB        int
-	ExcelBPSImageMaxRequests      int
-	ExcelBPSImageMaxImageMiB      int
-	ExcelBPSImageMaxImages        int
-	ExcelBPSImageLimitPolicy      string
-	ExcelBPSImageWarningRemaining int
-	ExcelBPSImageCompactReserve   int
-	ExcelBPSImageMaxTotalMiB      int
-	ExcelBPSImageStorageMiB       int
-	ExcelBPSImageStorageEntries   int
-	ExcelBPSImageTTLMinutes       int
+	ExcelBPSImageMode                     string
+	UsageShowLongContextBadge             bool
+	UsageShowCacheRate                    bool
+	UsageShowCacheRateToUsers             bool
+	UsageShowUpstreamResponseModelToUsers bool
+	ExcelBPSImageRelayEnabled             bool
+	ExcelBPSImageBaseURL                  string
+	ExcelBPSImageBodyLimitMiB             int
+	ExcelBPSImageBudgetMiB                int
+	ExcelBPSImageMaxRequests              int
+	ExcelBPSImageMaxImageMiB              int
+	ExcelBPSImageMaxImages                int
+	ExcelBPSImageLimitPolicy              string
+	ExcelBPSImageWarningRemaining         int
+	ExcelBPSImageCompactReserve           int
+	ExcelBPSImageMaxTotalMiB              int
+	ExcelBPSImageStorageMiB               int
+	ExcelBPSImageStorageEntries           int
+	ExcelBPSImageTTLMinutes               int
 }
 
 type DefaultSubscriptionSetting struct {
@@ -476,6 +484,13 @@ type PublicSettings struct {
 
 	// 使用详情中长上下文计费 x2 徽标的展示开关（默认开启）
 	UsageShowLongContextBadge bool `json:"usage_show_long_context_badge"`
+
+	// 使用记录单条缓存率。功能默认开启；向用户展示默认关闭。
+	UsageShowCacheRate        bool `json:"usage_show_cache_rate"`
+	UsageShowCacheRateToUsers bool `json:"usage_show_cache_rate_to_users"`
+
+	// 是否向终端用户展示上游响应里声明的实际模型。默认关闭。
+	UsageShowUpstreamResponseModelToUsers bool `json:"usage_show_upstream_response_model_to_users"`
 }
 
 type LoginAgreementDocument struct {

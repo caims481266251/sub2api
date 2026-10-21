@@ -44,6 +44,11 @@ func (Group) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			SchemaType(map[string]string{dialect.Postgres: "text"}),
+		// 名称与描述的界面语言译文 (added by migration 242)
+		field.JSON("i18n", domain.GroupI18n{}).
+			Default(domain.GroupI18n{}).
+			SchemaType(map[string]string{dialect.Postgres: "jsonb"}).
+			Comment("名称与描述的界面语言译文：语言代码 -> {name, description}；缺失的语言沿用 name/description"),
 		field.Float("rate_multiplier").
 			SchemaType(map[string]string{dialect.Postgres: "decimal(10,4)"}).
 			Default(1.0),
@@ -207,6 +212,14 @@ func (Group) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			Comment("无效请求兜底使用的分组 ID"),
+
+		// 仅限制员工 API 入口，后台账号测试与质量判题沿用内部调用链。
+		field.Bool("block_subagents").
+			Default(false).
+			Comment("是否拒绝员工 API 入口中带子代理标识的请求"),
+		field.Bool("codex_cli_only").
+			Default(false).
+			Comment("是否仅允许 Codex 客户端调用本分组"),
 
 		// 仅允许流式请求 (added by migration 246)
 		field.Bool("stream_only").

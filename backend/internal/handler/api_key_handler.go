@@ -45,6 +45,7 @@ type CreateAPIKeyRequest struct {
 	IPBlacklist            []string `json:"ip_blacklist"`    // IP 黑名单
 	Quota                  *float64 `json:"quota"`           // 配额限制 (USD)
 	ExpiresInDays          *int     `json:"expires_in_days"` // 过期天数
+	GroupIDs               []int64  `json:"group_ids"`
 
 	// Rate limit fields (0 = unlimited)
 	RateLimit5h *float64 `json:"rate_limit_5h"`
@@ -67,6 +68,7 @@ type UpdateAPIKeyRequest struct {
 	Quota                  *float64  `json:"quota"`        // 配额限制 (USD), 0=无限制
 	ExpiresAt              *string   `json:"expires_at"`   // 过期时间 (ISO 8601)
 	ResetQuota             *bool     `json:"reset_quota"`  // 重置已用配额
+	GroupIDs               *[]int64  `json:"group_ids"`
 
 	// Rate limit fields (nil = no change, 0 = unlimited)
 	RateLimit5h         *float64 `json:"rate_limit_5h"`
@@ -153,7 +155,7 @@ func (h *APIKeyHandler) List(c *gin.Context) {
 
 	out := make([]dto.APIKey, 0, len(keys))
 	for i := range keys {
-		out = append(out, *dto.APIKeyFromService(&keys[i]))
+		out = append(out, *dto.APIKeyFromService(&keys[i]).Localized(c.GetHeader("Accept-Language")))
 	}
 	response.Paginated(c, out, result.Total, page, pageSize)
 }
@@ -185,7 +187,7 @@ func (h *APIKeyHandler) GetByID(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, dto.APIKeyFromService(key))
+	response.Success(c, dto.APIKeyFromService(key).Localized(c.GetHeader("Accept-Language")))
 }
 
 // Create handles creating a new API key
@@ -211,6 +213,7 @@ func (h *APIKeyHandler) Create(c *gin.Context) {
 		RouteMode: req.RouteMode, HostingPoolID: req.HostingPoolID, HostingFallbackGroupID: req.HostingFallbackGroupID, HostingFallbackEnabled: req.HostingFallbackEnabled,
 		ConcurrencyLimit: req.ConcurrencyLimit,
 		Name:             req.Name,
+		GroupIDs:         req.GroupIDs,
 		GroupID:          req.GroupID,
 		CustomKey:        req.CustomKey,
 		IPWhitelist:      req.IPWhitelist,
@@ -235,7 +238,7 @@ func (h *APIKeyHandler) Create(c *gin.Context) {
 		if err != nil {
 			return nil, err
 		}
-		return dto.APIKeyFromService(key), nil
+		return dto.APIKeyFromService(key).Localized(c.GetHeader("Accept-Language")), nil
 	})
 }
 
@@ -279,6 +282,7 @@ func (h *APIKeyHandler) Update(c *gin.Context) {
 	if req.Name != "" {
 		svcReq.Name = &req.Name
 	}
+	svcReq.GroupIDs = req.GroupIDs
 	svcReq.GroupID = req.GroupID
 	if req.Status != "" {
 		svcReq.Status = &req.Status
@@ -305,7 +309,7 @@ func (h *APIKeyHandler) Update(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, dto.APIKeyFromService(key))
+	response.Success(c, dto.APIKeyFromService(key).Localized(c.GetHeader("Accept-Language")))
 }
 
 // Delete handles deleting an API key
@@ -349,7 +353,7 @@ func (h *APIKeyHandler) GetAvailableGroups(c *gin.Context) {
 
 	out := make([]dto.Group, 0, len(groups))
 	for i := range groups {
-		out = append(out, *dto.GroupFromService(&groups[i]))
+		out = append(out, *dto.GroupFromService(&groups[i]).Localized(c.GetHeader("Accept-Language")))
 	}
 	response.Success(c, out)
 }

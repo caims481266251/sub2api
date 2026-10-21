@@ -18,6 +18,7 @@ type APIKeyAuthSnapshot struct {
 	IPBlacklist            []string                 `json:"ip_blacklist,omitempty"`
 	User                   APIKeyAuthUserSnapshot   `json:"user"`
 	Group                  *APIKeyAuthGroupSnapshot `json:"group,omitempty"`
+	GroupIDs               []int64                  `json:"group_ids,omitempty"`
 
 	// Quota fields for API Key independent quota feature
 	Quota     float64 `json:"quota"`      // Quota limit in USD (0 = unlimited)
@@ -98,6 +99,8 @@ type APIKeyAuthGroupSnapshot struct {
 	FallbackGroupID                 *int64                        `json:"fallback_group_id,omitempty"`
 	FallbackGroupIDOnInvalidRequest *int64                        `json:"fallback_group_id_on_invalid_request,omitempty"`
 	StreamOnly                      bool                          `json:"stream_only"`
+	CodexCLIOnly                    bool                          `json:"codex_cli_only"`
+	BlockSubagents                  bool                          `json:"block_subagents"`
 
 	// Model routing is used by gateway account selection, so it must be part of auth cache snapshot.
 	// Only anthropic groups use these fields; others may leave them empty.

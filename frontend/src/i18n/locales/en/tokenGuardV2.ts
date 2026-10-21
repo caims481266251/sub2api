@@ -1,4 +1,79 @@
 export default {
+  totpManage: {
+  "close": "Close",
+  "title": "Manage 2FA",
+  "hint": "Verify the saved password and current 2FA, then replace the binding. New credentials are encrypted. Existing sessions are not signed out. Closing this dialog does not stop the task.",
+  "status": "Rotation status",
+  "uncertainHint": "The outcome is unconfirmed. Both credentials are retained. Verify or export recovery credentials before another rotation.",
+  "keptOld": "The original secret works. The original binding is retained.",
+  "completed": "The new secret works and the old secret was rejected. Automatic login now uses the new secret.",
+  "rotate": "Replace 2FA",
+  "verifyNew": "Verify new secret",
+  "verifyOld": "Verify original secret",
+  "exportSource": "Export source",
+  "current": "Current credentials",
+  "candidate": "Unconfirmed new credentials (recovery)",
+  "previous": "Original credentials (recovery)",
+  "includePassword": "Include login password",
+  "export": "Show and export credentials",
+sessionExport: {
+        button: "Export ChatGPT Session with 2FA",
+        title: "Export ChatGPT Session with 2FA",
+        hint: "The local Worker signs in with the email, password, and TOTP saved in Credential Operations, then downloads an identity-checked Session. Passwords, TOTP secrets, and Cookies are never stored in the task or logs.",
+        starting: "Starting export…",
+        exporting: "Signing in and exporting…",
+        download: "Export again",
+        failed: "Session export failed. Please try again.",
+        stages: {
+          queued: "Queued",
+          starting: "Preparing credentials",
+          connecting: "Connecting to local Worker",
+          passwordSubmitted: "Submitting password",
+          totpSubmitted: "Verifying TOTP",
+          sessionRequest: "Requesting ChatGPT Session",
+          identityVerification: "Verifying account identity",
+          succeeded: "Export complete",
+          failed: "Export failed"
+        },
+        errors: {
+          password_rejected: "The password was rejected by ChatGPT.",
+          totp_rejected: "TOTP verification failed. Check Credential Operations.",
+          identity_mismatch: "The signed-in identity does not match the managed account.",
+          upstream_rejected: "ChatGPT rejected the login or Session request.",
+          worker_timeout: "The local Worker timed out.",
+          worker_offline: "No local Worker is available.",
+          proxy_unavailable: "The account proxy is unavailable. Start the configured proxy or update the account proxy settings.",
+          session_token_missing: "ChatGPT did not return a usable Web session token.",
+          OPENAI_SESSION_EXPORT_CONFIG_REQUIRED: "The account has no usable email, password, and TOTP configuration.",
+          OPENAI_REAUTH_WORKER_UNAVAILABLE: "No local Worker is available.",
+          OPENAI_SESSION_EXPORT_ACCOUNT_INVALID: "Only an independent OpenAI OAuth parent account is supported.",
+          credentials_required: "The account has no usable email, password, and TOTP configuration.",
+          task_expired: "The export task expired. Start a new export.",
+          expired: "The export task expired. Start a new export.",
+          failed: "Session export failed. Please try again."
+        }
+      },
+  "recoveryLabel": "Unconfirmed credentials: keep this file and retain your existing authenticator entry until verification succeeds.",
+  "qr": "Authenticator QR code",
+  "secret": "2FA secret",
+  "downloadJSON": "Download JSON",
+  "downloadCombo": "Download email / password / 2FA",
+  "downloadSecret": "Download secret",
+  "confirm": "Replace 2FA for {account}? After success, the old secret will stop working and automatic login will use the saved new secret.",
+  "useJSON": "The password contains a delimiter or newline. Download JSON to preserve it.",
+  "states": {
+    "queued": "Queued",
+    "running": "Verifying login",
+    "enrolling": "Requesting new secret",
+    "prepared": "New secret saved",
+    "activating": "Activating new secret",
+    "verifying": "Verifying credentials",
+    "uncertain": "Unconfirmed — recovery available",
+    "succeeded": "Confirmed",
+    "failed": "Not changed"
+  }
+},
+
   legacyEngine: "Keep existing account settings",
   legacyEngineHint: "No global engine is selected yet. Existing accounts keep their engine; new accounts use the local worker. Selecting an engine applies it to all password/TOTP accounts. Email OTP continues locally.",
   sessionStudioGlobalHint: "Subsequent password/TOTP re-logins send account email, password and TOTP secret to the Session Studio service configured in Credential Guard. The service uses its own egress, not account proxies. Email OTP stays local. Failures do not switch engines.",
@@ -33,6 +108,13 @@ export default {
     running: 'Ready and processing re-login tasks',
     unavailable: 'Temporarily unavailable; the application will retry automatically',
     stopped: 'Service is stopping'
+  },
+  reauthErrors: {
+    proxy_unavailable: 'The account proxy is unavailable. Start the proxy or update the account proxy settings.',
+    password_rejected: 'ChatGPT rejected the password. Save the correct web login password again.',
+    totp_rejected: 'TOTP verification failed. Check the 2FA secret in Credential Operations.',
+    upstream_rejected: 'OpenAI rejected the login request. Check the proxy and account status.',
+    worker_timeout: 'The Worker timed out. Check the Worker status.'
   },
 
   encryption: {

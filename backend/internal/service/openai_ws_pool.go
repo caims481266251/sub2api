@@ -75,6 +75,8 @@ type openAIWSAcquireRequest struct {
 	// LifetimeContext owns the admitted business turn/session. Acquisition uses
 	// its own shorter deadline; this context must never enter pool snapshots.
 	LifetimeContext context.Context
+	timezoneBinding *requestTimezoneBinding
+	timezoneMode    string
 	// Private experiment connections must never serve a different client scope.
 	AnchorScope string
 	Account     *Account
@@ -96,6 +98,8 @@ type openAIWSAcquireRequest struct {
 
 type openAIWSHandshakeCompatibilityKey struct {
 	borrowRouteID       string
+	timezoneMode        string
+	timezoneHeaders     [3]string
 	anchorScope         string
 	betaFeatures        string
 	codexInstallationID string
@@ -1193,6 +1197,15 @@ func (p *openAIWSConnPool) Acquire(ctx context.Context, req openAIWSAcquireReque
 			}()
 		}
 	}
+	if ctx != nil {
+		req.timezoneBinding, _ = ctx.Value(requestTimezoneEgressKey{}).(*requestTimezoneBinding)
+	}
+	if b := req.timezoneBinding; b != nil && b.service.settingService.GetOpenAIRequestTimezoneEnabled(ctx, false) {
+		req.timezoneMode = "manual"
+		if b.service.settingService.GetOpenAIRequestTimezoneAuto(ctx, false) {
+			req.timezoneMode = "auto"
+		}
+	}
 	if p != nil {
 		p.metrics.acquireTotal.Add(1)
 	}
@@ -2243,7 +2256,20 @@ func (p *openAIWSConnPool) dialConn(ctx context.Context, req openAIWSAcquireRequ
 	if err != nil {
 		return nil, err
 	}
+	if req.timezoneBinding != nil {
+		ctx = context.WithValue(ctx, requestTimezoneEgressKey{}, req.timezoneBinding)
+	}
+	accountIDForCapture := int64(0)
+	if req.Account != nil {
+		accountIDForCapture = req.Account.ID
+	}
+	finishCapture := captureOpenAIWSHandshake(ctx, accountIDForCapture, req.WSURL)
 	conn, status, handshakeHeaders, err := p.clientDialer.Dial(ctx, req.WSURL, headers, req.ProxyURL)
+	captureErr := err
+	if captureErr == nil && conn == nil {
+		captureErr = errors.New("openai ws dialer returned nil connection")
+	}
+	finishCapture(status, handshakeHeaders, captureErr)
 	if err != nil {
 		if p.borrowRoutes != nil {
 			_ = p.borrowRoutes.observeWSHandshake(ctx, req.borrowRoute, handshakeHeaders, status)
@@ -2253,6 +2279,7 @@ func (p *openAIWSConnPool) dialConn(ctx context.Context, req openAIWSAcquireRequ
 		if errors.As(err, &handshakeErr) && handshakeErr != nil {
 			responseBody = append([]byte(nil), handshakeErr.Body...)
 		}
+		captureOpenAIWSHandshakeBody(ctx, responseBody, handshakeHeaders)
 		return nil, &openAIWSDialError{
 			StatusCode:      status,
 			ResponseHeaders: cloneHeader(handshakeHeaders),
@@ -2451,6 +2478,7 @@ func openAIWSAcquireCompatibility(req openAIWSAcquireRequest) openAIWSHandshakeC
 	if req.borrowRoute != nil {
 		key.borrowRouteID = req.borrowRoute.ID
 	}
+	key.timezoneMode = req.timezoneMode
 	return key
 }
 
@@ -2473,7 +2501,7 @@ func cloneOpenAIWSAcquireRequestPtr(req *openAIWSAcquireRequest) *openAIWSAcquir
 }
 
 func sameOpenAIWSPrewarmTarget(a, b openAIWSAcquireRequest) bool {
-	return stringsTrim(a.WSURL) == stringsTrim(b.WSURL) &&
+	return a.timezoneMode == b.timezoneMode && stringsTrim(a.WSURL) == stringsTrim(b.WSURL) &&
 		stringsTrim(a.ProxyURL) == stringsTrim(b.ProxyURL) &&
 		openAIWSAcquireCompatibility(a) == openAIWSAcquireCompatibility(b)
 }
@@ -2505,7 +2533,8 @@ func normalizeOpenAIWSBetaFeatures(headers http.Header) string {
 
 func normalizeOpenAIWSHandshakeCompatibility(account *Account, headers http.Header) openAIWSHandshakeCompatibilityKey {
 	key := openAIWSHandshakeCompatibilityKey{
-		betaFeatures: normalizeOpenAIWSBetaFeatures(headers),
+		betaFeatures:    normalizeOpenAIWSBetaFeatures(headers),
+		timezoneHeaders: [3]string{headers.Get("Oai-Client-Timezone"), headers.Get("X-Openai-Timezone"), headers.Get("X-Timezone")},
 	}
 	mode := activeCodexFingerprintMode(account)
 	if mode == codexFingerprintOff {

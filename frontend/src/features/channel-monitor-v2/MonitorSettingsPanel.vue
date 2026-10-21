@@ -81,6 +81,32 @@
             </button>
           </div>
         </div>
+        <div class="flex flex-wrap items-center justify-between gap-4 px-5 py-4">
+          <div>
+            <strong class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('channelMonitorV2.settings.cardTimelineTitle') }}</strong>
+            <p class="mt-0.5 text-xs text-gray-500 dark:text-dark-400">{{ t('channelMonitorV2.settings.cardTimelineHint') }}</p>
+          </div>
+          <div class="tabs inline-flex w-auto" role="group" :aria-label="t('channelMonitorV2.settings.cardTimelineAria')" data-testid="monitor-v2-card-timeline">
+            <button
+              type="button"
+              class="tab"
+              data-testid="monitor-v2-card-timeline-windows"
+              :class="draft.card_timeline_mode !== 'samples' ? 'tab-active' : ''"
+              @click="draft.card_timeline_mode = 'windows'"
+            >
+              {{ t('channelMonitorV2.cards.timelineMode.windows') }}
+            </button>
+            <button
+              type="button"
+              class="tab"
+              data-testid="monitor-v2-card-timeline-samples"
+              :class="draft.card_timeline_mode === 'samples' ? 'tab-active' : ''"
+              @click="draft.card_timeline_mode = 'samples'"
+            >
+              {{ t('channelMonitorV2.cards.timelineMode.samples') }}
+            </button>
+          </div>
+        </div>
       </div>
 
       <div class="card overflow-hidden !rounded-3xl !border-0 shadow-sm ring-1 ring-gray-900/5 dark:!bg-dark-800 dark:ring-dark-700">
@@ -89,17 +115,48 @@
           <p class="mt-0.5 text-xs text-gray-500 dark:text-dark-400">
             {{ t('channelMonitorV2.settings.platformsHint') }}
           </p>
+          <p class="mt-0.5 text-xs text-gray-500 dark:text-dark-400">
+            {{ t('channelMonitorV2.settings.platformsOrderHint') }}
+          </p>
+        </div>
+        <div class="flex flex-wrap items-center gap-2 border-b border-gray-100 px-5 py-3 dark:border-dark-700">
+          <select v-model="selectedCandidate" class="input min-w-[12rem] flex-1" data-testid="monitor-v2-platform-select" :aria-label="t('channelMonitorV2.settings.selectPlatform')">
+            <option value="">{{ t('channelMonitorV2.settings.selectPlatform') }}</option>
+            <option v-for="option in addCandidates" :key="option.value" :value="option.value">{{ option.label }}</option>
+          </select>
+          <input
+            v-model="customPlatform"
+            class="input min-w-[12rem] flex-1"
+            type="text"
+            maxlength="64"
+            data-testid="monitor-v2-platform-custom"
+            :placeholder="t('channelMonitorV2.settings.customPlatform')"
+            :aria-label="t('channelMonitorV2.settings.customPlatform')"
+            @keydown.enter.prevent="addPlatform"
+          />
+          <button type="button" class="btn btn-secondary btn-sm" data-testid="monitor-v2-add-platform" @click="addPlatform">
+            <Icon name="plus" size="xs" />
+            {{ t('channelMonitorV2.settings.addPlatform') }}
+          </button>
         </div>
         <div class="divide-y divide-gray-100 dark:divide-dark-700">
           <div
-            v-for="platform in draft.platforms"
+            v-for="(platform, index) in draft.platforms"
             :key="platform.platform"
-            class="grid grid-cols-1 items-center gap-3 px-5 py-3 sm:grid-cols-[auto_7rem_minmax(0,1fr)_auto]"
+            class="flex flex-wrap items-center gap-3 px-5 py-3"
+            data-testid="monitor-v2-platform-row"
+            :data-platform="platform.platform"
           >
             <Toggle v-model="platform.enabled" />
-            <strong class="text-sm font-medium text-gray-900 dark:text-white">{{ platformLabel(platform.platform) }}</strong>
+            <div class="w-36 min-w-0">
+              <strong class="block truncate text-sm font-medium text-gray-900 dark:text-white">{{ platformLabel(platform.platform) }}</strong>
+              <small class="block truncate font-mono text-[10px] text-gray-400">
+                {{ platform.platform }}
+                <span v-if="isFactoryPlatform(platform.platform)"> · {{ t('channelMonitorV2.settings.factoryBadge') }}</span>
+              </small>
+            </div>
             <input
-              class="input"
+              class="input min-w-[12rem] flex-1"
               :value="platform.models.join(', ')"
               type="text"
               :placeholder="t('channelMonitorV2.settings.modelsPlaceholder')"
@@ -111,6 +168,21 @@
             >
               {{ platform.models.length ? t('channelMonitorV2.settings.badgeOther') : t('channelMonitorV2.settings.badgeAllModels') }}
             </span>
+            <button
+              v-if="!isFactoryPlatform(platform.platform)"
+              type="button"
+              class="icon-btn hover:text-red-500"
+              :disabled="platform.enabled"
+              :title="platform.enabled ? t('channelMonitorV2.settings.deleteDisabled') : t('channelMonitorV2.settings.deletePlatform')"
+              data-testid="monitor-v2-delete-platform"
+              @click="removePlatform(platform.platform)"
+            >
+              <Icon name="trash" size="xs" />
+            </button>
+            <div class="flex shrink-0 items-center gap-1">
+              <button type="button" class="icon-btn" :disabled="index === 0" :title="t('channelMonitorV2.settings.moveUp')" data-testid="monitor-v2-move-up" @click="movePlatform(index, -1)"><Icon name="arrowUp" size="xs" /></button>
+              <button type="button" class="icon-btn" :disabled="index === draft.platforms.length - 1" :title="t('channelMonitorV2.settings.moveDown')" data-testid="monitor-v2-move-down" @click="movePlatform(index, 1)"><Icon name="arrowDown" size="xs" /></button>
+            </div>
           </div>
         </div>
       </div>
@@ -126,6 +198,7 @@
                   : t('channelMonitorV2.settings.groupsAll')
               }}
             </p>
+            <p class="mt-0.5 text-xs text-gray-500 dark:text-dark-400">{{ t('channelMonitorV2.settings.groupsOrderHint') }}</p>
           </div>
           <button
             v-if="draft.group_ids.length"
@@ -136,23 +209,32 @@
             {{ t('channelMonitorV2.settings.groupsAll') }}
           </button>
         </div>
-        <div class="max-h-[min(40vh,280px)] overflow-y-auto px-3 py-2 sm:px-4">
-          <div class="grid grid-cols-1 gap-1 sm:grid-cols-2">
-            <label
-              v-for="group in groups"
+        <div class="max-h-[min(40vh,420px)] overflow-y-auto px-3 py-2 sm:px-4">
+          <section v-for="section in groupSections" :key="section.platform" class="py-2" :data-testid="'monitor-v2-group-platform'" :data-platform="section.platform">
+            <h4 class="px-3 py-1 text-xs font-semibold text-gray-500 dark:text-gray-400">{{ platformLabel(section.platform) }}</h4>
+            <div
+              v-for="(group, index) in section.groups"
               :key="group.id"
-              class="flex cursor-pointer items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition hover:bg-gray-50 dark:hover:bg-dark-800/60"
+              class="flex items-center gap-2 rounded-xl px-3 py-2 text-sm"
+              data-testid="monitor-v2-group-row"
+              :data-group-id="group.id"
             >
-              <input
-                type="checkbox"
-                class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500/40"
-                :checked="draft.group_ids.includes(group.id)"
-                @change="toggleGroup(group.id)"
-              />
-              <span class="min-w-0 flex-1 truncate font-medium text-gray-800 dark:text-gray-100">{{ group.name }}</span>
-              <small class="shrink-0 text-xs text-gray-400">{{ platformLabel(group.platform) }} · #{{ group.id }}</small>
-            </label>
-          </div>
+              <label class="flex min-w-0 flex-1 cursor-pointer items-center gap-3">
+                <input
+                  type="checkbox"
+                  class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500/40"
+                  :checked="draft.group_ids.includes(group.id)"
+                  @change="toggleGroup(group.id)"
+                />
+                <span class="min-w-0 flex-1 truncate font-medium text-gray-800 dark:text-gray-100">{{ group.name }}</span>
+                <small class="shrink-0 text-xs text-gray-400">#{{ group.id }}</small>
+              </label>
+              <div class="flex shrink-0 items-center gap-1">
+                <button type="button" class="icon-btn" :disabled="index === 0" :title="t('channelMonitorV2.settings.moveUp')" data-testid="monitor-v2-group-move-up" @click="moveGroup(section.platform, index, -1)"><Icon name="arrowUp" size="xs" /></button>
+                <button type="button" class="icon-btn" :disabled="index === section.groups.length - 1" :title="t('channelMonitorV2.settings.moveDown')" data-testid="monitor-v2-group-move-down" @click="moveGroup(section.platform, index, 1)"><Icon name="arrowDown" size="xs" /></button>
+              </div>
+            </div>
+          </section>
           <p v-if="groups.length === 0" class="empty-state py-8 text-sm text-gray-400">{{ t('channelMonitorV2.settings.groupsEmpty') }}</p>
         </div>
       </div>
@@ -237,7 +319,7 @@
         </div>
       </div>
 
-      <MonitorCandySettings v-model="draft.candy_probes" :groups="groups" />
+      <MonitorCandySettings v-model="draft.candy_probes" v-model:history-limit="draft.candy_history_limit" :groups="groups" />
 
       <div class="space-y-2">
         <div class="rounded-2xl border border-primary-200 bg-primary-50/80 px-4 py-3 text-sm text-primary-900 dark:border-primary-800/50 dark:bg-primary-900/20 dark:text-primary-100">
@@ -276,9 +358,18 @@ import {
   updateConfig,
   MONITOR_ERROR_CATEGORIES,
   type MonitorConfig,
+  type MonitorCandyProbe,
 } from '@/api/channelMonitorV2'
+import { CANDY_HISTORY_LIMIT, CANDY_HISTORY_LIMIT_MAX, CANDY_HISTORY_LIMIT_MIN } from './monitorCards'
+import { monitorPlatformLabel } from './monitorFormat'
 import { adminAPI } from '@/api/admin'
+import { GROUP_PLATFORM_OPTIONS } from '@/constants/platforms'
 import type { AdminGroup } from '@/types'
+
+/** Matches backend ChannelMonitorV2FactoryPlatforms. These rows cannot be removed. */
+const FACTORY_PLATFORMS = ['anthropic', 'openai', 'grok', 'kiro', 'gemini', 'antigravity']
+const PLATFORM_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/
+const MAX_PLATFORMS = 64
 
 const { t, te } = useI18n()
 const appStore = useAppStore()
@@ -287,6 +378,8 @@ const saving = ref(false)
 const draft = ref<MonitorConfig | null>(null)
 const original = ref('')
 const groups = ref<AdminGroup[]>([])
+const selectedCandidate = ref('')
+const customPlatform = ref('')
 
 const dirty = computed(() => (draft.value ? JSON.stringify(draft.value) !== original.value : false))
 const namedModelCount = computed(
@@ -359,6 +452,58 @@ function setModels(platform: MonitorConfig['platforms'][number], event: Event) {
   ].sort()
 }
 
+const groupSections = computed(() => {
+  if (!draft.value) return []
+  const byPlatform = new Map<string, AdminGroup[]>()
+  for (const group of groups.value) {
+    const platform = (group.platform || '').toLowerCase()
+    const list = byPlatform.get(platform) || []
+    list.push(group)
+    byPlatform.set(platform, list)
+  }
+  const rank = new Map<string, number>()
+  draft.value.platforms.forEach((item, index) => rank.set(item.platform, index))
+  const order = new Map<number, number>()
+  ;(draft.value.group_order || []).forEach((id, index) => {
+    if (!order.has(id)) order.set(id, index)
+  })
+  const missing = order.size
+  const compare = (a: AdminGroup, b: AdminGroup) => {
+    const ia = order.has(a.id) ? order.get(a.id)! : missing
+    const ib = order.has(b.id) ? order.get(b.id)! : missing
+    if (ia !== ib) return ia - ib
+    if (a.name !== b.name) return a.name < b.name ? -1 : 1
+    return a.id - b.id
+  }
+  return [...byPlatform.entries()]
+    .sort((a, b) => (rank.get(a[0]) ?? rank.size) - (rank.get(b[0]) ?? rank.size) || a[0].localeCompare(b[0]))
+    .map(([platform, items]) => ({ platform, groups: [...items].sort(compare) }))
+})
+
+function uniqueIds(values: number[] | undefined): number[] {
+  const seen = new Set<number>()
+  const out: number[] = []
+  for (const id of values || []) {
+    if (!Number.isInteger(id) || id <= 0 || seen.has(id)) continue
+    seen.add(id)
+    out.push(id)
+  }
+  return out
+}
+
+function moveGroup(platform: string, index: number, offset: number) {
+  if (!draft.value) return
+  const next = index + offset
+  const ordered = groupSections.value.flatMap((item) => {
+    const ids = item.groups.map((group) => group.id)
+    if (item.platform !== platform || next < 0 || next >= ids.length) return ids
+    const [moved] = ids.splice(index, 1)
+    ids.splice(next, 0, moved)
+    return ids
+  })
+  draft.value.group_order = ordered
+}
+
 function toggleGroup(id: number) {
   if (!draft.value) return
   draft.value.group_ids = draft.value.group_ids.includes(id)
@@ -384,21 +529,81 @@ function categoryLabel(category: string) {
 }
 
 function platformLabel(value: string) {
-  return (
-    {
-      anthropic: 'Claude',
-      openai: 'OpenAI',
-      grok: 'Grok',
-      kiro: 'Kiro',
-      gemini: 'Gemini',
-      antigravity: 'Antigravity',
-      kimi: 'Kimi',
-      zhipu: 'Zhipu GLM',
-      deepseek: 'DeepSeek',
-      minimax: 'MiniMax',
-      composite: 'Composite',
-    } as Record<string, string>
-  )[value] || value
+  return monitorPlatformLabel(value)
+}
+
+function isFactoryPlatform(value: string) {
+  return FACTORY_PLATFORMS.includes(value.trim().toLowerCase())
+}
+
+const addCandidates = computed(() => {
+  const configured = new Set(draft.value?.platforms.map((item) => item.platform.trim().toLowerCase()) ?? [])
+  const seen = new Set<string>()
+  const options: Array<{ value: string; label: string }> = []
+  const push = (value: string, label?: string) => {
+    const id = value.trim().toLowerCase()
+    if (!id || configured.has(id) || seen.has(id) || !PLATFORM_PATTERN.test(id)) return
+    seen.add(id)
+    options.push({ value: id, label: label || platformLabel(id) })
+  }
+  for (const option of GROUP_PLATFORM_OPTIONS) push(option.value, option.label)
+  for (const id of FACTORY_PLATFORMS) push(id)
+  for (const group of groups.value) push(group.platform)
+  return options
+})
+
+function addPlatform() {
+  if (!draft.value) return
+  const id = (customPlatform.value.trim() || selectedCandidate.value).trim().toLowerCase()
+  if (!id) {
+    appStore.showError(t('channelMonitorV2.settings.platformRequired'))
+    return
+  }
+  if (!PLATFORM_PATTERN.test(id)) {
+    appStore.showError(t('channelMonitorV2.settings.platformInvalid'))
+    return
+  }
+  if (draft.value.platforms.some((item) => item.platform.trim().toLowerCase() === id)) {
+    appStore.showError(t('channelMonitorV2.settings.platformDuplicate'))
+    return
+  }
+  if (draft.value.platforms.length >= MAX_PLATFORMS) {
+    appStore.showError(t('channelMonitorV2.settings.platformLimit'))
+    return
+  }
+  draft.value.platforms.push({ platform: id, enabled: true, models: [] })
+  customPlatform.value = ''
+  selectedCandidate.value = ''
+}
+
+function movePlatform(index: number, offset: number) {
+  if (!draft.value) return
+  const next = index + offset
+  const items = draft.value.platforms
+  if (next < 0 || next >= items.length) return
+  const [item] = items.splice(index, 1)
+  items.splice(next, 0, item)
+}
+
+function removePlatform(id: string) {
+  if (!draft.value || isFactoryPlatform(id)) return
+  const item = draft.value.platforms.find((platform) => platform.platform === id)
+  if (!item || item.enabled) return
+  draft.value.platforms = draft.value.platforms.filter((platform) => platform.platform !== id)
+}
+
+function candyProbeIdentity(probe: MonitorCandyProbe) {
+  return `${probe.group_id}\0${probe.model.trim()}\0${(probe.reasoning_effort || 'medium').trim().toLowerCase()}`
+}
+
+function hasDuplicateCandyProbe(probes: MonitorCandyProbe[]) {
+  const seen = new Set<string>()
+  for (const probe of probes) {
+    const identity = candyProbeIdentity(probe)
+    if (seen.has(identity)) return true
+    seen.add(identity)
+  }
+  return false
 }
 
 function normalizeConfig(value: MonitorConfig): MonitorConfig {
@@ -406,6 +611,9 @@ function normalizeConfig(value: MonitorConfig): MonitorConfig {
   return {
     ...value,
     candy_probes: value.candy_probes || [],
+    candy_history_limit: value.candy_history_limit && value.candy_history_limit > 0 ? value.candy_history_limit : CANDY_HISTORY_LIMIT,
+    card_timeline_mode: value.card_timeline_mode === 'samples' ? 'samples' : 'windows',
+    group_order: uniqueIds(value.group_order),
     health_thresholds: { ...defaultThresholds, ...(value.health_thresholds || {}) },
     // Preserve explicit empty arrays from the server (operator cleared all).
     ignored_error_categories: [
@@ -435,6 +643,15 @@ async function save() {
     appStore.showError(t('channelMonitorV2.candy.invalid'))
     return
   }
+  if (hasDuplicateCandyProbe(draft.value.candy_probes || [])) {
+    appStore.showError(t('channelMonitorV2.candy.duplicateModel'))
+    return
+  }
+  const historyLimit = draft.value.candy_history_limit
+  if (historyLimit == null || !Number.isInteger(historyLimit) || historyLimit < CANDY_HISTORY_LIMIT_MIN || historyLimit > CANDY_HISTORY_LIMIT_MAX) {
+    appStore.showError(t('channelMonitorV2.candy.historyLimitInvalid'))
+    return
+  }
   saving.value = true
   try {
     const payload = normalizeConfig(draft.value)
@@ -453,3 +670,9 @@ async function save() {
 
 onMounted(load)
 </script>
+
+<style scoped>
+.icon-btn {
+  @apply grid h-7 w-7 place-items-center rounded-lg text-gray-500 transition hover:bg-gray-100 hover:text-gray-800 disabled:cursor-not-allowed disabled:opacity-30 dark:text-gray-400 dark:hover:bg-dark-700 dark:hover:text-gray-100;
+}
+</style>

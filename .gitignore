@@ -32,8 +32,9 @@ backend/.gocache/
 # ===================
 # Node.js / Vue 前端
 # ===================
-node_modules
-frontend/node_modules
+node_modules/
+frontend/node_modules/
+.pnpm-store/
 frontend/dist/
 *.local
 *.tsbuildinfo
@@ -137,6 +138,10 @@ docs/*
 !docs/openai-ws-sse-acceleration.md
 !docs/openai-outbound-identity.md
 !docs/openai-session-affinity.md
+!docs/security-penalties.md
+!docs/ip-risk-control.md
+!docs/openai-2fa-dual-oauth.md
+!docs/openai-siwc.md
 !docs/PAYMENT.md
 !docs/PAYMENT_CN.md
 !docs/ADMIN_PAYMENT_INTEGRATION_API.md
@@ -147,21 +152,17 @@ docs/*
 !docs/PLUGIN_DEVELOPMENT.md
 !docs/channel-monitor-v2-safe-defaults.md
 !docs/quality-bps-observation.md
+!docs/modeltrace-tests.md
 !docs/cyber-session-blocking.md
 !docs/request-capture.md
+!docs/gateway-transport-diagnostics.md
+!docs/chat-responses-bridge-recovery.md
 !docs/codex-credits.md
 !docs/account-token-guard.md
 !docs/priority-scheduling.md
+!docs/astra-account-scheduling.md
 !docs/legal/
 !docs/legal/*.md
-!docs/screenshots/
-docs/screenshots/*
-!docs/screenshots/ws-sse-acceleration/
-!docs/screenshots/mobile-account-actions-menu.png
-!docs/screenshots/codex-referral-dialog.png
-!docs/screenshots/codex-referral-success.png
-!docs/screenshots/bps403-recovery/
-!docs/screenshots/account-cost-multiplier/
 .serena/
 .codex/
 frontend/coverage/
@@ -186,11 +187,8 @@ issues/
 **/.credential-key-*
 !docs/credential-encryption.md
 !docs/new-api-upstream-probe.md
+!docs/minimax-h3-video-relay.md
 !docs/account-ops-notifications.md
-!docs/screenshots/account-ops-monitoring/
-!docs/screenshots/credential-encryption/
-!docs/screenshots/pelican-showcase-api-ui/
-!docs/screenshots/smart-ops-capture-harvest/
 
 !docs/typesafe-jev.md
 
@@ -211,3 +209,22 @@ issues/
 !docs/ticket-borrowing-429-release-20261010.md
 
 !docs/github-release.md
+
+!docs/openai-2fa-rotation.md
+**/totp-recovery/
+**/*.sealed
+
+!docs/astra-candy-beta.md
+
+# PR screenshots belong in PR attachments; retain text evidence in docs/screenshots.
+!docs/screenshots/
+/docs/screenshots/**/*.png
+/docs/screenshots/**/*.jpg
+/docs/screenshots/**/*.jpeg
+/docs/screenshots/**/*.gif
+/docs/screenshots/**/*.webp
+/docs/screenshots/**/*.avif
+/docs/screenshots/**/*.svg
+
+# Local macOS re-auth Worker runtime (ephemeral, never commit)
+tools/local-worker/

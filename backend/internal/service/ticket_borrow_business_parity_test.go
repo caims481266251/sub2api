@@ -192,7 +192,7 @@ func TestBorrowBusinessStreamsBeforeCompletionLikeNormalAccount(t *testing.T) {
 			require.NoError(t, <-errCh)
 			require.NotNil(t, <-resultCh)
 			got, _ = recorder.snapshot()
-			require.True(t, strings.HasPrefix(got, first+middle))
+			require.Less(t, strings.Index(got, `"delta":"first"`), strings.Index(got, `"delta":"second"`))
 			require.Equal(t, 1, strings.Count(got, "response.completed"))
 			if !enabled {
 				ordinaryOutput = got

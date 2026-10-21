@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/handler"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/requestmodel"
 	servermiddleware "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -19,6 +21,55 @@ import (
 
 type compositeRouteRepoStub struct {
 	routes []service.CompositeModelRoute
+}
+
+func TestCompositeUltraSuffixPolicySurvivesRouteRewrite(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, path := range []string{"/v1/responses", "/v1/chat/completions", "/v1/messages"} {
+		t.Run(path, func(t *testing.T) {
+			resolver := service.NewCompositeRouteResolver(compositeRouteRepoStub{routes: []service.CompositeModelRoute{{
+				ID: 1, GroupID: 1, PublicModel: "staff-ultra", UpstreamModel: "gpt-6.1-sol",
+				TargetPlatform: service.PlatformOpenAI, MatchType: service.CompositeRouteMatchExact,
+				Endpoint: service.CompositeRouteEndpointAny, Enabled: true,
+			}}})
+			cfg := &config.Config{}
+			billing := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
+			t.Cleanup(billing.Stop)
+			h := handler.NewOpenAIGatewayHandler(&service.OpenAIGatewayService{}, service.NewConcurrencyService(nil),
+				billing, &service.APIKeyService{}, nil, nil, nil, nil, cfg)
+			router := gin.New()
+			router.Use(func(c *gin.Context) {
+				groupID := int64(1)
+				c.Set(string(servermiddleware.ContextKeyAPIKey), &service.APIKey{ID: 1, GroupID: &groupID,
+					Group: &service.Group{ID: groupID, Platform: service.PlatformComposite, AllowMessagesDispatch: true,
+						ReasoningEffortMappings: []service.ReasoningEffortMapping{{From: "ultra", To: "deny", Model: "staff-ultra", MatchType: "exact"}}},
+					User: &service.User{ID: 2, Status: service.StatusActive},
+				})
+				c.Set(string(servermiddleware.ContextKeyUser), servermiddleware.AuthSubject{UserID: 2})
+			})
+			router.Use(compositeTargetPlatformMiddleware(resolver))
+			router.Use(func(c *gin.Context) {
+				body, err := io.ReadAll(c.Request.Body)
+				require.NoError(t, err)
+				require.Contains(t, string(body), `"model":"gpt-6.1-sol"`)
+				requestmodel.ResetRequestBody(c.Request, body)
+			})
+			switch path {
+			case "/v1/responses":
+				router.POST(path, h.Responses)
+			case "/v1/chat/completions":
+				router.POST(path, h.ChatCompletions)
+			case "/v1/messages":
+				router.POST(path, h.Messages)
+			}
+			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"model":"staff-ultra","messages":[],"input":"test","max_tokens":16}`))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+			require.Contains(t, rec.Body.String(), "ultra")
+		})
+	}
 }
 
 func (s compositeRouteRepoStub) ListByGroup(ctx context.Context, groupID int64, includeDisabled bool) ([]service.CompositeModelRoute, error) {
@@ -183,6 +234,53 @@ func TestCompositeTargetPlatformMiddlewareRewritesNestedLiveModel(t *testing.T) 
 	router.ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusNoContent, w.Code)
+}
+
+// Scenario: 回归 —— openai OAuth 与 deepseek API Key 同时映射 gpt-6-astra 时，
+// 请求必须在路由层被拒绝，不能落到默认 Anthropic handler 后再按模型名猜平台。
+// 仅 API Key 的跨平台歧义保持原行为（放行且不解析平台）。
+func TestCompositeTargetPlatformMiddlewareRejectsOnlyOAuthAmbiguousOwnership(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tc := range []struct {
+		name         string
+		oauthClaimed bool
+		wantStatus   int
+	}{
+		{name: "oauth claimant", oauthClaimed: true, wantStatus: http.StatusBadRequest},
+		{name: "apikey only", oauthClaimed: false, wantStatus: http.StatusNoContent},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resolver := service.NewCompositeRouteResolver(nil)
+			resolver.SetModelOwnershipResolver(func(context.Context, int64, string) (service.CompositeModelOwnership, error) {
+				return service.CompositeModelOwnership{Ambiguous: true, OpenAIGatewayOAuthClaimed: tc.oauthClaimed}, nil
+			})
+			router := gin.New()
+			router.Use(gin.HandlerFunc(servermiddleware.APIKeyAuthMiddleware(func(c *gin.Context) {
+				groupID := int64(8)
+				c.Set(string(servermiddleware.ContextKeyAPIKey), &service.APIKey{
+					GroupID: &groupID,
+					Group:   &service.Group{ID: groupID, Platform: service.PlatformComposite},
+				})
+				c.Next()
+			})))
+			router.Use(compositeTargetPlatformMiddleware(resolver))
+			router.POST("/v1/responses", func(c *gin.Context) {
+				_, resolved := service.ResolvedTargetPlatformFromContext(c.Request.Context())
+				require.False(t, resolved)
+				c.Status(http.StatusNoContent)
+			})
+
+			req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-6-astra"}`))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			require.Equal(t, tc.wantStatus, w.Code)
+			if tc.oauthClaimed {
+				require.Contains(t, w.Body.String(), "explicit composite route")
+			}
+		})
+	}
 }
 
 func TestCompositeRequestModelFromMultipartLiveSession(t *testing.T) {

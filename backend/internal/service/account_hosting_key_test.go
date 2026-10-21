@@ -111,3 +111,23 @@ func TestHostingKeyUpdatePreservesChoiceAndRequiresExplicitSelection(t *testing.
 	_, err = s.Update(ctx, 1, 7, UpdateAPIKeyRequest{HostingFallbackEnabled: &yes})
 	require.ErrorIs(t, err, ErrHostingFallbackInvalid)
 }
+
+func TestHostingKeyClearsMultipleGroupsAndRejectsRebinding(t *testing.T) {
+	hosting, _, _ := hostingTestService()
+	mode, no := RouteModeHosted, false
+	group := int64(9)
+	s, repo := newUpdateFieldsAPIKeyService(&APIKey{ID: 1, UserID: 7, Key: "hosted-key", RouteMode: "group", GroupID: &group, GroupIDs: []int64{9, 10}})
+	s.SetHostingService(hosting)
+	key, err := s.Update(t.Context(), 1, 7, UpdateAPIKeyRequest{RouteMode: &mode, HostingFallbackEnabled: &no})
+	require.NoError(t, err)
+	require.Nil(t, key.GroupID)
+	require.Empty(t, key.GroupIDs)
+	require.True(t, repo.updateFields[0].GroupID)
+	repo.key = key
+	groups := []int64{9, 10}
+	_, err = s.Update(t.Context(), 1, 7, UpdateAPIKeyRequest{GroupIDs: &groups})
+	require.Error(t, err)
+	groups = nil
+	_, err = s.Update(t.Context(), 1, 7, UpdateAPIKeyRequest{GroupIDs: &groups})
+	require.NoError(t, err)
+}

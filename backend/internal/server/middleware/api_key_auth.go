@@ -161,10 +161,14 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 			AbortWithError(c, 401, "USER_INACTIVE", "User account is not active")
 			return
 		}
-		if abortIfAPIKeyGroupUnavailable(c, apiKey) {
+		apiKey, err = selectAPIKeyRequestGroup(c, apiKeyService, subscriptionService, cfg, apiKey, false)
+		if err != nil || c.IsAborted() {
 			return
 		}
-		if abortIfAPIKeyGroupNotAllowed(c, apiKey) {
+		if !isMultiGroupBillingInfoRequest(c, apiKey) && abortIfAPIKeyGroupUnavailable(c, apiKey) {
+			return
+		}
+		if !isMultiGroupBillingInfoRequest(c, apiKey) && abortIfAPIKeyGroupNotAllowed(c, apiKey) {
 			return
 		}
 		hostedCtx, hostedKey, hostingErr := apiKeyService.PrepareHostedRequest(c.Request.Context(), apiKey)

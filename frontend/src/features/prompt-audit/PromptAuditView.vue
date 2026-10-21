@@ -52,6 +52,7 @@
               <div v-if="loadErrors.groups" role="alert" class="mt-5 rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">{{ loadErrors.groups }}</div>
               <PolicyPanel :draft="draft" :groups="groups" @update:draft="replaceDraft" />
             </template>
+            <PenaltyPolicyPanel />
           </div>
 
           <div v-show="activeTab === 'events'" data-test="tab-panel-events">
@@ -144,6 +145,7 @@
 </template>
 
 <script setup lang="ts">
+import PenaltyPolicyPanel from '@/features/security-penalties/PenaltyPolicyPanel.vue'
 import { computed, defineComponent, h, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppLayout from '@/components/layout/AppLayout.vue'

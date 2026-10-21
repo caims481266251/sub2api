@@ -8,7 +8,7 @@ import (
 )
 
 type rotationBatchTestRepo struct {
-	*rotationTestRepo
+	*borrowRotationTestRepo
 	states []BorrowRotationState
 	saved  map[int64]BorrowRotationPolicy
 	errors map[int64]error
@@ -23,7 +23,7 @@ func (r *rotationBatchTestRepo) SaveRotationPolicy(_ context.Context, id int64, 
 }
 func rotationBatchFixture() (*TicketBorrowService, *rotationBatchTestRepo) {
 	s, base := rotationServiceFixture()
-	r := &rotationBatchTestRepo{rotationTestRepo: base, saved: map[int64]BorrowRotationPolicy{}, errors: map[int64]error{}, states: []BorrowRotationState{
+	r := &rotationBatchTestRepo{borrowRotationTestRepo: base, saved: map[int64]BorrowRotationPolicy{}, errors: map[int64]error{}, states: []BorrowRotationState{
 		{AccountID: 11, BorrowRotationPolicy: BorrowRotationPolicy{Revision: 2, Automatic: true, IntervalSeconds: 30}},
 		{AccountID: 12, BorrowRotationPolicy: BorrowRotationPolicy{Revision: 3, Automatic: false, IntervalSeconds: 120}},
 	}}

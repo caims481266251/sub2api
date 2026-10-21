@@ -253,8 +253,9 @@ func TestAstraGatewayRuntimeRevisionClearsPool(t *testing.T) {
 	settings.Revision = "two"
 	second := wrapper.current(t.Context())
 	require.NotSame(t, first, second)
-	_, err = wrapper.CodexGatewayPinWSHeader(300)
-	require.Error(t, err)
+	cookie, err = wrapper.CodexGatewayPinWSHeader(300)
+	require.NoError(t, err)
+	require.Empty(t, cookie)
 	settings.CookiePool.Enabled = false
 	require.Nil(t, wrapper.current(t.Context()))
 	cookie, err = wrapper.CodexGatewayPinWSHeader(300)
@@ -364,7 +365,7 @@ func TestAstraGatewayTargetPreparesSourceBeforeForwarding(t *testing.T) {
 		wrapper.current(t.Context()).recordSource(id, now, &codexGatewayRoute{cookie: http.Cookie{Name: "__oailb", Value: "ready", Path: "/"}, expires: now.Add(time.Minute)}, true)
 		return nil
 	})
-	resp, err := wrapper.Do(pinRequest(t), "", 300, 1)
+	resp, err := wrapper.Do(forceAstraProbe(pinRequest(t)), "", 300, 1)
 	require.NoError(t, err)
 	require.NoError(t, resp.Body.Close())
 	require.Equal(t, 3, calls)
@@ -448,7 +449,7 @@ func TestAstraGatewayBorrowFromAnotherSourceModel(t *testing.T) {
 			require.Zero(t, wrapper.AstraGatewaySnapshot(t.Context()).ReadyRoutes, "source model success alone cannot admit targets")
 			target := pinRequest(t)
 			target.Header.Set("Authorization", "Bearer target")
-			resp, err = wrapper.Do(target, "target-proxy", 300, 1)
+			resp, err = wrapper.Do(forceAstraProbe(target), "target-proxy", 300, 1)
 			consumeAffinityResponse(t, resp, err)
 			require.Equal(t, 3, targetCalls, "two Astra probe shots then the business request")
 			require.Equal(t, 1, wrapper.AstraGatewaySnapshot(t.Context()).ReadyRoutes)

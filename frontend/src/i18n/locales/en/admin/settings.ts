@@ -1,5 +1,8 @@
+import ipRisk from './ipRisk'
+
 export default {
     settings: {
+      ipRisk,
       title: 'System Settings',
       description: 'Manage registration, email verification, default values, and SMTP settings',
       tabs: {
@@ -49,7 +52,7 @@ export default {
           storageEntries: 'Stored images per process',
           ttlMinutes: 'Link lifetime (minutes)',
           retentionHint: 'Supports PNG, JPEG, GIF and WebP with a fixed 64-megapixel safety limit. Counts and decoded sizes include all inline images in the request, including history, tool screenshots and repeated items. Saved limits apply to new conversions. Link lifetime starts at the last submission; existing links keep their expiry until resubmitted. Lowering storage limits preserves live images and blocks new conversions while over quota. Anyone with a valid link can read the image.',
-          capacityHint: 'Request admission limits cover OpenAI/Composite Responses, Chat and Messages HTTP requests, including text-only requests. Larger requests allow less concurrency; excess requests receive 503 without being queued in memory. Raising the budget increases memory pressure.',
+          capacityHint: 'Request admission applies only to Responses HTTP requests forwarded to OAuth accounts with the Excel / BPS protocol enabled; requests served by other accounts, including text-only requests, are not limited. Larger requests allow less concurrency; when the budget is full the request switches to another account and receives 503 only if none is available, without being queued in memory. Raising the budget increases memory pressure.',
           invalidBaseUrl: 'Enter a valid HTTPS origin without a path, credentials, query or fragment.',
           invalidCapacity: 'Set a body limit of 1–{bodyMiB} MiB, a shared budget of {minBudgetMiB}–{budgetMiB} MiB at least eight times the body limit, and 1–{requests} in-flight requests.',
         },
@@ -243,6 +246,8 @@ export default {
           'Please configure TOTP_ENCRYPTION_KEY in environment variables first. Generate a key with: openssl rand -hex 32'
       },
       security: {
+        loginRateLimit: 'Login rate limiting',
+        loginRateLimitHint: 'Enabled by default. Limits sign-in requests and bans an IP for 1 hour after 10 failed verifications within 15 minutes. Disabling bypasses request limits and IP bans for password, two-factor, Passkey, and OAuth account-binding sign-ins. Saving takes effect immediately for admins and users. Existing bans retain their original expiry when re-enabled.',
         passkey: 'Passkey Sign-in',
         passkeyHint: 'Allow passwordless sign-in and user-managed passkeys when the relying party configuration is valid.',
         passkeyConfigured: 'WebAuthn relying party configuration is valid.',
@@ -565,6 +570,8 @@ export default {
         grokCrossClientMapHint: 'Enabled by default for client compatibility. GPT, Codex, o-series, and Claude model IDs are routed to the default Grok text model above. Disable this to require Grok model IDs.',
         grokDefaultBaseURLMode: 'Default Grok upstream',
         grokDefaultBaseURLModeHint: 'Used only when a Grok account has no explicit base URL. Media and voice endpoints continue to use their official API hosts.',
+        grokVideoSourceURL: 'Return Grok video source URL',
+        grokVideoSourceURLHint: 'When enabled, completed video status responses also include video.source_url, the validated xAI temporary media URL that downloads without credentials, so trusted downstream services can copy it directly. video.url stays the authenticated proxy on this site. xAI URLs usually expire within a day. When disabled, the field is omitted and any upstream value is removed.',
         grokBaseURLModeCLI: 'CLI chat proxy',
         grokBaseURLModeAPI: 'Public API',
         grokBaseURLModeUSEast1: 'Regional API (us-east-1)',
@@ -627,18 +634,23 @@ export default {
         claudeCodeVersionAutoSyncHint: 'Fetches the latest Claude Code client version from the official release channel every hour, so you never need to upgrade this service just to keep the version current. When disabled, fetching stops but the previously synced version remains available. The manual version above always takes priority.',
         claudeCodeVersionSyncedValue: 'Currently synced: {version}',
         codexHardeningTitle: "Codex Settings",
-        codexTicketEnabled: "780 ticket harvest",
+        requestTimezoneEnabled: 'Bind request timezone',
+        requestTimezoneEnabledDesc: 'Enabled with automatic egress IP detection by default. Choose a manual account timezone or automatic egress IP detection for existing environment context, web search timezone fields and supported timezone headers. Dates and ordinary text stay unchanged. Disabled means no rewriting. This does not guarantee improved model quality.',
+        requestTimezoneMode: 'Timezone source',
+        requestTimezoneManual: 'Manual: account setting',
+        requestTimezoneAuto: 'Automatic: egress IP',
+        requestTimezoneModeDesc: 'Manual mode defaults to Asia/Singapore. Automatic mode detects the timezone through the request egress and resolves again after proxy changes; failed detection preserves the original request. Dates and ordinary text stay unchanged. This does not guarantee improved model quality.',
+        codexTicketEnabled: "Automatic ticket harvesting",
         codexTicketEnabledDesc:
-          "When off, the gateway neither harvests nor injects x-codex-turn-state and forwards traffic as usual. When on, it harvests tickets in the background and overwrites that header on production requests.",
-        codexTicketFailClosed: "Pause accounts without a ticket",
+          "Controls background harvesting and ticket injection into model requests. Manual harvesting is started separately on this page.",
+        codexTicketFailClosed: "Pause target models without a ticket",
         codexTicketFailClosedDesc:
           "Off by default. When off, a missing, expired, or mismatched ticket only disables injection and the account remains schedulable. When on, target-model accounts without a valid ticket are paused.",
         codexTicketModels: "Ticket models",
         codexTicketModelsDesc: "Harvest and inject tickets only for selected models. Unselected models use the normal forwarding path.",
-        codexTicketShapeNotice: "780 only describe the observed state shape and do not measure model quality. Only tickets matching the current validation rules are injected; with account pausing off, a shape mismatch does not block requests.",
-        codexTicketHarvestProxy: "780 harvest proxy",
+        codexTicketHarvestProxy: "Harvest exit",
         codexTicketHarvestProxyDesc:
-          "Used only for minting 780 tickets when the ticket feature is enabled. Changes apply to subsequent probes without a restart. Production traffic still uses each account's residential proxy. Paste a full HTTP or SOCKS5h proxy URL including username and password. The proxy provider must handle IP rotation. Leave blank when saving to keep the stored value.",
+          "Select the exit for subsequent harvest probes. Stored tickets keep their bound exit. Leave the static proxy blank to retain its saved address.",
         codexTicketHarvestProxyPlaceholder: "http://user:pass{'@'}proxy.example.com:1080",
         codexTicketHarvestProxyConfigured: "Configured (password hidden). Paste a full new proxy URL to replace it.",
         codexTicketProxyMode: "Ticket exit type",
@@ -648,9 +660,7 @@ export default {
         codexTicketProxyIPPoolHint:
           "Rotates ticket harvesting across every active, unexpired proxy in IP management and moves to the next exit on failure. Each ticket remembers the exit it was harvested on, and later conversations stay on that exit. Proxy changes apply within about 15 seconds. Parallel multi-lane collection still requires the Mihomo kernel.",
         codexTicketProxyMihomoEndpoint: "Kernel local endpoint",
-        codexTicketProxyMihomoSelected: 'Mihomo selected for ticket harvesting. Click "Save Settings" to apply.',
-        codexTicketProxyMihomoHint:
-          "Uses the Mihomo airport subscription running on this server. Run install-mihomo-codex.sh from the release package first; normal account proxies are unchanged.",
+        codexTicketProxyMihomoSelected: 'Mihomo selected. Click "Save harvest exit" to apply.',
         codexClientRestrictionTitle: "Codex client restriction",
         codexHardeningDesc:
           "Only affects OpenAI OAuth accounts with 'Codex official clients only' enabled (global). Beyond User-Agent/Originator, harden the decision with a version range, an engine-fingerprint gate, and black/whitelists.",
@@ -1390,6 +1400,18 @@ export default {
       long_context_badge: {
         label: 'Show long-context billing badge',
         description: 'When enabled, usage records billed under long-context tiered pricing show an x2 badge next to their cost. Enabled by default.',
+      },
+      cache_rate: {
+        label: 'Show usage cache rate',
+        description: 'When enabled, the usage record status column shows the cache rate for that request. Turning it off hides the rate from both admins and users. Enabled by default.',
+      },
+      cache_rate_to_users: {
+        label: 'Show cache rate to users',
+        description: 'When enabled, users can see the per-request cache rate on their own usage page. Off by default, so only admins see it.',
+      },
+      upstream_response_model_to_users: {
+        label: 'Show users the actual upstream response model',
+        description: 'When enabled, users can see the model declared by the upstream response on their usage records. Off by default, so only admins see it. Billing is unchanged, and mapped request models and account details stay hidden.',
       },
       saveSettings: 'Save Settings',
       saving: 'Saving...',
