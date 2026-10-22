@@ -35,9 +35,11 @@ type UpdateSettingsRequest struct {
 	PrismBrowserAPIKey                string                           `json:"prism_browser_api_key"`
 	// 注册设置
 	RegistrationEnabled                 bool                         `json:"registration_enabled"`
-	LoginRateLimitEnabled               *bool                        `json:"login_rate_limit_enabled"` // 省略=保持现值
+	LoginRateLimitEnabled               *bool                        `json:"login_rate_limit_enabled"`      // 省略=保持现值
+	RegistrationIPLimitEnabled          *bool                        `json:"registration_ip_limit_enabled"` // 省略=保持现值
 	EmailVerifyEnabled                  bool                         `json:"email_verify_enabled"`
 	RegistrationEmailSuffixWhitelist    []string                     `json:"registration_email_suffix_whitelist"`
+	RegistrationEmailAliasBlockEnabled  *bool                        `json:"registration_email_alias_block_enabled"`  // 省略时保留现值
 	RegistrationEmailDomainQuotaEnabled *bool                        `json:"registration_email_domain_quota_enabled"` // 非白名单域名限量注册开关（省略=保持现值）
 	PromoCodeEnabled                    bool                         `json:"promo_code_enabled"`
 	PasswordResetEnabled                bool                         `json:"password_reset_enabled"`
@@ -650,9 +652,17 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	if req.LoginRateLimitEnabled != nil {
 		loginRateLimitEnabled = *req.LoginRateLimitEnabled
 	}
+	registrationIPLimitEnabled := previousSettings.RegistrationIPLimitEnabled
+	if req.RegistrationIPLimitEnabled != nil {
+		registrationIPLimitEnabled = *req.RegistrationIPLimitEnabled
+	}
 	passkeyEnabled := previousSettings.PasskeyEnabled
 	if req.PasskeyEnabled != nil {
 		passkeyEnabled = *req.PasskeyEnabled
+	}
+	registrationEmailAliasBlockEnabled := previousSettings.RegistrationEmailAliasBlockEnabled
+	if req.RegistrationEmailAliasBlockEnabled != nil {
+		registrationEmailAliasBlockEnabled = *req.RegistrationEmailAliasBlockEnabled
 	}
 	registrationEmailDomainQuotaEnabled := previousSettings.RegistrationEmailDomainQuotaEnabled
 	if req.RegistrationEmailDomainQuotaEnabled != nil {
@@ -1653,11 +1663,13 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 
 		RegistrationEnabled:                 req.RegistrationEnabled,
 		LoginRateLimitEnabled:               loginRateLimitEnabled,
+		RegistrationIPLimitEnabled:          registrationIPLimitEnabled,
 		PrismBrowserEnabled:                 req.PrismBrowserEnabled,
 		PrismBrowserBaseURL:                 req.PrismBrowserBaseURL,
 		PrismBrowserAPIKey:                  req.PrismBrowserAPIKey,
 		EmailVerifyEnabled:                  req.EmailVerifyEnabled,
 		RegistrationEmailSuffixWhitelist:    req.RegistrationEmailSuffixWhitelist,
+		RegistrationEmailAliasBlockEnabled:  registrationEmailAliasBlockEnabled,
 		RegistrationEmailDomainQuotaEnabled: registrationEmailDomainQuotaEnabled,
 		PromoCodeEnabled:                    req.PromoCodeEnabled,
 		PasswordResetEnabled:                req.PasswordResetEnabled,
@@ -2566,11 +2578,13 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	payload := dto.SystemSettings{
 		RegistrationEnabled:                                    updatedSettings.RegistrationEnabled,
 		LoginRateLimitEnabled:                                  updatedSettings.LoginRateLimitEnabled,
+		RegistrationIPLimitEnabled:                             updatedSettings.RegistrationIPLimitEnabled,
 		PrismBrowserEnabled:                                    updatedSettings.PrismBrowserEnabled,
 		PrismBrowserBaseURL:                                    updatedSettings.PrismBrowserBaseURL,
 		PrismBrowserAPIKeyConfigured:                           updatedSettings.PrismBrowserAPIKeyConfigured,
 		EmailVerifyEnabled:                                     updatedSettings.EmailVerifyEnabled,
 		RegistrationEmailSuffixWhitelist:                       updatedSettings.RegistrationEmailSuffixWhitelist,
+		RegistrationEmailAliasBlockEnabled:                     updatedSettings.RegistrationEmailAliasBlockEnabled,
 		RegistrationEmailDomainQuotaEnabled:                    updatedSettings.RegistrationEmailDomainQuotaEnabled,
 		PromoCodeEnabled:                                       updatedSettings.PromoCodeEnabled,
 		PasswordResetEnabled:                                   updatedSettings.PasswordResetEnabled,

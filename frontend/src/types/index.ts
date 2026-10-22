@@ -1880,6 +1880,7 @@ export interface AdminDataImportResult {
 }
 
 export interface CodexSessionImportRequest {
+  initialize_openai_two_fa?: boolean
   /** Skip matching accounts without replacing their credentials or settings. */
   skip_existing?: boolean
   content?: string
@@ -2701,9 +2702,10 @@ export interface QualityBPSPolicy {
   hold_on_usage: boolean
 }
 export interface QualityPolicy {
+  admission?: import('@/utils/openaiTwoFAAdmission').OpenAITwoFAAdmissionConfig
   judge?: QualityJudgeConfig
   expected_answer: string
-  action: 'isolate_models' | 'remove_groups' | 'remove_models' | 'disable_scheduling' | 'enable_bps' | 'observe_only'
+  action: 'openai_two_fa_admission' | 'isolate_models' | 'remove_groups' | 'remove_models' | 'disable_scheduling' | 'enable_bps' | 'observe_only'
   remove_group_ids: number[]
   remove_models?: string[]
   recovery_concurrency?: number

@@ -22,6 +22,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/mihomo"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/redissession"
 )
 
 const (
@@ -195,6 +196,7 @@ type OpenAIOAuthReauthService struct {
 	accounts                OpenAIOAuthReauthAccountReader
 	credentialUpdater       OpenAIOAuthReauthCredentialUpdater
 	oauth                   *OpenAIOAuthService
+	siwcSessionStore        *redissession.Store
 	encryptor               SecretEncryptor
 	encryptionKeyConfigured bool
 	tokenCacheInvalidator   TokenCacheInvalidator
@@ -894,7 +896,7 @@ func (s *OpenAIOAuthReauthService) ClaimTaskWithEngines(ctx context.Context, wor
 			return nil, nil
 		}
 		if err := s.repo.SetSession(ctx, record.ID, workerID, auth.SessionID); err != nil {
-			s.oauth.sessionStore.Delete(auth.SessionID)
+			s.deleteSIWCSession(ctx, auth.SessionID)
 			_ = s.repo.MarkFailed(ctx, record.ID, workerID, "failed to persist SIWC session")
 			return nil, nil
 		}

@@ -93,6 +93,9 @@ func isOpenAIAccount(account *Account) bool {
 // handleOpenAIAccountUpstreamError expects canonicalModel to be the model used
 // for scheduling after applying account mapping exactly once.
 func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte, canonicalModel ...string) bool {
+	if isOpenAIUpstreamSessionBlocked(responseBody) {
+		return false
+	}
 	// SIWC has independent credentials and limits. Never revoke or relogin the primary Codex grant on its errors.
 	if account.IsSIWCEnabled() {
 		return false

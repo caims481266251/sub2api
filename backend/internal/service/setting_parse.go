@@ -68,8 +68,10 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 	defaults := map[string]string{
 		SettingKeyRegistrationEnabled:                       "true",
 		SettingKeyLoginRateLimitEnabled:                     "true",
+		SettingKeyRegistrationIPLimitEnabled:                "true",
 		SettingKeyEmailVerifyEnabled:                        "false",
 		SettingKeyRegistrationEmailSuffixWhitelist:          "[]",
+		SettingKeyRegistrationEmailAliasBlockEnabled:        "true",
 		SettingKeyRegistrationEmailDomainQuotaEnabled:       "false",
 		SettingKeyPromoCodeEnabled:                          "true", // 默认启用优惠码功能
 		SettingKeyLoginAgreementEnabled:                     "false",
@@ -372,8 +374,10 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	result := &SystemSettings{
 		RegistrationEnabled:                    settings[SettingKeyRegistrationEnabled] == "true",
 		LoginRateLimitEnabled:                  settings[SettingKeyLoginRateLimitEnabled] != "false",
+		RegistrationIPLimitEnabled:             settings[SettingKeyRegistrationIPLimitEnabled] != "false",
 		EmailVerifyEnabled:                     emailVerifyEnabled,
 		RegistrationEmailSuffixWhitelist:       ParseRegistrationEmailSuffixWhitelist(settings[SettingKeyRegistrationEmailSuffixWhitelist]),
+		RegistrationEmailAliasBlockEnabled:     settings[SettingKeyRegistrationEmailAliasBlockEnabled] != "false",
 		RegistrationEmailDomainQuotaEnabled:    settings[SettingKeyRegistrationEmailDomainQuotaEnabled] == "true",
 		PromoCodeEnabled:                       settings[SettingKeyPromoCodeEnabled] != "false", // 默认启用
 		PasswordResetEnabled:                   emailVerifyEnabled && settings[SettingKeyPasswordResetEnabled] == "true",

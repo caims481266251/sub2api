@@ -88,7 +88,7 @@
 
         <UsageFilters v-model="filters" ref="usageFiltersRef" flat :mode="activeTab" class="border-b border-gray-100 dark:border-dark-700/50" :start-date="startDate" :end-date="endDate" :exporting="exporting" :model-options="modelNameOptions" @change="applyFilters" @refresh="refreshData" @reset="resetFilters" @cleanup="openCleanupDialog" @export="exportToExcel">
           <template #after-reset>
-            <div v-if="activeTab !== 'ranking'" class="relative" ref="columnDropdownRef">
+            <div v-if="activeTab === 'usage' || activeTab === 'errors'" class="relative" ref="columnDropdownRef">
               <button
                 data-testid="usage-column-settings"
                 @click="showColumnDropdown = !showColumnDropdown"
@@ -156,6 +156,11 @@
             @update:pageSize="onErrPageSize"
             @ipGeoBatchFailed="handleIpGeoBatchFailed" />
         </div>
+        <UsageConnections
+          v-if="!props.observerMode && activeTab === 'connections'"
+          :filters="connectionFilters"
+          :refresh-key="connectionRefreshKey"
+        />
         <!-- 懒挂载：首次切到该 tab 才请求排行数据，之后随筛选自动刷新 -->
         <div v-if="!props.observerMode && rankingMounted" v-show="activeTab === 'ranking'" class="overflow-hidden rounded-b-2xl">
           <UserTokenRanking
@@ -205,6 +210,7 @@ import { resolveUsageRequestType, requestTypeToLegacyStream } from '@/utils/usag
 import AppLayout from '@/components/layout/AppLayout.vue'; import Pagination from '@/components/common/Pagination.vue'; import Select from '@/components/common/Select.vue'; import DateRangePicker from '@/components/common/DateRangePicker.vue'
 import UsageStatsCards from '@/components/admin/usage/UsageStatsCards.vue'; import UsageFilters from '@/components/admin/usage/UsageFilters.vue'
 import UsageTable from '@/components/admin/usage/UsageTable.vue'; import UsageExportProgress from '@/components/admin/usage/UsageExportProgress.vue'
+import UsageConnections from '@/components/admin/usage/UsageConnections.vue'
 import UserTokenRanking from '@/components/admin/usage/UserTokenRanking.vue'
 import UsageCleanupDialog from '@/components/admin/usage/UsageCleanupDialog.vue'
 import UserBalanceHistoryModal from '@/components/admin/user/UserBalanceHistoryModal.vue'
@@ -547,6 +553,7 @@ const applyFilters = () => {
   }
 }
 const refreshData = () => {
+  connectionRefreshKey.value++
   invalidateModelStatsCache()
   loadLogs()
   loadStats(true)
@@ -800,15 +807,26 @@ const loadSavedColumns = () => {
 }
 
 // Detail tabs
-type DetailTab = 'usage' | 'errors' | 'ranking'
+type DetailTab = 'usage' | 'errors' | 'connections' | 'ranking'
 const activeTab = ref<DetailTab>('usage')
 const canViewErrors = computed(() => !props.observerMode || !!appStore.cachedPublicSettings?.allow_user_view_error_requests)
 const detailTabs = computed(() => [
   { key: 'usage' as const, label: t('usage.tabs.usage'), icon: 'document' as const },
   ...(canViewErrors.value ? [{ key: 'errors' as const, label: t('usage.tabs.errors'), icon: 'exclamationTriangle' as const }] : []),
+  ...(!props.observerMode ? [{ key: 'connections' as const, label: t('connections.title'), icon: 'clock' as const }] : []),
   ...(!props.observerMode ? [{ key: 'ranking' as const, label: t('usage.tabs.ranking'), icon: 'chart' as const }] : []),
 ])
 const usageFiltersRef = ref<InstanceType<typeof UsageFilters> | null>(null)
+const connectionRefreshKey = ref(0)
+const connectionFilters = computed(() => ({
+  start_time: toRFC3339(filters.value.start_date),
+  end_time: toRFC3339(filters.value.end_date, true),
+  user_id: filters.value.user_id ?? undefined,
+  api_key_id: filters.value.api_key_id ?? undefined,
+  account_id: filters.value.account_id ?? undefined,
+  group_id: filters.value.group_id ?? undefined,
+  model: filters.value.model || undefined,
+}))
 const rankingMounted = ref(false)
 const rankingRef = ref<InstanceType<typeof UserTokenRanking> | null>(null)
 

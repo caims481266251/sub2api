@@ -1,5 +1,5 @@
 <template>
-  <details class="card" data-testid="ip-risk-settings" @toggle="onToggle">
+  <details id="ip-risk-settings" class="card" :open="initiallyOpen" data-testid="ip-risk-settings" @toggle="onToggle">
     <summary class="cursor-pointer px-6 py-4 font-semibold">{{ tr('title') }}</summary>
     <div class="space-y-5 border-t border-gray-100 p-6 dark:border-dark-700">
       <p class="text-sm text-gray-500">{{ tr('description') }}</p>
@@ -75,9 +75,35 @@
                 <label class="text-sm">{{ tr('retention') }}<input v-model.number="draft.event_retention_hours" type="number" min="1" max="720" step="1" required class="input mt-1 w-full" /></label>
               </div>
             </section>
+            <section class="space-y-3 border-t pt-4" data-testid="anonymous-settings">
+              <h3 class="font-medium">{{ tr('anonymousTitle') }}</h3>
+              <p class="text-xs text-gray-500">{{ tr('anonymousHint') }}</p>
+              <label class="flex items-center gap-2 text-sm"><input v-model="draft.anonymous_api.enabled" type="checkbox" data-testid="anonymous-enabled" />{{ tr('anonymousEnabled') }}</label>
+              <div class="grid gap-3 sm:grid-cols-2">
+                <label class="text-sm">{{ tr('limit') }}<input v-model.number="draft.anonymous_api.threshold" type="number" min="2" max="1000" required class="input mt-1 w-full" data-testid="anonymous-threshold" /></label>
+                <label class="text-sm">{{ tr('window') }}<input v-model.number="draft.anonymous_api.window_seconds" type="number" min="1" max="3600" required class="input mt-1 w-full" /></label>
+                <label class="text-sm">{{ tr('banDuration') }}<input v-model.number="draft.anonymous_api.ban_seconds" type="number" min="1" max="86400" required class="input mt-1 w-full" /></label>
+                <label class="text-sm">{{ tr('anonymousCapacity') }}<input v-model.number="draft.anonymous_api.max_tracked_ips" type="number" min="100" max="50000" required class="input mt-1 w-full" /></label>
+              </div>
+              <label class="flex items-center gap-2 text-sm"><input v-model="draft.anonymous_api.reset_on_success" type="checkbox" />{{ tr('anonymousReset') }}</label>
+              <p class="text-xs text-gray-500">{{ tr('anonymousFailurePolicy') }}</p>
+            </section>
             <button type="submit" class="btn btn-primary btn-sm" data-testid="risk-save">{{ tr('save') }}</button>
           </fieldset>
         </form>
+        <section class="space-y-3 border-t pt-4" data-testid="anonymous-bans">
+          <div class="flex flex-wrap items-center justify-between gap-2"><h3 class="font-medium">{{ tr('anonymousBans') }}</h3><button type="button" class="btn btn-secondary btn-sm" :disabled="busy" @click="refreshRecords">{{ tr('refreshRecords') }}</button></div>
+          <p class="text-xs text-gray-500">{{ tr('anonymousUnbanHint') }}</p>
+          <div class="flex flex-wrap items-center gap-2">
+            <input v-model="anonymousReleaseIP" class="input" :placeholder="tr('anonymousExactIP')" :aria-label="tr('anonymousExactIP')" data-testid="anonymous-release-ip" />
+            <button type="button" class="btn btn-secondary btn-sm" :disabled="busy || !anonymousReleaseIP.trim()" data-testid="anonymous-release-manual" @click="unbanAnonymous(anonymousReleaseIP.trim())">{{ tr('anonymousUnban') }}</button>
+          </div>
+          <div v-for="ban in anonymousBans" :key="ban.network" class="flex flex-wrap items-center justify-between gap-2 rounded border p-3 text-sm">
+            <span><code>{{ ban.network }}</code> · {{ label(ban.reason) }} · {{ tr('expiresAt') }} {{ date(ban.expires_at) }}</span>
+            <button type="button" class="btn btn-secondary btn-sm" :disabled="busy" data-testid="anonymous-unban" @click="unbanAnonymous(ban.network)">{{ tr('anonymousUnban') }}</button>
+          </div>
+          <p v-if="!anonymousBans.length" class="text-xs text-gray-500">{{ tr('noBans') }}</p>
+        </section>
         <section class="space-y-3 border-t border-gray-100 pt-4 dark:border-dark-700">
           <h3 class="font-medium">{{ tr('checkTitle') }}</h3>
           <p class="text-xs text-gray-500">{{ tr('checkHint') }}</p>
@@ -128,23 +154,26 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, ref, toRaw } from 'vue'
+import { onMounted, onBeforeUnmount, ref, toRaw } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ipRiskAPI, type IPBan, type IPBlockRule, type IPRiskConfig, type IPRiskEvent, type IPRiskSnapshot } from './api'
 
+const initiallyOpen = typeof window !== 'undefined' && window.location.hash === '#ip-risk-settings'
 const { t, te } = useI18n()
 const tr = (key: string) => t(`admin.settings.ipRisk.${key}`)
 const label = (key: string) => key && te(`admin.settings.ipRisk.labels.${key}`) ? tr(`labels.${key}`) : key || '—'
 const snapshot = ref<IPRiskSnapshot | null>(null), draft = ref<IPRiskConfig | null>(null)
 const busy = ref(false), error = ref(''), notice = ref(''), confirmClear = ref(false)
 const whitelist = ref(''), countries = ref(''), allowedCountries = ref(''), userAgents = ref('')
-const events = ref<IPRiskEvent[]>([]), bans = ref<IPBan[]>([])
+const events = ref<IPRiskEvent[]>([]), bans = ref<IPBan[]>([]), anonymousBans = ref<IPBan[]>([])
 const filterIP = ref(''), filterReason = ref(''), filterCategory = ref(''), checkIP = ref(''), checkUA = ref(''), checkAuth = ref(true)
 const checkResult = ref<IPRiskEvent | null>(null)
+const anonymousReleaseIP = ref('')
 const counterKeys = ['login_attempts', 'login_failures', 'register_attempts', 'register_failures', 'verification_attempts'] as const
 const reasons = [...counterKeys, 'ip_blacklist', 'country_blocked', 'country_not_allowed', 'country_unknown', 'user_agent_blocked', 'empty_user_agent', 'invalid_client_ip', 'risk_store_unavailable']
 let disposed = false
 onBeforeUnmount(() => { disposed = true })
+onMounted(() => { if (initiallyOpen) void load() })
 const lines = (value: string) => [...new Set(value.split(/[\n,]+/).map(v => v.trim()).filter(Boolean))]
 const date = (seconds: number) => new Date(seconds * 1000).toLocaleString()
 function localDate(seconds: number) {
@@ -171,10 +200,11 @@ function applyConfig(config: IPRiskConfig) {
   whitelist.value = config.whitelist.join('\n'); countries.value = config.blocked_countries.join(', '); allowedCountries.value = (config.allowed_countries || []).join(', '); userAgents.value = config.deny_user_agents.join('\n')
 }
 async function records() {
-  const result = await Promise.allSettled([ipRiskAPI.events(filterIP.value.trim(), filterReason.value, filterCategory.value), ipRiskAPI.bans()])
+  const result = await Promise.allSettled([ipRiskAPI.events(filterIP.value.trim(), filterReason.value, filterCategory.value), ipRiskAPI.bans(), ipRiskAPI.anonymousBans()])
   if (disposed) return
   if (result[0].status === 'fulfilled') events.value = result[0].value
   if (result[1].status === 'fulfilled') bans.value = result[1].value
+  if (result[2].status === 'fulfilled') anonymousBans.value = result[2].value
   const failed = result.find(item => item.status === 'rejected')
   if (failed?.status === 'rejected') throw failed.reason
 }
@@ -203,6 +233,7 @@ async function save() {
 }
 async function refreshRecords() { await action(records) }
 async function unban(network: string) { await action(async () => { await ipRiskAPI.unban(network); await records(); if (!disposed) notice.value = tr('unbanned') }) }
+async function unbanAnonymous(network: string) { await action(async () => { await ipRiskAPI.unbanAnonymous(network); await records(); if (!disposed) notice.value = tr('unbanned') }) }
 async function clearEvents() { await action(async () => { await ipRiskAPI.clearEvents(); if (!disposed) { events.value = []; confirmClear.value = false; notice.value = tr('cleared') } }) }
 async function check() { await action(async () => { const result = await ipRiskAPI.check(checkIP.value.trim(), checkUA.value, checkAuth.value); if (!disposed) checkResult.value = result }) }
 </script>

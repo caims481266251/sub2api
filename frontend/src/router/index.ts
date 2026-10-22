@@ -719,6 +719,12 @@ const routes: RouteRecordRaw[] = [
     meta: { requiresAuth: true, title: 'Security records', titleKey: 'securityRecords.title' }
   },
   {
+    path: '/admin/ip-audit',
+    name: 'AdminIPAudit',
+    component: () => import('@/features/ip-audit/IPAuditView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true, titleKey: 'ipAudit.title' }
+  },
+  {
     path: '/admin/prompt-audit',
     name: 'AdminPromptAudit',
     component: () => import('@/features/prompt-audit/PromptAuditView.vue'),

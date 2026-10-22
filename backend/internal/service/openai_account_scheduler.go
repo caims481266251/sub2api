@@ -80,7 +80,9 @@ type OpenAIAccountScheduleRequest struct {
 	PreserveStickyBinding   bool
 	// DisableStickyEscape keeps task-owner lookups on their account even when
 	// generic sticky health or concurrency heuristics would prefer another.
-	DisableStickyEscape     bool
+	DisableStickyEscape bool
+	// EncryptedReasoning suppresses quality-only escapes, not hard/capacity gates.
+	EncryptedReasoning      bool
 	RequirePrivacySet       bool
 	PreviousResponseID      string
 	PreviousResponseCanMove bool
@@ -631,7 +633,7 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 		slog.Info("sticky_escape_triggered", "account_id", accountID, "reason", "priority_capacity_imbalance")
 		return nil, true, nil
 	}
-	if reason, errorRate, ttft, shouldEscape := s.shouldEscapeStickyAccount(accountID, escapeCfg); shouldEscape && !req.DisableStickyEscape {
+	if reason, errorRate, ttft, shouldEscape := s.shouldEscapeStickyAccount(accountID, escapeCfg); shouldEscape && !req.DisableStickyEscape && !req.EncryptedReasoning {
 		slog.Info("sticky_escape_triggered",
 			"account_id", accountID,
 			"reason", reason,
@@ -728,22 +730,24 @@ func (s *defaultOpenAIAccountScheduler) shouldEscapeStickyAccountAt(accountID in
 }
 
 type openAIAccountCandidateScore struct {
-	priorityOAuthSpare    int
-	priorityAPIStandby    bool
-	priorityLatencyFactor float64
-	priorityUnhealthy     bool
-	priorityExploration   bool
-	account               *Account
-	loadInfo              *AccountLoadInfo
-	loadKnown             bool
-	score                 float64
-	priority              int
-	errorRate             float64
-	ttft                  float64
-	hasTTFT               bool
-	rpmCurrent            int
-	rpmLimit              int
-	rpmEnabled            bool
+	priorityOAuthSpare                 int
+	priorityAPIStandby                 bool
+	priorityLatencyFactor              float64
+	priorityUnhealthy                  bool
+	priorityLatencyRecovery            bool
+	priorityRecoveryExplorationPercent int
+	priorityExploration                bool
+	account                            *Account
+	loadInfo                           *AccountLoadInfo
+	loadKnown                          bool
+	score                              float64
+	priority                           int
+	errorRate                          float64
+	ttft                               float64
+	hasTTFT                            bool
+	rpmCurrent                         int
+	rpmLimit                           int
+	rpmEnabled                         bool
 }
 
 type openAIAccountCandidateHeap []openAIAccountCandidateScore
@@ -2797,6 +2801,7 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerOnce(
 		Platform:                platform,
 		SessionHash:             sessionHash,
 		StickyAccountID:         stickyAccountID,
+		EncryptedReasoning:      platform == PlatformOpenAI && ctx.Value(openAIEncryptedReasoningAffinityKey{}) == true,
 		GuardianParentAccountID: guardianParentAccountID,
 		StickyPreviousAccountID: stickyPreviousAccountID,
 		StickyWeighted:          stickyWeighted,

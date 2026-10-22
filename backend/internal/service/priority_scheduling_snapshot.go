@@ -67,7 +67,7 @@ func (s *OpenAIGatewayService) PrioritySchedulingSnapshot() *PrioritySchedulingS
 		id := *input.request.GroupID
 		group = &id
 	}
-	snapshot := &PrioritySchedulingSnapshot{At: input.at, EvaluatedAt: now, Model: input.request.RequestedModel, GroupID: group, Mode: input.config.Mode, SelectionPolicy: "capacity_first", HistoryReady: h.ready(), HistoryStatus: h.status, HistoryObservedAt: h.observed, HistoryError: h.failure, HistoryRefreshing: h.refreshing, Candidates: make([]PrioritySchedulingScore, 0, len(input.candidates))}
+	snapshot := &PrioritySchedulingSnapshot{LatencyPercentile: input.config.LatencyPercentile, LatencyMeasurement: input.config.LatencyMeasurement, MinSamples: input.config.MinSamples, WindowMinutes: input.config.WindowMinutes, ConfigRevision: priorityConfigRevision(input.config), At: input.at, EvaluatedAt: now, Model: input.request.RequestedModel, GroupID: group, Mode: input.config.Mode, SelectionPolicy: "capacity_first", HistoryReady: h.ready(), HistoryStatus: h.status, HistoryObservedAt: h.observed, HistoryWindowEnd: h.windowEnd, HistoryError: h.failure, HistoryRefreshing: h.refreshing, Candidates: make([]PrioritySchedulingScore, 0, len(input.candidates))}
 	if input.config.OAuthQuotaPriority {
 		snapshot.SelectionPolicy = "oauth_quota_priority"
 	}

@@ -74,6 +74,9 @@ func BorrowRecovery(ctx context.Context, state BorrowRecoverySnapshot) {
 type Snapshot struct {
 	SessionAffinity   *SessionAffinitySnapshot `json:"session_affinity,omitempty"`
 	BorrowRecovery    *BorrowRecoverySnapshot  `json:"borrow_recovery,omitempty"`
+	IdentitySource    string                   `json:"identity_source,omitempty"`
+	AuthRejection     string                   `json:"auth_rejection,omitempty"`
+	Routes            []RouteObservation       `json:"routes,omitempty"`
 	Outcome           string                   `json:"outcome,omitempty"`
 	ClientDisconnect  bool                     `json:"client_disconnect"`
 	Version           int                      `json:"version"`
@@ -92,10 +95,10 @@ type Snapshot struct {
 	DownstreamError   bool                     `json:"downstream_error"`
 	TTFTMode          string                   `json:"ttft_mode,omitempty"`
 	Terminal          string                   `json:"terminal,omitempty"`
+	TerminalFlushed   string                   `json:"terminal_flushed,omitempty"`
 	Events            map[string]float64       `json:"events"`
 	Spans             []Span                   `json:"spans"`
 	Attempts          []Attempt                `json:"attempts"`
-	Routes            []RouteObservation       `json:"routes,omitempty"`
 }
 type Collector struct {
 	mu        sync.Mutex

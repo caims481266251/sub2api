@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent } from 'vue'
+import { createRouter, createMemoryHistory, type Router } from 'vue-router'
 import { flushPromises, mount } from '@vue/test-utils'
 import type { PromptAuditConfig, PromptAuditRuntime } from '../types'
 import { SCANNER_CATALOG } from '../viewModel'
@@ -52,9 +53,9 @@ const FilterDeleteStub = defineComponent({
   template: '<div v-if="show" data-test="filter-delete-dialog"><button data-test="dialog-preview" @click="$emit(\'preview\', { ...initialFilters, start_at: \'2026-07-15T00:00\', end_at: \'2026-07-16T00:00\' })">run</button><button data-test="dialog-confirm" @click="$emit(\'confirm\', { ...initialFilters, start_at: \'2026-07-15T00:00\', end_at: \'2026-07-16T00:00\' })">confirm</button><span data-test="dialog-preview-state">{{ preview ? preview.matched_count : \'none\' }}</span></div>',
 })
 
-function mountView() {
+function mountView(router?: Router) {
   return mount(PromptAuditView, {
-    global: { stubs: { AppLayout: AppLayoutStub, RuntimeOverview: RuntimeStub, EndpointPool: EndpointStub, PolicyPanel: PolicyStub, PenaltyPolicyPanel: true, EventWorkspace: EventsStub, EventDetailDialog: DetailStub, FilterDeleteDialog: FilterDeleteStub, ConfirmDialog: ConfirmStub } },
+    global: { plugins: router ? [router] : [], stubs: { IPAuditPanel: { template: '<div data-testid="ip-audit-panel" />' }, AppLayout: AppLayoutStub, RuntimeOverview: RuntimeStub, EndpointPool: EndpointStub, PolicyPanel: PolicyStub, PenaltyPolicyPanel: true, EventWorkspace: EventsStub, EventDetailDialog: DetailStub, FilterDeleteDialog: FilterDeleteStub, ConfirmDialog: ConfirmStub } },
   })
 }
 
@@ -71,6 +72,27 @@ describe('PromptAuditView', () => {
     mocks.deleteEventsByFilter.mockResolvedValue({ deleted_events: 2, deleted_jobs: 2 })
     mocks.deleteEvent.mockResolvedValue({ deleted_events: 1, deleted_jobs: 1 })
     mocks.batchDeleteEvents.mockResolvedValue({ deleted_events: 2, deleted_jobs: 2 })
+  })
+
+  it('opens the IP tab from a guarded page query and keeps it available after prompt config failure', async () => {
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/admin/prompt-audit', component: PromptAuditView }] })
+    await router.push('/admin/prompt-audit?tab=ip'); await router.isReady()
+    mocks.getConfig.mockRejectedValue(new Error('prompt configuration offline'))
+    const wrapper = mountView(router);await flushPromises()
+    expect(wrapper.get('[data-test="tab-ip"]').attributes('aria-selected')).toBe('true')
+    expect(wrapper.find('[data-testid="ip-audit-panel"]').exists()).toBe(true)
+    await wrapper.get('[data-test="tab-events"]').trigger('click');await flushPromises()
+    expect(router.currentRoute.value.query.tab).toBe('events')
+    wrapper.unmount()
+  })
+
+  it('opens IP audit from the existing secondary tabs without sharing prompt configuration', async () => {
+    const wrapper = mountView(); await flushPromises()
+    await wrapper.get('[data-test="tab-ip"]').trigger('click'); await flushPromises()
+    expect(wrapper.get('[data-test="tab-ip"]').attributes('aria-selected')).toBe('true')
+    expect(wrapper.find('[data-testid="ip-audit-panel"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="save-config"]').exists()).toBe(false)
+    wrapper.unmount()
   })
 
   it('starts config, runtime, groups, and events loads independently', async () => {

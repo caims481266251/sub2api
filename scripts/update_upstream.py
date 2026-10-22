@@ -66,8 +66,11 @@ def verify(s):
             run('go', 'test', '-tags=unit', './internal/service', './internal/repository',
                 './internal/handler/...', './internal/server/...', './internal/pkg/requesttiming',
                 './internal/config', './migrations',
-                '-run', 'Borrow|Hosting|Hosted|SessionAffinity|Seamless|Astra|APIKey|Admission|Config|Migration',
+                '-run', 'Borrow|Hosting|Hosted|SessionAffinity|Seamless|Astra|APIKey|Admission|Config|Migration|RequestTiming|Keepalive|HeaderWait|Failover|Lineage|Directory|ConnectionTrace|Schedulable|IPRisk|SecurityPenalty|Anonymous|Encrypted|Issue494|Audit|APIContract',
                 '-timeout', '180s', cwd=backend, env=env)
+            run('go', 'test', './internal/pkg/requesttiming', cwd=backend, env=env)
+            run('go', 'test', '-race', '-tags=unit', './internal/service',
+                '-run', 'OpenAIHeaderWait|OpenAIUploadKeepalive', '-timeout', '180s', cwd=backend, env=env)
             run('go', 'build', '-o', str(Path(tmp, 'sub2api')), './cmd/server', cwd=backend, env=env)
             frontend = path / 'frontend'
             pnpm = ['corepack', 'pnpm@9.15.9']
@@ -78,6 +81,10 @@ def verify(s):
                 'src/components/admin/usage/__tests__/UsageTable.spec.ts',
                 'src/components/admin/usage/__tests__/UsageTimingDialog.spec.ts',
                 'src/components/admin/__tests__/HarvestGatewayBorrowPanel.spec.ts',
+                'src/views/admin/__tests__/AccountsView.',
+                'src/components/account/__tests__/SchedulableTimerControl.spec.ts',
+                'src/components/admin/usage/__tests__/UsageConnections.spec.ts',
+                'src/features/ip-risk/__tests__/IPRiskSettings.spec.ts',
                 cwd=frontend, env=env)
             run(*pnpm, 'exec', 'vite', 'build', '--outDir', str(Path(tmp, 'frontend')), cwd=frontend, env=env)
         finally:

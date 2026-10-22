@@ -30,7 +30,7 @@ func (s *openaiOAuthService) SIWCToken(ctx context.Context, form url.Values, pro
 	if token.TokenType != "" && !strings.EqualFold(token.TokenType, "Bearer") {
 		return nil, nil, errors.New("SIWC token type is unsupported")
 	}
-	if token.AccessToken == "" || token.ExpiresIn <= 0 || (token.Scope != "" && !openai.HasSIWCPermission(token.Scope)) || (form.Get("grant_type") == "authorization_code" && !openai.HasSIWCPermission(token.Scope)) {
+	if token.AccessToken == "" || token.ExpiresIn <= 0 || !siwcScopeAllowsDirectUse(token.Scope, form.Get("grant_type")) {
 		return nil, nil, errors.New("SIWC grant does not permit ChatGPT plan usage")
 	}
 	var identity *openai.SIWCIdentity
@@ -43,4 +43,13 @@ func (s *openaiOAuthService) SIWCToken(ctx context.Context, form url.Values, pro
 		return nil, nil, errors.New("SIWC identity token is missing")
 	}
 	return &token, identity, nil
+}
+
+// Authorization must explicitly grant plan usage. Refresh may omit scope to
+// retain the previous grant, but any returned scope must still allow direct use.
+func siwcScopeAllowsDirectUse(scope, grantType string) bool {
+	if scope == "" {
+		return grantType == "refresh_token"
+	}
+	return openai.HasSIWCPermission(scope)
 }

@@ -2,6 +2,8 @@ package admin
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"strings"
 	"time"
@@ -63,7 +65,7 @@ func (h *SettingHandler) SaveIPRisk(c *gin.Context) {
 		return
 	}
 	middleware.SetAuditAction(c, "admin.ip_risk.config.update")
-	middleware.SetAuditExtra(c, map[string]any{"enabled": cfg.Enabled, "blocking_enabled": !cfg.ObserveOnly})
+	middleware.SetAuditExtra(c, map[string]any{"enabled": cfg.Enabled, "blocking_enabled": !cfg.ObserveOnly, "anonymous_api_enabled": cfg.AnonymousAPI.Enabled})
 	response.Success(c, cfg)
 }
 
@@ -175,4 +177,52 @@ func (h *SettingHandler) CheckIPRisk(c *gin.Context) {
 	}
 	middleware.SetAuditAction(c, "admin.ip_risk.check")
 	response.Success(c, result)
+}
+
+// GetAnonymousAPIBans is separate from global/login IP bans: these bans apply
+// only after credentials are proven invalid and never imply a permanent deny.
+func (h *SettingHandler) GetAnonymousAPIBans(c *gin.Context) {
+	m := h.ipRiskManager(c)
+	if m == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+	defer cancel()
+	items, err := m.AnonymousBans(ctx)
+	if err != nil {
+		response.Error(c, 503, "Anonymous API bans unavailable")
+		return
+	}
+	response.Success(c, gin.H{"items": items})
+}
+
+func (h *SettingHandler) UnbanAnonymousAPI(c *gin.Context) {
+	m := h.ipRiskManager(c)
+	if m == nil {
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 4096)
+	var req struct {
+		Network string `json:"network"`
+	}
+	if c.ShouldBindJSON(&req) != nil {
+		response.BadRequest(c, "Invalid network")
+		return
+	}
+	prefix, err := iprisk.ParseNetwork(req.Network)
+	if err != nil || prefix.Bits() != prefix.Addr().BitLen() {
+		response.BadRequest(c, "An exact IP address is required")
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+	defer cancel()
+	if err := m.UnbanAnonymous(ctx, prefix.String()); err != nil {
+		response.Error(c, 503, "Could not remove anonymous API ban")
+		return
+	}
+	middleware.SetAuditAction(c, "admin.ip_risk.anonymous.unban")
+	// Keep only a target digest in audit extras, never raw credentials/body.
+	digest := sha256.Sum256([]byte(prefix.String()))
+	middleware.SetAuditExtra(c, map[string]any{"filter_hash": hex.EncodeToString(digest[:8])})
+	response.Success(c, gin.H{"unbanned": true})
 }

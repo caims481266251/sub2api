@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 )
 
@@ -121,5 +123,39 @@ func TestRequestTimingHTTPGatewayCoverage(t *testing.T) {
 				t.Fatalf("response or timing changed: status=%d body=%q captured=%v", response.Code, response.Body.String(), captured)
 			}
 		})
+	}
+}
+
+type timingFlushErrorRecorder struct {
+	*httptest.ResponseRecorder
+	err error
+}
+
+func (w *timingFlushErrorRecorder) FlushError() error { return w.err }
+
+func TestRequestTimingRecordsTransportFlushFailureThroughAdmissionGuard(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(RequestTiming(), ServerTiming(true))
+	var snapshot requesttiming.Snapshot
+	want := errors.New("transport flush failed")
+	r.POST("/v1/responses", func(c *gin.Context) {
+		requesttiming.From(c.Request.Context()).WhenFinished(func(s requesttiming.Snapshot) { snapshot = s })
+		c.Writer = &apiKeyAdmissionWriter{ResponseWriter: c.Writer, ctx: c.Request.Context()}
+		_, err := c.Writer.WriteString("data: test\n\n")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := service.FlushGatewayResponse(c.Writer); !errors.Is(err, want) {
+			t.Fatalf("flush error = %v, want %v", err, want)
+		}
+	})
+	recorder := &timingFlushErrorRecorder{ResponseRecorder: httptest.NewRecorder(), err: want}
+	r.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/responses", nil))
+	if !snapshot.DownstreamError {
+		t.Fatal("flush failure must be visible in request timing")
+	}
+	if _, ok := snapshot.Events["first_flush"]; ok {
+		t.Fatal("failed flush recorded as successful")
 	}
 }

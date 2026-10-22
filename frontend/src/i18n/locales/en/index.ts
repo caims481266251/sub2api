@@ -1,5 +1,7 @@
 import ticketBorrowing from './ticketBorrowing'
 import proxyPool from './proxyPool'
+import ipAudit from './ipAudit'
+import connections from './connections'
 import securityRecords from './securityRecords'
 import siwc from './siwc'
 import priorityScheduling from './priorityScheduling'
@@ -30,6 +32,8 @@ export default {
   hosting,
   ticketBorrowing,
   proxyPool,
+  ipAudit,
+  connections,
   securityRecords,
   siwc,
   autoConfig,

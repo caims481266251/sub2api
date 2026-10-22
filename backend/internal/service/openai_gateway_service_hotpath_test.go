@@ -678,7 +678,7 @@ func TestOpenAIGatewayService_Forward_HTTPThinkingSignatureRecoveryAndLineage(t 
 		return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}
 	}
 	upstream := &httpUpstreamRecorder{responses: []*http.Response{
-		response(http.StatusBadRequest, `{"error":{"code":"thinking_signature_invalid","message":"The encrypted content abc could not be verified. Reason: Encrypted content could not be decrypted or parsed."}}`),
+		response(http.StatusBadRequest, `{"error":{"code":"thinking_signature_invalid","message":"The encrypted content stal...etic could not be verified. Reason: Encrypted content could not be decrypted or parsed."}}`),
 		response(http.StatusOK, `{"id":"resp_recovered","usage":{"input_tokens":1,"output_tokens":2}}`),
 		response(http.StatusOK, `{"id":"resp_next","usage":{"input_tokens":1,"output_tokens":2}}`),
 	}}
@@ -694,12 +694,12 @@ func TestOpenAIGatewayService_Forward_HTTPThinkingSignatureRecoveryAndLineage(t 
 		SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
 		return c
 	}
-	input := `{"model":"gpt-5","stream":false,"prompt_cache_key":"issue-7700","tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}],"input":[{"type":"reasoning","encrypted_content":"stale","summary":[{"type":"summary_text","text":"keep"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]},{"type":"function_call_output","call_id":"call_1","output":"result"}]}`
+	input := `{"model":"gpt-5","stream":false,"prompt_cache_key":"issue-7700","tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}],"input":[{"type":"reasoning","encrypted_content":"stale-synthetic","summary":[{"type":"summary_text","text":"keep"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]},{"type":"function_call_output","call_id":"call_1","output":"result"}]}`
 	first, err := svc.Forward(context.Background(), newContext(), account, []byte(input))
 	require.NoError(t, err)
 	require.NotNil(t, first)
 	require.Len(t, upstream.bodies, 2)
-	require.Equal(t, "stale", gjson.GetBytes(upstream.bodies[0], "input.0.encrypted_content").String())
+	require.Equal(t, "stale-synthetic", gjson.GetBytes(upstream.bodies[0], "input.0.encrypted_content").String())
 	require.False(t, gjson.GetBytes(upstream.bodies[1], "input.0.encrypted_content").Exists())
 	require.Equal(t, "keep", gjson.GetBytes(upstream.bodies[1], "input.0.summary.0.text").String())
 	require.Equal(t, "hello", gjson.GetBytes(upstream.bodies[1], "input.1.content.0.text").String())

@@ -417,7 +417,8 @@
               </div>
               <div>
                 <label class="input-label">{{ t('admin.riskControl.baseUrl') }}</label>
-                <input v-model.trim="configForm.base_url" data-test="audit-base-url" type="url" class="input" :placeholder="configForm.engine === 'typesafe' ? 'https://api.typesafe.ai' : 'https://api.openai.com'" />
+                <input ref="baseUrlInput" v-model.trim="configForm.base_url" data-test="audit-base-url" type="url" class="input" :placeholder="configForm.engine === 'typesafe' ? 'https://api.typesafe.ai' : 'https://api.openai.com'" />
+                <p v-if="configForm.engine === 'typesafe'" data-test="audit-base-url-hint" class="input-hint">{{ t('admin.riskControl.typeSafeBaseUrlHint') }}</p>
               </div>
               <div>
                 <label class="input-label">{{ t('admin.riskControl.model') }}</label>
@@ -607,6 +608,15 @@
                     <div class="min-w-0">
                       <p class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('admin.riskControl.apiKeyHealth') }}</p>
                       <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.apiKeyFreezeRule') }}</p>
+                      <button
+                        v-if="configForm.engine === 'typesafe'"
+                        data-test="audit-edit-base-url"
+                        type="button"
+                        class="mt-2 text-xs font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300"
+                        @click="baseUrlInput?.focus()"
+                      >
+                        {{ t('admin.riskControl.editBaseUrl') }}
+                      </button>
                     </div>
                     <span class="inline-flex shrink-0 items-center whitespace-nowrap rounded-full bg-white px-2 py-0.5 text-[11px] font-medium leading-5 text-gray-600 shadow-sm dark:bg-dark-800 dark:text-gray-300">
                       {{ t('admin.riskControl.apiKeyRows', { count: apiKeyRows.length }) }}
@@ -1237,6 +1247,7 @@ const apiKeyTesting = ref(false)
 const hashActionLoading = ref(false)
 const unbanningUserID = ref<number | null>(null)
 const settingsOpen = ref(false)
+const baseUrlInput = ref<HTMLInputElement | null>(null)
 const activeSettingsTab = ref<SettingsTab>('basic')
 const groupSearch = ref('')
 const flaggedHashInput = ref('')

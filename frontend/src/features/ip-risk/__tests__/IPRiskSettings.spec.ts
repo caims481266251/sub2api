@@ -6,13 +6,14 @@ import { ipRiskAPI, type IPRiskSnapshot } from '../api'
 import zh from '@/i18n/locales/zh/admin/ipRisk'
 import en from '@/i18n/locales/en/admin/ipRisk'
 
-vi.mock('../api', () => ({ ipRiskAPI: { get: vi.fn(), save: vi.fn(), events: vi.fn(), bans: vi.fn(), unban: vi.fn(), clearEvents: vi.fn(), check: vi.fn() } }))
+vi.mock('../api', () => ({ ipRiskAPI: { get: vi.fn(), anonymousBans: vi.fn(), unbanAnonymous: vi.fn(), save: vi.fn(), events: vi.fn(), bans: vi.fn(), unban: vi.fn(), clearEvents: vi.fn(), check: vi.fn() } }))
 
 function snapshot(): IPRiskSnapshot {
   return {
     current_ip: '203.0.113.10', trusted_proxies_configured: false,
     health: { redis_available: true, emergency_disabled: false, config_error: '' },
     config: {
+      anonymous_api: { enabled: false, threshold: 30, window_seconds: 60, ban_seconds: 300, max_tracked_ips: 10000, reset_on_success: false },
       enabled: false, observe_only: true, whitelist: [], blacklist: [], allowed_countries: [], blocked_countries: [],
       block_unknown_country: false, deny_user_agents: ['python-requests'], block_empty_ua: false,
       ipv6_prefix: 64, ban_seconds: 3600, event_retention_hours: 168,
@@ -42,9 +43,41 @@ beforeEach(() => {
   vi.mocked(ipRiskAPI.save).mockImplementation(async config => structuredClone(config))
   vi.mocked(ipRiskAPI.events).mockResolvedValue([])
   vi.mocked(ipRiskAPI.bans).mockResolvedValue([])
+  vi.mocked(ipRiskAPI.anonymousBans).mockResolvedValue([])
 })
 
 describe('IP risk settings', () => {
+  it('edits anonymous protection independently and releases only its temporary ban', async () => {
+    vi.mocked(ipRiskAPI.anonymousBans).mockResolvedValue([{ network: '8.8.8.8/32', reason: 'anonymous_api_unknown', created_at: 1, expires_at: 2, observe_only: false }])
+    const wrapper = await opened()
+    await wrapper.get('[data-testid="anonymous-unban"]').trigger('click'); await flushPromises()
+    expect(ipRiskAPI.unbanAnonymous).toHaveBeenCalledWith('8.8.8.8/32')
+    expect(ipRiskAPI.unban).not.toHaveBeenCalled()
+    await wrapper.get('[data-testid="anonymous-release-ip"]').setValue(' 1.1.1.1 ')
+    await wrapper.get('[data-testid="anonymous-release-manual"]').trigger('click'); await flushPromises()
+    expect(ipRiskAPI.unbanAnonymous).toHaveBeenLastCalledWith('1.1.1.1')
+    expect((wrapper.get('[data-testid="anonymous-enabled"]').element as HTMLInputElement).checked).toBe(false)
+    await wrapper.get('[data-testid="anonymous-enabled"]').setValue(true)
+    await wrapper.get('[data-testid="anonymous-threshold"]').setValue('40')
+    await wrapper.get('form').trigger('submit'); await flushPromises()
+    const payload = vi.mocked(ipRiskAPI.save).mock.calls[0]![0]
+    expect(payload.enabled).toBe(false)
+    expect(payload.anonymous_api.enabled).toBe(true)
+    expect(payload.anonymous_api.threshold).toBe(40)
+    wrapper.unmount()
+  })
+
+  it('opens the existing settings component from the security deep link', async () => {
+    const original = window.location.href
+    window.history.replaceState({}, '', '/admin/settings?tab=security#ip-risk-settings')
+    try {
+      const wrapper = create();await flushPromises()
+      expect((wrapper.get('details').element as HTMLDetailsElement).open).toBe(true)
+      expect(ipRiskAPI.get).toHaveBeenCalledOnce()
+      wrapper.unmount()
+    } finally { window.history.replaceState({}, '', original) }
+  })
+
   it('loads only when opened and preserves safe initial defaults', async () => {
     const wrapper = create(); await flushPromises()
     expect(ipRiskAPI.get).not.toHaveBeenCalled()

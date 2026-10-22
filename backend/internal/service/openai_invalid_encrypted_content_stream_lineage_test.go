@@ -88,13 +88,13 @@ func TestOpenAIGatewayService_Forward_HTTPStreamInvalidEncryptedContentStripsOnN
 		{
 			name: "bare error event",
 			rejection: "data: {\"type\":\"error\",\"error\":{\"code\":\"invalid_encrypted_content\",\"type\":\"invalid_request_error\"," +
-				"\"message\":\"The encrypted content gAAA...gn could not be verified. Reason: Encrypted content could not be decrypted or parsed.\"},\"status\":400}\n\n",
+				"\"message\":\"The encrypted content gAAA...eign could not be verified. Reason: Encrypted content could not be decrypted or parsed.\"},\"status\":400}\n\n",
 			expectStrip: true,
 		},
 		{
 			name: "response.failed nested error",
 			rejection: "data: {\"type\":\"response.failed\",\"response\":{\"id\":\"resp_stream_lineage\",\"status\":\"failed\"," +
-				"\"error\":{\"code\":\"invalid_encrypted_content\",\"message\":\"The encrypted content gAAA...gn could not be verified.\"}}}\n\n",
+				"\"error\":{\"code\":\"invalid_encrypted_content\",\"message\":\"The encrypted content gAAA...eign could not be verified. Reason: Encrypted content could not be decrypted or parsed.\"}}}\n\n",
 			expectStrip: true,
 		},
 		{
@@ -141,7 +141,7 @@ func TestOpenAIGatewayService_Forward_HTTPStreamInvalidEncryptedContentScopedToS
 	gin.SetMode(gin.TestMode)
 
 	rejection := "data: {\"type\":\"error\",\"error\":{\"code\":\"invalid_encrypted_content\",\"type\":\"invalid_request_error\"," +
-		"\"message\":\"The encrypted content gAAA...gn could not be verified.\"},\"status\":400}\n\n"
+		"\"message\":\"The encrypted content gAAA...eign could not be verified. Reason: Encrypted content could not be decrypted or parsed.\"},\"status\":400}\n\n"
 	upstream := &httpUpstreamSequenceRecorder{
 		responses: []*http.Response{
 			newStreamLineageSSEResponse(streamLineageCreatedEvent, streamLineageDeltaEvent, rejection),
@@ -190,7 +190,7 @@ func TestOpenAIGatewayService_Forward_WSSSEAccelerationInvalidEncryptedContentSt
 
 	rejectedConn := &openAIWSCaptureConn{events: [][]byte{
 		[]byte(`{"type":"response.created","response":{"id":"resp_accel_rejected","model":"gpt-5.1"}}`),
-		[]byte(`{"type":"error","error":{"code":"invalid_encrypted_content","type":"invalid_request_error","message":"The encrypted content gAAA...gn could not be verified. Reason: Encrypted content could not be decrypted or parsed."}}`),
+		[]byte(`{"type":"error","error":{"code":"invalid_encrypted_content","type":"invalid_request_error","message":"The encrypted content gAAA...eign could not be verified. Reason: Encrypted content could not be decrypted or parsed."}}`),
 	}}
 	recoveredConn := &openAIWSCaptureConn{events: [][]byte{
 		[]byte(`{"type":"response.created","response":{"id":"resp_accel_ok","model":"gpt-5.1"}}`),
@@ -285,7 +285,7 @@ func TestOpenAIGatewayService_Forward_WSv2InvalidEncryptedContentAfterOutputStri
 				"error": map[string]any{
 					"code":    "invalid_encrypted_content",
 					"type":    "invalid_request_error",
-					"message": "The encrypted content gAAA...gn could not be verified. Reason: Encrypted content could not be decrypted or parsed.",
+					"message": "The encrypted content gAAA...eign could not be verified. Reason: Encrypted content could not be decrypted or parsed.",
 				},
 			})
 			return
@@ -400,4 +400,66 @@ func TestHTTPStreamInvalidEncryptedContentPreservesOpaqueAndAmbiguousHistory(t *
 			require.True(t, gjson.GetBytes(upstream.bodies[1], "input.0.encrypted_content").Exists())
 		})
 	}
+}
+
+func TestIssue494WSAccelerationLocatorNextTurn(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rejectedConn := &openAIWSCaptureConn{events: [][]byte{
+		[]byte(`{"type":"response.created","response":{"id":"resp_accel_rejected","model":"gpt-5.1"}}`),
+		[]byte(`{"type":"error","error":{"code":"invalid_encrypted_content","type":"invalid_request_error","message":"The encrypted content AAAA...ZZZ1 could not be verified. Reason: Encrypted content could not be decrypted or parsed."}}`),
+	}}
+	recoveredConn := &openAIWSCaptureConn{events: [][]byte{
+		[]byte(`{"type":"response.created","response":{"id":"resp_accel_ok","model":"gpt-5.1"}}`),
+		[]byte(`{"type":"response.output_text.delta","delta":"hello"}`),
+		[]byte(`{"type":"response.completed","response":{"id":"resp_accel_ok","model":"gpt-5.1","usage":{"input_tokens":3,"output_tokens":1}}}`),
+	}}
+	dialer := &streamLineageSequenceDialer{conns: []*openAIWSCaptureConn{rejectedConn, recoveredConn}}
+
+	cfg := newOpenAIWSV2TestConfig()
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
+	cfg.Gateway.OpenAIWS.ReadTimeoutSeconds = 2
+	pool := newOpenAIWSConnPool(cfg)
+	pool.setClientDialerForTest(dialer)
+	t.Cleanup(pool.Close)
+	httpUpstream := &httpUpstreamRecorder{}
+	svc := &OpenAIGatewayService{cfg: cfg, httpUpstream: httpUpstream, cache: &stubGatewayCache{},
+		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg), toolCorrector: NewCodexToolCorrector(), openaiWSPool: pool}
+
+	body := []byte(`{"model":"gpt-5.1","stream":true,"instructions":"test","input":[{"type":"reasoning","encrypted_content":"AAAA-synthetic-rejected-ZZZ1","summary":[{"type":"summary_text","text":"keep me"}]},{"type":"reasoning","encrypted_content":"BBBB-synthetic-other-YYY2","summary":[]},{"role":"user","content":"hello"}]}`)
+	newCtx := func() (*gin.Context, *httptest.ResponseRecorder) {
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+		c.Request.Header.Set("session_id", "sess-accel-lineage")
+		SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
+		return c, rec
+	}
+
+	firstCtx, _ := newCtx()
+	_, err := svc.Forward(context.Background(), firstCtx, wsSSETestAccount(), body)
+	require.Error(t, err)
+	require.Equal(t, openAIOAuthWSSSEAccelerationReason, firstCtx.GetString("openai_ws_transport_reason"))
+	require.Nil(t, httpUpstream.lastReq, "加速路径的语义拒绝不应回退 HTTP")
+
+	secondCtx, _ := newCtx()
+	_, err = svc.Forward(context.Background(), secondCtx, wsSSETestAccount(), body)
+	require.NoError(t, err)
+
+	rejectedConn.mu.Lock()
+	firstWrites := append([]map[string]any(nil), rejectedConn.writes...)
+	rejectedConn.mu.Unlock()
+	recoveredConn.mu.Lock()
+	secondWrites := append([]map[string]any(nil), recoveredConn.writes...)
+	recoveredConn.mu.Unlock()
+	require.Len(t, firstWrites, 1, "被拒的一轮不应在本请求内重放")
+	require.Len(t, secondWrites, 1)
+
+	firstPayload, _ := json.Marshal(firstWrites[0])
+	secondPayload, _ := json.Marshal(secondWrites[0])
+	require.True(t, gjson.GetBytes(firstPayload, "input.0.encrypted_content").Exists())
+	require.False(t, gjson.GetBytes(secondPayload, "input.0.encrypted_content").Exists(), "下一轮进场应预剥离已被拒绝的密文")
+	require.Equal(t, locatorB, gjson.GetBytes(secondPayload, "input.1.encrypted_content").String(), "other history is not rejected")
+	require.Equal(t, "keep me", gjson.GetBytes(secondPayload, "input.0.summary.0.text").String())
 }

@@ -48,11 +48,7 @@ func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL 
 		// Compatibility adapters can add internal headers after building a request.
 		// Enforce SIWC headers at the final send boundary as well.
 		authorization := request.Header.Get("Authorization")
-		request.Header = make(http.Header)
-		request.Header.Set("Authorization", authorization)
-		request.Header.Set("Content-Type", "application/json")
-		request.Header.Set("Accept", "text/event-stream")
-		request.Header.Set("User-Agent", "Sub2API")
+		applySIWCRequestHeaders(request)
 		request.Host = ""
 		resp, err := s.httpUpstream.Do(request, proxyURL, account.ID, account.Concurrency)
 		if err == nil && resp != nil && resp.StatusCode == http.StatusUnauthorized && s.excelOAuthReauth != nil {

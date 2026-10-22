@@ -107,6 +107,7 @@ func TestAccountReadableSnapshot_DenylistTripwire(t *testing.T) {
 	stripped := map[string]struct{}{
 		"Credentials": {}, "Groups": {}, "AccountGroups": {}, "InitialQualityPlan": {},
 		"OwnerUserID": {}, "HostingIdentity": {}, "HostingPoolID": {},
+		"InitialAdmissionPlan": {},
 	}
 	// Fields intentionally exposed as readable metadata (incl. Extra and Proxy —
 	// the proxy password is already handed out via ResolveOutboundIdentity's URL).

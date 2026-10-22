@@ -12,6 +12,7 @@ import (
 
 func quotaPriorityFixture(now time.Time) (PrioritySchedulingConfig, openAIAccountCandidateScore, PrioritySchedulingSignal) {
 	cfg := DefaultPrioritySchedulingConfig()
+	cfg.TargetTTFTMs = 3000
 	cfg.Enabled, cfg.OAuthQuotaPriority = true, true
 	item := priorityCandidate(1, .1, 0)
 	item.account.Type, item.account.Status, item.account.Schedulable = AccountTypeOAuth, StatusActive, true
@@ -83,6 +84,7 @@ func TestPriorityOAuthQuotaEvidenceAndCapacity(t *testing.T) {
 			s.P90TTFTMs = 9999
 			at := now.Add(-11 * time.Minute)
 			s.LatestLatencyAt = &at
+			s.LatestBadLatencyAt = &at
 		}, 0},
 		{"cold_financial_samples", func(_ *PrioritySchedulingConfig, _ *openAIAccountCandidateScore, s *PrioritySchedulingSignal) {
 			s.Samples = 0

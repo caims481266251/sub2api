@@ -1,4 +1,15 @@
 export default {
+  anonymousExactIP: 'Exact IP or /32, /128 CIDR (including IPs outside this list)',
+  anonymousTitle: "Anonymous API authentication protection",
+  anonymousHint: "Independent switch, off by default. Counts only missing, malformed, unknown or explicitly disabled keys in a sliding window. Valid keys bypass these IP bans. Shares the whitelist above; uses exact IPv6 addresses. Suggested starting values are editable, not tuned optima.",
+  anonymousEnabled: "Enable anonymous API protection",
+  anonymousCapacity: "Maximum tracked IPs",
+  anonymousReset: "Clear anonymous failures and bans after successful credential authentication",
+  anonymousFailurePolicy: "By default success preserves the anonymous budget until expiry; enabling reset lets any valid key on the same egress clear it. Redis failure or capacity exhaustion skips this protection, while normal authentication continues. Replaces the legacy local invalid-auth guard while enabled. Site IP/country/login rules remain independent.",
+  anonymousBans: "Anonymous API temporary bans (up to 500)",
+  anonymousUnbanHint: "Only invalid credential attempts are limited. Release clears this exact IP’s anonymous counter and ban; manual deny rules and login bans require their own controls. New failures can trigger another ban.",
+  anonymousUnban: "Release anonymous ban",
+
   title: 'IP risk control and access records',
   description: 'Manage site-wide IP / country blocks, inspect authentication requests, and automatically ban excessive login, signup and verification traffic. Start in observation mode.',
   load: 'Load / reload configuration',
@@ -85,6 +96,10 @@ export default {
   recovery: 'Recovery and failure behavior',
   recoveryHint: 'When Redis is unavailable, authentication risk checks return 503. Other traffic skips dynamic bans while retaining IP / country rules. Disabling stops this module’s blocking and counting; existing protection remains. Initial config load failure uses disabled defaults with a health warning; later failures retain the last valid policy. To recover, set IP_RISK_DISABLED=true on the server and restart, correct rules, then remove the variable and restart. Changing the IPv6 prefix changes counter networks; wait for existing bans to expire first.',
   labels: {
+    anonymous_api_missing: "Missing API key",
+    anonymous_api_malformed: "Malformed API credential",
+    anonymous_api_unknown: "Unknown API key",
+    anonymous_api_disabled: "Explicitly disabled API key",
     login: 'Login', register: 'Signup / OAuth callback', verification: 'Verification / recovery / OAuth start',
     allowed: 'Risk allowed', whitelisted: 'Whitelisted', blocked: 'Blocked', would_block: 'Observe: would block',
     auto_banned: 'Automatic ban triggered', would_ban: 'Observe: would ban', disabled: 'Risk control inactive', unavailable: 'Risk service unavailable',

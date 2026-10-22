@@ -129,3 +129,58 @@ func TestPrioritySavePreservesOrExplicitlyChangesLatencyPenalty(t *testing.T) {
 		})
 	}
 }
+
+func TestPrioritySaveQuantileCompatibilityAndValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name, patch  string
+		status, want int
+	}{
+		{"omitted", `{}`, http.StatusOK, 70},
+		{"p50", `{"latency_percentile":50,"latency_measurement":"legacy_forward"}`, http.StatusOK, 50},
+		{"p95", `{"latency_percentile":95,"latency_measurement":"attributed_v1"}`, http.StatusOK, 95},
+		{"zero", `{"latency_percentile":0}`, http.StatusBadRequest, 0},
+		{"unsupported", `{"latency_percentile":99}`, http.StatusBadRequest, 0},
+		{"unknown_measurement", `{"latency_measurement":"unknown"}`, http.StatusBadRequest, 0},
+		{"unbounded_recovery", `{"recovery_exploration_percent":11}`, http.StatusBadRequest, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := service.DefaultPrioritySchedulingConfig()
+			cfg.LatencyPercentile, cfg.LatencyMeasurement, cfg.RecoveryExplorationPercent = 70, "attributed_v1", 5
+			raw, err := json.Marshal(cfg)
+			require.NoError(t, err)
+			repo := &priorityCompatSettings{value: string(raw)}
+			h := &SettingHandler{settingService: service.NewSettingService(repo, nil)}
+			var body, patch map[string]any
+			require.NoError(t, json.Unmarshal(raw, &body))
+			delete(body, "latency_percentile")
+			delete(body, "latency_measurement")
+			delete(body, "recovery_exploration_percent")
+			require.NoError(t, json.Unmarshal([]byte(tc.patch), &patch))
+			for key, value := range patch {
+				body[key] = value
+			}
+			raw, err = json.Marshal(body)
+			require.NoError(t, err)
+			router := gin.New()
+			router.PUT("/config", h.SavePriorityScheduling)
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPut, "/config", bytes.NewReader(raw))
+			request.Header.Set("Content-Type", "application/json")
+			router.ServeHTTP(recorder, request)
+			require.Equal(t, tc.status, recorder.Code, recorder.Body.String())
+			var saved service.PrioritySchedulingConfig
+			require.NoError(t, json.Unmarshal([]byte(repo.value), &saved))
+			if tc.status == http.StatusOK {
+				require.Equal(t, tc.want, saved.LatencyPercentile)
+				require.Equal(t, 5, saved.RecoveryExplorationPercent)
+				if measurement, ok := patch["latency_measurement"]; ok {
+					require.Equal(t, measurement, saved.LatencyMeasurement)
+				} else {
+					require.Equal(t, "attributed_v1", saved.LatencyMeasurement)
+				}
+			} else {
+				require.Equal(t, cfg, saved, "invalid configuration must not be persisted")
+			}
+		})
+	}
+}

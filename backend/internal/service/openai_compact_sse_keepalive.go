@@ -132,6 +132,18 @@ func (s *OpenAIGatewayService) startOpenAIUpstreamWaitKeepalive(c *gin.Context, 
 }
 
 func (s *OpenAIGatewayService) doOpenAIUpstreamWithKeepalive(c *gin.Context, stream bool, req *http.Request, proxyURL string, account *Account) (*http.Response, error) {
+	// The Responses handler owns the cross-attempt SSE boundary for all account
+	// types. Use its timer when installed, keeping the API-key upload fallback
+	// for callers outside that handler and compact requests.
+	if c != nil {
+		if raw, ok := c.Get(openAIHeaderWaitWriterKey); ok {
+			if writer, ok := raw.(*openAIHeaderWaitWriter); ok && writer != nil {
+				stop := s.startOpenAIHeaderWaitKeepalive(c, stream)
+				defer stop()
+				return s.doOpenAIUpstream(req, proxyURL, account)
+			}
+		}
+	}
 	// Cover ordinary API-key Responses uploads. Stateful SDK transports retain
 	// their own response protocol and cancellation lifecycle.
 	if account == nil || !account.IsOpenAIApiKey() || account.IsCopilotSDKEnabled() {
@@ -149,7 +161,7 @@ func OpenAIDownstreamDisconnected(c *gin.Context) bool {
 	if c == nil {
 		return false
 	}
-	if c.GetBool(openAIDownstreamDisconnectedKey) {
+	if c.GetBool(openAIDownstreamDisconnectedKey) || OpenAIHeaderWaitDisconnected(c) {
 		return true
 	}
 	if c.Request != nil && c.Request.Context().Err() != nil && !APIKeySlotLeaseLost(c.Request.Context()) {
@@ -230,7 +242,11 @@ func (k *openAICompactSSEKeepalive) beat() bool {
 		k.markStoppedLocked()
 		return false
 	}
-	k.writer.Flush()
+	if err := FlushGatewayResponse(k.writer); err != nil {
+		k.failed = true
+		k.markStoppedLocked()
+		return false
+	}
 	return true
 }
 

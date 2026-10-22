@@ -13,12 +13,12 @@
         </div>
       </header>
 
-      <div v-if="loadErrors.config && !draft" role="alert" class="rounded-xl border border-red-200 bg-red-50 p-5 dark:border-red-900 dark:bg-red-950/30">
+      <div v-if="loadErrors.config && !draft && activeTab !== 'ip'" role="alert" class="rounded-xl border border-red-200 bg-red-50 p-5 dark:border-red-900 dark:bg-red-950/30">
         <p class="text-sm text-red-700 dark:text-red-300">{{ loadErrors.config }}</p>
         <button type="button" class="btn btn-secondary btn-sm mt-3" @click="loadConfig">{{ t('admin.promptAudit.actions.retry') }}</button>
       </div>
 
-      <template v-else>
+      <div>
         <div class="mb-4" role="tablist" :aria-label="t('admin.promptAudit.title')">
           <div class="tabs inline-flex">
             <button
@@ -38,6 +38,7 @@
         </div>
 
         <main class="card px-4 sm:px-6 lg:px-8">
+          <IPAuditPanel v-if="activeTab === 'ip'" />
           <div v-show="activeTab === 'config'" data-test="tab-panel-config">
             <RuntimeOverview :runtime="runtime" :loading="loading.runtime" :error="loadErrors.runtime" @refresh="loadRuntime" />
 
@@ -88,7 +89,7 @@
             />
           </div>
         </main>
-      </template>
+      </div>
     </div>
 
     <div v-if="draft && activeTab === 'config'" class="fixed inset-x-0 bottom-0 z-30 border-t border-gray-200 bg-white/95 px-4 py-3 shadow-[0_-12px_35px_rgba(15,23,42,0.08)] backdrop-blur dark:border-dark-700/80 dark:bg-dark-900/95 dark:shadow-[0_-12px_35px_rgba(0,0,0,0.35)] lg:left-64">
@@ -145,8 +146,11 @@
 </template>
 
 <script setup lang="ts">
+import IPAuditPanel from '@/features/ip-audit/IPAuditPanel.vue'
+import { auditTab } from '@/features/ip-audit/api'
+import { routeLocationKey, routerKey } from 'vue-router'
 import PenaltyPolicyPanel from '@/features/security-penalties/PenaltyPolicyPanel.vue'
-import { computed, defineComponent, h, onMounted, reactive, ref } from 'vue'
+import { computed, defineComponent, h, inject, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -175,9 +179,13 @@ import { buildUpdateRequest, cloneData, configToDraft, draftFingerprint, emptyEv
 
 const { t, locale } = useI18n()
 const appStore = useAppStore()
-type PromptAuditPageTab = 'config' | 'events'
-const activeTab = ref<PromptAuditPageTab>('events')
+type PromptAuditPageTab = 'config' | 'events' | 'ip'
+const route = inject(routeLocationKey, null), router = inject(routerKey, null)
+const activeTab = ref<PromptAuditPageTab>(auditTab(route?.query.tab))
+watch(() => route?.query.tab, value => { activeTab.value = auditTab(value) })
+watch(activeTab, value => { if (router && route) void router.replace({ query: { ...route.query, tab: value } }) })
 const pageTabs = computed(() => [
+  { id: 'ip' as const, label: t('ipAudit.title') },
   { id: 'events' as const, label: t('admin.promptAudit.tabs.events') },
   { id: 'config' as const, label: t('admin.promptAudit.tabs.config') },
 ])

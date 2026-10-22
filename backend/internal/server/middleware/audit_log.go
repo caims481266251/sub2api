@@ -52,7 +52,9 @@ func SkipAudit(c *gin.Context) {
 // scalar, non-secret operation summaries. Request bodies and arbitrary maps
 // are never accepted through this channel.
 var auditExtraAllowedKeys = map[string]struct{}{
-	"result": {}, "error_code": {}, "enabled": {}, "blocking_enabled": {},
+	"source": {}, "reason_code": {}, "readback": {}, "remaining_count": {}, "target_user_id": {},
+	"anonymous_api_enabled": {},
+	"result":                {}, "error_code": {}, "enabled": {}, "blocking_enabled": {},
 	"config_version": {}, "endpoint_count": {}, "scanner_count": {},
 	"all_groups": {}, "group_count": {}, "guard_endpoint_id": {},
 	"http_status": {}, "latency_ms": {}, "token_applied": {}, "retryable": {},
@@ -109,23 +111,25 @@ func truncateAuditExtraString(value string, limit int) string {
 
 // auditSensitiveReads 需要审计的敏感 GET 读取（method+FullPath → 动作名）。
 var auditSensitiveReads = map[string]string{
+	"GET /api/v1/admin/settings/ip-audit":                                     "admin.ip_audit.read",
 	"GET /api/v1/admin/request-captures/:task/requests/:record":               "admin.request_capture.read",
 	"GET /api/v1/admin/request-captures/:task/requests/:record/content/:part": "admin.request_capture.content",
 	"GET /api/v1/admin/request-captures/:task/export":                         "admin.request_capture.export",
 	"GET /api/v1/admin/request-captures/:task/requests/:record/export":        "admin.request_capture.export",
 
-	"GET /api/v1/admin/accounts/data":             "admin.accounts.export",
-	"GET /api/v1/admin/proxies/data":              "admin.proxies.export",
-	"GET /api/v1/admin/redeem-codes/export":       "admin.redeem_codes.export",
-	"GET /api/v1/admin/backups/:id/download-url":  "admin.backups.download",
-	"GET /api/v1/admin/settings/admin-api-key":    "admin.admin_api_key.read",
-	"GET /api/v1/admin/settings/ip-risk":          "admin.ip_risk.config.read",
-	"GET /api/v1/admin/settings/ip-risk/events":   "admin.ip_risk.events.read",
-	"GET /api/v1/admin/settings/ip-risk/bans":     "admin.ip_risk.bans.read",
-	"GET /api/v1/admin/users/:id/api-keys":        "admin.users.api_keys.read",
-	"GET /api/v1/admin/groups/:id/api-keys":       "admin.groups.api_keys.read",
-	"GET /api/v1/admin/backups/s3-config":         "admin.backups.s3_config.read",
-	"GET /api/v1/admin/data-management/s3/config": "admin.data_management.s3_config.read",
+	"GET /api/v1/admin/accounts/data":                   "admin.accounts.export",
+	"GET /api/v1/admin/proxies/data":                    "admin.proxies.export",
+	"GET /api/v1/admin/redeem-codes/export":             "admin.redeem_codes.export",
+	"GET /api/v1/admin/backups/:id/download-url":        "admin.backups.download",
+	"GET /api/v1/admin/settings/admin-api-key":          "admin.admin_api_key.read",
+	"GET /api/v1/admin/settings/ip-risk":                "admin.ip_risk.config.read",
+	"GET /api/v1/admin/settings/ip-risk/events":         "admin.ip_risk.events.read",
+	"GET /api/v1/admin/settings/ip-risk/anonymous-bans": "admin.ip_risk.anonymous.bans.read",
+	"GET /api/v1/admin/settings/ip-risk/bans":           "admin.ip_risk.bans.read",
+	"GET /api/v1/admin/users/:id/api-keys":              "admin.users.api_keys.read",
+	"GET /api/v1/admin/groups/:id/api-keys":             "admin.groups.api_keys.read",
+	"GET /api/v1/admin/backups/s3-config":               "admin.backups.s3_config.read",
+	"GET /api/v1/admin/data-management/s3/config":       "admin.data_management.s3_config.read",
 }
 
 // auditActionOverrides 变更类请求的动作名精确映射（未命中时自动推导）。
@@ -160,6 +164,9 @@ var auditBodyOmittedRoutes = map[string]struct{}{
 	"POST /api/v1/hosting/two-fa-login":                         {},
 	"POST /api/v1/admin/proxies/pool/preview":                   {},
 	"PUT /api/v1/admin/proxies/pool":                            {},
+	"POST /api/v1/admin/settings/ip-audit/release":              {},
+	"PUT /api/v1/admin/settings/ip-risk":                        {},
+	"POST /api/v1/admin/settings/ip-risk/anonymous-unban":       {},
 	"POST /api/v1/admin/accounts/:id/export-session":            {},
 	"PUT /api/v1/admin/account-ops/webhooks/:id":                {},
 	"PUT /api/v1/admin/account-ops/config":                      {},

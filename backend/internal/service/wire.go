@@ -12,7 +12,9 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/qualityqueue"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/redissession"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/google/wire"
 	"github.com/redis/go-redis/v9"
@@ -134,9 +136,13 @@ func ProvideOpenAIOAuthReauthService(
 	runtimeBlocker AccountRuntimeBlocker,
 	buildInfo BuildInfo,
 	settings SettingRepository,
+	redisClient *redis.Client,
 ) *OpenAIOAuthReauthService {
 	credentialUpdater, _ := accountRepo.(OpenAIOAuthReauthCredentialUpdater)
 	svc := NewOpenAIOAuthReauthService(repo, adminService, credentialUpdater, openaiOAuthService, secretEncryptor, cfg != nil && cfg.Totp.EncryptionKeyConfigured, tokenCacheInvalidator, runtimeBlocker)
+	if redisClient != nil {
+		svc.siwcSessionStore = redissession.New(redisClient, siwcSessionPrefix, openai.SessionTTL)
+	}
 	svc.SetSessionExportRepository(sessionExportRepo)
 	svc.settings = settings
 	if admin, ok := adminService.(*adminServiceImpl); ok {

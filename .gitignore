@@ -135,6 +135,10 @@ deploy/docker-compose.override.yml
 vite.config.js
 docs/*
 !docs/hosting-openai-parity.md
+!docs/security-penalties.md
+!docs/ip-risk-control.md
+!docs/anonymous-api-guard.md
+!docs/registration-email-alias-block.md
 !docs/openai-ws-sse-acceleration.md
 !docs/openai-outbound-identity.md
 !docs/openai-session-affinity.md

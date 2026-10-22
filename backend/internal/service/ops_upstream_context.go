@@ -469,10 +469,13 @@ func setOpsUpstreamError(c *gin.Context, upstreamStatusCode int, upstreamMessage
 	if upstreamStatusCode > 0 {
 		c.Set(OpsUpstreamStatusCodeKey, upstreamStatusCode)
 	}
-	if msg := strings.TrimSpace(upstreamMessage); msg != "" {
+	if redactOpenAIEncryptedDiagnostic(upstreamMessage) == openAIEncryptedErrorRedacted {
+		upstreamDetail = openAIEncryptedErrorRedacted
+	}
+	if msg := strings.TrimSpace(redactOpenAIEncryptedDiagnostic(upstreamMessage)); msg != "" {
 		c.Set(OpsUpstreamErrorMessageKey, msg)
 	}
-	if detail := strings.TrimSpace(upstreamDetail); detail != "" {
+	if detail := strings.TrimSpace(redactOpenAIEncryptedDiagnostic(upstreamDetail)); detail != "" {
 		c.Set(OpsUpstreamErrorDetailKey, detail)
 	}
 }
@@ -568,16 +571,20 @@ func appendOpsUpstreamError(c *gin.Context, ev OpsUpstreamErrorEvent) {
 	ev.Platform = strings.TrimSpace(ev.Platform)
 	normalizeOpsUpstreamProxyAttribution(&ev)
 	ev.UpstreamRequestID = strings.TrimSpace(ev.UpstreamRequestID)
-	ev.UpstreamResponseBody = strings.TrimSpace(ev.UpstreamResponseBody)
+	ev.UpstreamResponseBody = strings.TrimSpace(redactOpenAIEncryptedDiagnostic(ev.UpstreamResponseBody))
 	ev.Kind = strings.TrimSpace(ev.Kind)
 	ev.Stage = strings.TrimSpace(ev.Stage)
 	ev.Scope = strings.TrimSpace(ev.Scope)
 	ev.Reason = strings.TrimSpace(ev.Reason)
 	ev.UpstreamURL = strings.TrimSpace(ev.UpstreamURL)
 	ev.Message = strings.TrimSpace(ev.Message)
-	ev.Detail = strings.TrimSpace(ev.Detail)
+	ev.Detail = strings.TrimSpace(redactOpenAIEncryptedDiagnostic(ev.Detail))
 	if ev.Message != "" {
 		ev.Message = sanitizeUpstreamErrorMessage(ev.Message)
+		if ev.Message == openAIEncryptedErrorRedacted {
+			ev.Detail = ev.Message
+			ev.UpstreamResponseBody = ev.Message
+		}
 	}
 
 	var existing []*OpsUpstreamErrorEvent

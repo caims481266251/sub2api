@@ -1248,6 +1248,56 @@ describe("admin SettingsView payment visible method controls", () => {
     expect(wrapper.text()).not.toContain("支付来源");
   });
 
+  it("loads and saves the registration IP limit independently of login protection", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      registration_ip_limit_enabled: false,
+      login_rate_limit_enabled: true,
+    });
+    const wrapper = mountView();
+    await flushPromises();
+    await openSecurityTab(wrapper);
+    const toggle = wrapper.get('[data-testid="registration-ip-limit-toggle"]');
+    expect((toggle.element as HTMLInputElement).checked).toBe(false);
+    await toggle.setValue(true);
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(updateSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({ registration_ip_limit_enabled: true, login_rate_limit_enabled: true }),
+    );
+    await toggle.setValue(false);
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(updateSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({ registration_ip_limit_enabled: false, login_rate_limit_enabled: true }),
+    );
+  });
+
+  it.each([undefined, false, true])("loads and saves the email alias block switch from %s", async (enabled) => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      registration_email_alias_block_enabled: enabled,
+    });
+    const wrapper = mountView();
+    await flushPromises();
+    await openSecurityTab(wrapper);
+    const toggle = wrapper.get<HTMLInputElement>('[data-testid="registration-email-alias-block-toggle"]');
+    const initial = enabled ?? true;
+    expect(toggle.element.checked).toBe(initial);
+    await toggle.setValue(!initial);
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(updateSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({ registration_email_alias_block_enabled: !initial }),
+    );
+    await toggle.setValue(initial);
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(updateSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({ registration_email_alias_block_enabled: initial }),
+    );
+  });
+
   it("loads and saves the login rate limit switch in security settings", async () => {
     getSettings.mockResolvedValueOnce({
       ...baseSettingsResponse,

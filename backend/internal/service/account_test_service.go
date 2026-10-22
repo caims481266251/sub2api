@@ -2642,6 +2642,12 @@ func (s *AccountTestService) reconcileOpenAI429State(ctx context.Context, accoun
 		return
 	}
 
+	// A relayed ChatGPT quota window is not the API key's own quota. Manual
+	// tests must not turn it into a persistent key-wide scheduling block.
+	if !account.IsOpenAIOAuthLike() {
+		return
+	}
+
 	persistOpenAI429PlanType(ctx, s.accountRepo, account, body)
 
 	var resetAt *time.Time

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 
 	"github.com/Wei-Shaw/sub2api/internal/iprisk"
 )
@@ -34,11 +35,20 @@ func (s ipRiskStore) Save(ctx context.Context, c iprisk.Config) error {
 func (s *SettingService) IPRiskStore() iprisk.Store { return ipRiskStore{settings: s} }
 
 func (s *SettingService) IPRiskTrustedProxiesConfigured() bool {
-	if s.cfg == nil || !s.cfg.Server.TrustedProxiesConfigured || len(s.cfg.Server.TrustedProxies) == 0 {
+	if s.cfg == nil {
 		return false
 	}
-	for _, proxy := range s.cfg.Server.TrustedProxies {
-		if _, err := iprisk.ParseNetwork(proxy); err != nil {
+	proxies := s.cfg.Server.EffectiveTrustedProxies()
+	if len(proxies) == 0 {
+		return false
+	}
+	for _, proxy := range proxies {
+		// Match Gin's strict parsing, including rejection of whitespace. Risk
+		// rules accept normalized inputs, but proxy configuration does not.
+		if net.ParseIP(proxy) != nil {
+			continue
+		}
+		if _, _, err := net.ParseCIDR(proxy); err != nil {
 			return false
 		}
 	}

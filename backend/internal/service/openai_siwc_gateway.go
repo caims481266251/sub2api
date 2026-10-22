@@ -117,9 +117,8 @@ func (s *OpenAIGatewayService) buildSIWCRequest(ctx context.Context, c *gin.Cont
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("User-Agent", "Sub2API")
+	req = withSIWCRequestIdentity(req, c, codexAccountIdentitySource(c, nil))
+	applySIWCRequestHeaders(req)
 	return req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAI)), nil
 }
 

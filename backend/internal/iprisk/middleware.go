@@ -92,6 +92,7 @@ func machineCallback(method, path string) bool {
 
 func (m *Manager) Middleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		c.Set(anonymousManagerKey, m)
 		if m.emergencyDisabled || (c.Request.Method == http.MethodGet && c.FullPath() == "/health") || machineCallback(c.Request.Method, c.FullPath()) {
 			c.Next()
 			return

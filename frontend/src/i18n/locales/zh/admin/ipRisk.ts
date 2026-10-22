@@ -1,4 +1,15 @@
 export default {
+  anonymousExactIP: '精确 IP 或 /32、/128 CIDR（可解除列表外 IP）',
+  anonymousTitle: "匿名 API 鉴权失败防护",
+  anonymousHint: "独立开关，默认关闭。滑窗仅统计缺失、格式错误、未知和明确停用的 key；合法 key 不受此 IP 封禁影响。共用上方白名单，IPv6 使用精确地址。默认值是可编辑起点，未经最优调参。",
+  anonymousEnabled: "启用匿名 API 防护",
+  anonymousCapacity: "最多跟踪 IP 数",
+  anonymousReset: "凭据认证成功后清理该 IP 的匿名失败和封禁",
+  anonymousFailurePolicy: "默认成功请求不重置匿名预算，依赖自然到期；开启清理后，共享出口任一有效 key 都能重置预算。Redis 故障或容量满时跳过此防护，仍执行原鉴权。启用期间替代旧本机无效鉴权保护；全站 IP、国家和登录规则独立生效。",
+  anonymousBans: "匿名 API 临时封禁（最多显示 500 条）",
+  anonymousUnbanHint: "只限制无效凭据。解除仅清理该精确 IP 的匿名计数和 ban，不删除永久黑名单或登录封禁；继续失败可再次触发。",
+  anonymousUnban: "解除匿名封禁",
+
   title: 'IP 风控与访问记录',
   description: '配置全站 IP / 国家拦截，查看认证请求，并对高频登录、注册和验证码请求自动封禁。建议先开启观察模式。',
   load: '加载 / 重新加载配置',
@@ -85,6 +96,10 @@ export default {
   recovery: '误封恢复与故障策略',
   recoveryHint: 'Redis 不可用时认证风控返回 503，普通业务降级放行动态封禁，但仍执行可判定的 IP / 国家规则。关闭后本模块不拦截、不计数，原有防护仍生效。配置初次读取失败默认关闭并提示故障，后续刷新失败保留最后有效配置。误封时在服务器设置 IP_RISK_DISABLED=true 并重启，修正规则后移除该变量再重启。调整 IPv6 前缀会切换计数网段，建议待已有封禁到期后再改。',
   labels: {
+    anonymous_api_missing: "缺失 API key",
+    anonymous_api_malformed: "凭据格式错误",
+    anonymous_api_unknown: "未知 API key",
+    anonymous_api_disabled: "明确停用 API key",
     login: '登录', register: '注册 / OAuth 回调', verification: '验证码 / 账号恢复 / OAuth 发起',
     allowed: '风控放行', whitelisted: '白名单豁免', blocked: '已拦截', would_block: '观察：应拦截',
     auto_banned: '已触发自动封禁', would_ban: '观察：应自动封禁', disabled: '风控未执行', unavailable: '风控服务不可用',

@@ -1,6 +1,7 @@
 package securityaudit
 
 import (
+	"context"
 	"strconv"
 	"strings"
 
@@ -132,4 +133,25 @@ func (h *PromptAdminHandler) getPenaltyEvent(c *gin.Context, owner int64) {
 		return
 	}
 	response.Success(c, result)
+}
+
+// IPAuditPenaltySummary exposes only existing user/session state. The caller
+// must supply an explicit authorized user ID; no IP-to-user inference is made.
+func (h *PromptAdminHandler) IPAuditPenaltySummary(ctx context.Context, id int64) (service.SecurityPenaltySummary, error) {
+	if h.penalties == nil {
+		return service.SecurityPenaltySummary{}, infraerrors.ServiceUnavailable("security_penalty_unavailable", "Security penalty source unavailable")
+	}
+	return h.penalties.Summary(ctx, id)
+}
+
+// ReleaseIPAuditPenalty uses the existing explicitly user-wide recovery action.
+// It does not infer a user from an IP or modify users.status/API-key ACLs.
+func (h *PromptAdminHandler) ReleaseIPAuditPenalty(ctx context.Context, userID, actorID int64, reason string) (service.SecurityPenaltySummary, error) {
+	if h.penalties == nil {
+		return service.SecurityPenaltySummary{}, infraerrors.ServiceUnavailable("security_penalty_unavailable", "Security penalty source unavailable")
+	}
+	if err := h.penalties.Release(ctx, userID, actorID, reason); err != nil {
+		return service.SecurityPenaltySummary{}, err
+	}
+	return h.penalties.Summary(ctx, userID)
 }

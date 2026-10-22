@@ -35,11 +35,13 @@ type SystemSettings struct {
 	OpenAICodexTicketStrategy           string                          `json:"openai_codex_ticket_strategy"`
 	RegistrationEnabled                 bool                            `json:"registration_enabled"`
 	LoginRateLimitEnabled               bool                            `json:"login_rate_limit_enabled"`
+	RegistrationIPLimitEnabled          bool                            `json:"registration_ip_limit_enabled"`
 	PrismBrowserEnabled                 bool                            `json:"prism_browser_enabled"`
 	PrismBrowserBaseURL                 string                          `json:"prism_browser_base_url"`
 	PrismBrowserAPIKeyConfigured        bool                            `json:"prism_browser_api_key_configured"`
 	EmailVerifyEnabled                  bool                            `json:"email_verify_enabled"`
 	RegistrationEmailSuffixWhitelist    []string                        `json:"registration_email_suffix_whitelist"`
+	RegistrationEmailAliasBlockEnabled  bool                            `json:"registration_email_alias_block_enabled"`
 	RegistrationEmailDomainQuotaEnabled bool                            `json:"registration_email_domain_quota_enabled"`
 	PromoCodeEnabled                    bool                            `json:"promo_code_enabled"`
 	PasswordResetEnabled                bool                            `json:"password_reset_enabled"`

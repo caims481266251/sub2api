@@ -88,14 +88,15 @@ func TestStripOpenAIInvalidEncryptedContentFromReplayItems(t *testing.T) {
 	t.Parallel()
 
 	invalid := map[string]struct{}{
-		openAIEncryptedContentDigest("stale-cipher"): {},
+		openAIEncryptedContentDigest("stale-cipher"):      {},
+		openAIEncryptedContentDigest("cached-compaction"): {},
 	}
 
 	t.Run("rewrites_hit_items_and_shares_the_rest", func(t *testing.T) {
 		t.Parallel()
 		original := json.RawMessage(`{"type":"reasoning","id":"rs_1","encrypted_content":"stale-cipher"}`)
 		clean := json.RawMessage(`{"type":"input_text","text":"hello"}`)
-		compaction := json.RawMessage(`{"type":"compaction","encrypted_content":"stale-cipher"}`)
+		compaction := json.RawMessage(`{"type":"compaction","encrypted_content":"cached-compaction"}`)
 		items := []json.RawMessage{original, clean, compaction}
 
 		next, stripped := stripOpenAIInvalidEncryptedContentFromReplayItems(items, invalid)
