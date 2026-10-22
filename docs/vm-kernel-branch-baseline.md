@@ -1,6 +1,6 @@
 # VM 内核账号模式：分支基线与工作边界
 
-日期：2026-10-22。当前阶段：独立分支已建立；落实并深审方案文档，不编写功能代码。用户最新指定首版为 KVM 真虚拟机。
+日期：2026-10-22。当前阶段：独立分支已建立；落实并深审方案文档，不编写功能代码。用户指定首版为 KVM 真虚拟机，并要求 WS 与跨协议转换在本次迭代交付。
 
 ## 1. 分支来源
 
@@ -26,6 +26,7 @@ v2.15.0 是带注释标签，上述 tag 对象与其指向的发布提交是不�
 - 从“账号管理 → 添加账号”增加普通模式/VM 内核（KVM）模式，默认普通；不新增账号管理系统。
 - VM 首版固定单机 Linux amd64 + 可用 /dev/kvm，独立 Linux guest 内核与稳定 SMBIOS/MAC/磁盘序列号。Docker 仅封装 QEMU runner；不以普通 Docker slot、TCG 或宿主推理代替。
 - 只有选择 VM 模式的账号才创建专属 KVM guest 并进入 guest → 真实推理内核链路。原选账号算法、授权刷新、代理配置、用量和计费继续复用 sub2api，仅新增必要的执行/就绪检查和凭据投影。
+- 本次必交付原 Responses WS 入口到 Codex guest 的连续多轮、连接内 previous_response_id 展开、工具/取消和逐轮计费；跨协议包括 Chat/Messages→Codex Responses、Chat/Responses→Claude Messages，均覆盖 JSON/SSE。复用原 WS hooks 与转换器，补齐必要的 VM partial 用量提交接点，不新增会话平台或计费系统。
 - 不以通用 HTTP 转发器代替用户要求的内核执行。
 - 不在本阶段移植原本地分支的定制功能，也不把 VM 功能的限制施加到普通账号。
 
@@ -67,4 +68,4 @@ v2.15.0 是带注释标签，上述 tag 对象与其指向的发布提交是不�
 
 ## 6. 后续入口
 
-后续实现从方案中的 K1 开始：在真实 KVM 环境验证独立 guest、硬件身份、磁盘持久化、host→guest relay 和 guest 内固定版本推理内核。Claude/Codex 分别验证，Codex 需要新增 guest 服务；不以宿主 spawn 验收。确认凭据单一权威、guest 应用版本、流/usage/取消后，再按 K2–K5 落实最小运行支撑和原 Service.Forward 分流。当前文档不构成已经完成这些验证的声明。
+后续实现从方案中的 K1 开始：在真实 KVM 环境验证独立 guest、硬件身份、磁盘持久化、host→guest relay 和 guest 内固定版本推理内核，同时取得 WS/转换所需的多轮/工具/usage 样本。Claude/Codex 分别验证，Codex 需要新增 guest 服务；不以宿主 spawn 验收。确认凭据单一权威、guest 应用版本、流/usage/取消后，按 K2–K4 接内核、运行支撑和原生 HTTP，K5 完成四条转换，K6 完成 WS，K7 做全矩阵验收。缺 WS 或任一约定转换链不能算本次迭代完成。当前文档不构成已经完成这些验证的声明。
