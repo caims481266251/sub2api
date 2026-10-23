@@ -343,6 +343,16 @@ func settledHTTPFailure(raw []byte, terminal string, httpStatus int) (json.RawMe
 		return nil, ""
 	}
 	e := envelope.Error
+	// The fixed Codex kernel returns upstream_auth with HTTP 401 and no
+	// terminal header. Keep this exact provider contract distinct from local
+	// socket authentication, and never retain the embedded upstream body.
+	if httpStatus == http.StatusUnauthorized && e.Code == "upstream_auth" {
+		out, _ := json.Marshal(map[string]any{"type": "error", "error": map[string]any{
+			"code": "upstream_auth", "type": "authentication_error", "status": http.StatusUnauthorized,
+			"message": "Upstream authentication failed",
+		}})
+		return out, ""
+	}
 	switch e.Code {
 	case "no_capacity", "no_credential", "sticky_unavailable":
 		return nil, "kernel_" + e.Code

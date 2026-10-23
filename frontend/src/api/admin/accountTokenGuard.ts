@@ -31,8 +31,8 @@ export interface TwoFALoginJob {
 
 const twoFALoginPath = '/admin/account-ops/token-guard/two-fa-login'
 
-export async function startTwoFALogin(entry: TokenGuardReloginAccount): Promise<TwoFALoginJob> {
-  return (await apiClient.post(twoFALoginPath, { ...entry, credential_target: 'operations' })).data
+export async function startTwoFALogin(entry: TokenGuardReloginAccount, executionMode?: 'normal' | 'docker_kernel'): Promise<TwoFALoginJob> {
+  return (await apiClient.post(twoFALoginPath, { ...entry, credential_target: 'operations', ...(executionMode === 'docker_kernel' ? { execution_mode: executionMode } : {}) })).data
 }
 
 export async function getTwoFALogin(id: string): Promise<TwoFALoginJob> {

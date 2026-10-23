@@ -304,6 +304,9 @@ func (s *AccountTokenGuardV2Service) SaveAccount(ctx context.Context, accountID 
 			return nil, infraerrors.New(http.StatusInternalServerError, "TOKEN_GUARD_V2_SAVE_FAILED", "failed to save monitored account")
 		}
 	}
+	if err := s.reauth.completeContainerTwoFAEnrollment(ctx, accountID); err != nil {
+		return nil, err
+	}
 	return s.accountView(ctx, accountID)
 }
 
@@ -447,6 +450,15 @@ func (s *AccountTokenGuardV2Service) runProbe(ctx context.Context, record Accoun
 		s.completeProbe(ctx, record.AccountID, completion)
 		return
 	}
+	if account.IsVMKernel() && account.ErrorMessage == OpenAIContainerAuthRequired {
+		// Reconcile a deferred trigger after another authorization task releases
+		// the account slot. Failed attempts remain deduplicated in the repository.
+		s.reauth.handleContainerUnauthorized(ctx, account, "")
+		completion.ProbeState = AccountTokenGuardV2ProbeAuth
+		completion.ProbeDetail = "2FA reauthorization required; use the account reauthorization action to retry"
+		s.completeProbe(ctx, record.AccountID, completion)
+		return
+	}
 	probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	state, detail := s.probeAccount(probeCtx, account)
 	cancel()
@@ -459,6 +471,14 @@ func (s *AccountTokenGuardV2Service) runProbe(ctx context.Context, record Accoun
 		completion.CooldownUntil = nil
 	case AccountTokenGuardV2ProbeAuth:
 		completion.FailStreak++
+		if account.IsVMKernel() {
+			// Never use the manual retry path for an automatic probe. A concurrent
+			// request may already have attempted recovery for these credentials.
+			if detail == "upstream returned 401" {
+				s.reauth.handleContainerUnauthorized(ctx, account, "")
+			}
+			break
+		}
 		completion.NextProbeAt = now.Add(time.Duration(rules.RetryIntervalSeconds) * time.Second)
 		cooldownActive := record.CooldownUntil != nil && record.CooldownUntil.After(now)
 		if record.AutoReloginEnabled && completion.FailStreak >= rules.FailStreakThreshold && !cooldownActive {

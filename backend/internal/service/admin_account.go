@@ -480,6 +480,11 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 		Status:               StatusActive,
 		Schedulable:          input.InitialAdmissionPlan == nil,
 	}
+	// Keep enrollment closed until encrypted login information is durable.
+	if mode == AccountExecutionModeDockerKernel && input.InitialOpenAITwoFA {
+		account.Status = StatusError
+		account.ErrorMessage = OpenAIContainerTwoFAEnrollmentPending
+	}
 	if input.ProbeEnabled != nil && *input.ProbeEnabled {
 		if !isUpstreamBillingProbeAccount(account) {
 			return nil, ErrUpstreamBillingProbeAccountInvalid

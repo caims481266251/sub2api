@@ -260,7 +260,9 @@ func vmAccountEligible(a *Account) bool {
 	}
 	// A paused, cooling-down or admission-pending account still needs its
 	// runtime for authorized management probes and credential maintenance.
-	return a.IsActive()
+	// Authentication pause must not destroy or restart a healthy container.
+	return a.IsActive() || (a.Status == StatusError &&
+		(a.ErrorMessage == OpenAIContainerAuthRequired || a.ErrorMessage == OpenAIContainerTwoFAEnrollmentPending))
 }
 
 func vmAccountRequestEligible(a *Account, probe bool) bool {
@@ -327,6 +329,11 @@ func (s *VMKernelService) reconcile(ctx context.Context) {
 		if e != nil {
 			vmKernelReadiness.Delete(state.AccountID)
 			continue
+		}
+		// ListByPlatform includes active accounts only. Keep observing a healthy
+		// container while authentication is paused, without refreshing its token.
+		if a != nil && a.Status == StatusError && (a.ErrorMessage == OpenAIContainerAuthRequired || a.ErrorMessage == OpenAIContainerTwoFAEnrollmentPending) {
+			s.enqueue(lifecycle, a.ID, func(task context.Context) { s.prepare(task, a) })
 		}
 	}
 	for i := range accounts {
@@ -399,6 +406,12 @@ func (s *VMKernelService) prepare(ctx context.Context, account *Account) {
 	state, inspectErr := s.helper.Do(ctx, vmruntime.Request{Operation: "inspect", AccountID: account.ID})
 	s.publishHealth(account.ID, state, inspectErr)
 	if !vmAccountEligible(account) {
+		vmKernelReadiness.Delete(account.ID)
+		return
+	}
+	// Authentication recovery owns token replacement while this account is paused.
+	// Preserve health observations without racing a refresh or reprojection.
+	if account.ErrorMessage == OpenAIContainerAuthRequired || account.ErrorMessage == OpenAIContainerTwoFAEnrollmentPending {
 		vmKernelReadiness.Delete(account.ID)
 		return
 	}
@@ -811,7 +824,11 @@ func (s *VMKernelService) execute(ctx context.Context, selected *Account, protoc
 			slot.activeDone = nil
 		}
 	}()
-	return s.call(ctx, state, protocol, body, emit)
+	result, err = s.call(ctx, state, protocol, body, emit)
+	if result != nil {
+		result.DispatchedCredentialsHash, _ = hashReauthCredentials(latest.Credentials)
+	}
+	return result, err
 }
 func (s *VMKernelService) call(ctx context.Context, state *vmruntime.State, protocol string, body []byte, emit func(vmkernel.Event) error) (*vmkernel.Result, error) {
 	return s.kernel.Execute(ctx, vmkernel.Binding{Socket: state.KernelSocket, Token: state.InternalToken, InstanceID: state.InstanceID, Generation: state.Generation}, vmkernel.Request{Protocol: protocol, Body: body}, emit)

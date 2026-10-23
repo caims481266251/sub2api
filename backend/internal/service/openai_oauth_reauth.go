@@ -390,7 +390,8 @@ func (s *OpenAIOAuthReauthService) SaveCredentialConfig(ctx context.Context, acc
 	if err := s.ensureDurableEncryption(); err != nil {
 		return nil, err
 	}
-	if _, err := s.accountFor(ctx, accountID); err != nil {
+	account, err := s.accountFor(ctx, accountID)
+	if err != nil {
 		return nil, err
 	}
 	existing, err := s.repo.GetConfig(ctx, accountID)
@@ -408,6 +409,11 @@ func (s *OpenAIOAuthReauthService) SaveCredentialConfig(ctx context.Context, acc
 		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_REAUTH_ENGINE_INVALID", "invalid OpenAI re-login engine")
 	}
 	mode := strings.TrimSpace(input.CredentialMode)
+	if account.IsVMKernel() && mode == OpenAIOAuthReauthModePasswordTOTP {
+		if err := validateContainerTwoFAIdentity(account, input.LoginEmail); err != nil {
+			return nil, err
+		}
+	}
 	if mode == "" {
 		mode = OpenAIOAuthReauthModeEmailOTPURL
 	}
@@ -502,6 +508,9 @@ func (s *OpenAIOAuthReauthService) SaveCredentialConfig(ctx context.Context, acc
 				return nil, infraerrors.New(http.StatusInternalServerError, "OPENAI_REAUTH_CONFIG_ENCRYPT_FAILED", "failed to encrypt TOTP secret")
 			}
 		}
+	}
+	if account.IsVMKernel() && mode == OpenAIOAuthReauthModePasswordTOTP && stored.TOTPSecretCiphertext == "" {
+		return nil, infraerrors.BadRequest("OPENAI_REAUTH_TOTP_REQUIRED", "Save a complete 2FA login before enabling recovery")
 	}
 	if err := s.repo.UpsertConfig(ctx, stored); err != nil {
 		if infraerrors.Code(err) == 409 {
@@ -642,8 +651,38 @@ func (s *OpenAIOAuthReauthService) CreateTaskForProfile(ctx context.Context, acc
 	if profile == "excel" && (stored.CredentialMode != OpenAIOAuthReauthModePasswordTOTP || !QualityBPSEligible(account)) {
 		return nil, infraerrors.BadRequest("OPENAI_REAUTH_EXCEL_CONFIG_REQUIRED", "Excel authorization requires a paid OAuth parent account with saved password/TOTP login")
 	}
+	if account.IsVMKernel() && profile == "codex" {
+		active, readErr := s.repo.GetLatestTask(ctx, accountID)
+		if readErr != nil {
+			return nil, infraerrors.InternalServer("OPENAI_REAUTH_TASK_READ_FAILED", "Could not read reauthorization task")
+		}
+		if active != nil && reauthTaskProfile(active) == profile && (active.Status == OpenAIOAuthReauthStatusQueued || active.Status == OpenAIOAuthReauthStatusRunning || active.Status == OpenAIOAuthReauthStatusCallbackProcessing) {
+			return safeReauthTask(active), nil
+		}
+	}
 	if err := s.checkWorkerMode(stored.CredentialMode); err != nil {
 		return nil, err
+	}
+	if account.IsVMKernel() && profile == "codex" && stored.CredentialMode == OpenAIOAuthReauthModePasswordTOTP {
+		if repo, ok := s.repo.(OpenAIContainerReauthRepository); ok {
+			hash, err := hashReauthCredentials(account.Credentials)
+			if err != nil {
+				return nil, infraerrors.InternalServer("OPENAI_REAUTH_CREDENTIAL_SNAPSHOT_FAILED", "Could not snapshot credentials")
+			}
+			handled, err := repo.QueueContainerReauth(ctx, account, hash, true)
+			if err != nil {
+				return nil, infraerrors.InternalServer("OPENAI_REAUTH_TASK_CREATE_FAILED", "Could not create reauthorization task")
+			}
+			if !handled {
+				return nil, infraerrors.BadRequest("OPENAI_REAUTH_CONFIG_REQUIRED", "Save complete 2FA login information first")
+			}
+			record, err := s.repo.GetLatestTask(ctx, accountID)
+			if err != nil || record == nil || reauthTaskProfile(record) != profile || record.ExpectedCredentialsHash != hash ||
+				(record.Status != OpenAIOAuthReauthStatusQueued && record.Status != OpenAIOAuthReauthStatusRunning && record.Status != OpenAIOAuthReauthStatusCallbackProcessing) {
+				return nil, infraerrors.Conflict("OPENAI_REAUTH_ACCOUNT_CHANGED", "Account changed; refresh before retrying")
+			}
+			return safeReauthTask(record), nil
+		}
 	}
 	expectedCredentialsHash, err := hashReauthCredentials(account.Credentials)
 	if err != nil {
@@ -773,6 +812,17 @@ func (s *OpenAIOAuthReauthService) ClaimTaskWithEngines(ctx context.Context, wor
 	if err != nil || stored == nil {
 		_ = s.repo.MarkFailed(ctx, record.ID, workerID, "re-login configuration is missing")
 		return nil, nil
+	}
+	if account.IsVMKernel() {
+		if err := validateContainerTwoFAIdentity(account, stored.LoginEmail); err != nil {
+			_ = s.repo.MarkFailed(ctx, record.ID, workerID, "saved login identity does not match account")
+			return nil, nil
+		}
+		hash, hashErr := hashReauthCredentials(account.Credentials)
+		if hashErr != nil || hash != record.ExpectedCredentialsHash {
+			_ = s.repo.MarkFailed(ctx, record.ID, workerID, "account credentials changed before login")
+			return nil, nil
+		}
 	}
 	mode := strings.TrimSpace(stored.CredentialMode)
 	if mode == "" {
@@ -1144,7 +1194,8 @@ func (s *OpenAIOAuthReauthService) applyReauthTokenInfo(ctx context.Context, rec
 			slog.Warn("openai_oauth_reauth_token_cache_invalidation_failed", "account_id", account.ID, "task_id", taskID)
 		}
 	}
-	if s.runtimeBlocker != nil {
+	// Container recovery must not clear unrelated business/runtime blocks.
+	if s.runtimeBlocker != nil && !account.IsVMKernel() {
 		s.runtimeBlocker.ClearAccountSchedulingBlock(account.ID)
 	}
 	if !taskFinalized {
@@ -1198,6 +1249,9 @@ func (s *OpenAIOAuthReauthService) applyCredentials(ctx context.Context, taskID 
 func validateReauthToken(account *Account, tokenInfo *OpenAITokenInfo) error {
 	if account == nil || tokenInfo == nil {
 		return infraerrors.BadRequest("OPENAI_REAUTH_IDENTITY_MISMATCH", "OpenAI token identity is missing")
+	}
+	if account.IsVMKernel() && account.GetCredential("chatgpt_account_id") == "" && account.GetCredential("chatgpt_user_id") == "" {
+		return infraerrors.BadRequest("OPENAI_REAUTH_IDENTITY_MISSING", "A stable OpenAI account identity is required")
 	}
 	hasStoredIdentity := false
 	oldAccountID := strings.TrimSpace(account.GetCredential("chatgpt_account_id"))

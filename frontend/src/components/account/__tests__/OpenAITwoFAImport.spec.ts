@@ -132,3 +132,17 @@ it.each([
   expect(wrapper.text()).toContain('tokenGuard.twoFA.states.created')
   expect(wrapper.text()).not.toContain(`tokenGuard.twoFA.importErrors.${key}`)
 })
+
+it('requests strict container login identity before importing credentials', async () => {
+  vi.mocked(startTwoFALogin).mockImplementation(async (entry, mode) => {
+    expect(entry).toEqual({ email: 'a@example.com', password: 'p', mfa_secret: 's' })
+    expect(mode).toBe('docker_kernel')
+    return { id: 'container-login', status: 'running' }
+  })
+  const importCredential = vi.fn().mockResolvedValue('created')
+  const wrapper = mount(OpenAITwoFAImport, { props: { importCredential, executionMode: 'docker_kernel' } })
+  await start(wrapper, 'a@example.com----p----s')
+  expect(startTwoFALogin).toHaveBeenCalledTimes(1)
+  expect(startTwoFALogin).toHaveBeenCalledWith({ email: 'a@example.com', password: '', mfa_secret: '' }, 'docker_kernel')
+  expect(importCredential).toHaveBeenCalledTimes(1)
+})

@@ -41,7 +41,7 @@ func (s *AccountTokenGuardService) StartTwoFALoginForOperations(ctx context.Cont
 	return s.startTwoFALogin(ctx, entry, false)
 }
 
-func (s *AccountTokenGuardService) startTwoFALogin(ctx context.Context, entry AccountTokenGuardReloginAccount, saveToLegacyGuard bool) (*OpenAITwoFALoginJob, error) {
+func (s *AccountTokenGuardService) startTwoFALogin(ctx context.Context, entry AccountTokenGuardReloginAccount, saveToLegacyGuard bool, requireIdentity ...bool) (*OpenAITwoFALoginJob, error) {
 	if err := ValidateOpenAITwoFALogin(entry); err != nil {
 		return nil, err
 	}
@@ -70,6 +70,9 @@ func (s *AccountTokenGuardService) startTwoFALogin(ctx context.Context, entry Ac
 	go func() {
 		defer cancel()
 		credential, loginErr := s.relogin(loginCtx, cfg, entry)
+		if loginErr == nil && len(requireIdentity) > 0 && requireIdentity[0] {
+			credential, loginErr = validatedContainerLoginCredential(credential, entry.Email)
+		}
 		s.loginMu.Lock()
 		defer s.loginMu.Unlock()
 		if s.logins[job.ID] != job {
@@ -211,4 +214,23 @@ func (s *AccountTokenGuardService) clearTwoFALogins() {
 		job.Credential = nil
 		delete(s.logins, id)
 	}
+}
+
+// Container imports require token identity from the trusted login service,
+// instead of trusting the requested email echoed into the import payload.
+func (s *AccountTokenGuardService) StartContainerTwoFALogin(ctx context.Context, entry AccountTokenGuardReloginAccount) (*OpenAITwoFALoginJob, error) {
+	return s.startTwoFALogin(ctx, entry, false, true)
+}
+func validatedContainerLoginCredential(credential map[string]any, email string) (map[string]any, error) {
+	info, _, err := directReauthTokenInfo(credential, nil)
+	if err != nil || info == nil || !strings.EqualFold(strings.TrimSpace(info.Email), strings.TrimSpace(email)) ||
+		(info.ChatGPTAccountID == "" && info.ChatGPTUserID == "") {
+		return nil, errors.New("login_identity_mismatch")
+	}
+	out := twoFALoginCredential(credential, info.Email)
+	out["chatgpt_account_id"] = info.ChatGPTAccountID
+	out["chatgpt_user_id"] = info.ChatGPTUserID
+	delete(out, "account_id")
+	delete(out, "user_id")
+	return out, nil
 }

@@ -285,6 +285,16 @@ func TestClientCodexHTTPFailureClassification(t *testing.T) {
 			attemptCode: "kernel_response_failed", providerCode: "provider_error", providerStatus: 503,
 		},
 		{
+			name: "observed upstream auth without terminal header", status: 401,
+			body:        `{"error":{"code":"upstream_auth","type":"api_error","message":"upstream status 401: private-provider-body"}}`,
+			attemptCode: "kernel_response_failed", providerCode: "upstream_auth", providerStatus: 401,
+		},
+		{
+			name: "upstream auth code without matching HTTP status", status: 502,
+			body:        `{"error":{"code":"upstream_auth","type":"api_error","message":"Unauthorized"}}`,
+			attemptCode: "kernel_status_502",
+		},
+		{
 			name: "observed local capacity rejection", status: 503,
 			body:        `{"error":{"code":"no_capacity","message":"credential busy","type":"api_error"}}`,
 			attemptCode: "kernel_no_capacity",
@@ -337,6 +347,9 @@ func TestClientCodexHTTPFailureClassification(t *testing.T) {
 			}
 			if result == nil || !result.Dispatched || !result.Settled || result.Completed || result.Accepted || result.HasUsage || emitted != 0 {
 				t.Fatalf("failure became unknown execution or success: result=%+v emitted=%d", result, emitted)
+			}
+			if bytes.Contains(result.ErrorEvent, []byte("private-provider-body")) {
+				t.Fatal("provider auth diagnostic leaked")
 			}
 			if result.RequestID != "request-http-failure" || result.Headers.Get("Retry-After") != "43" || result.Headers.Get("Authorization") != "" {
 				t.Fatal("safe response metadata lost or private header retained")

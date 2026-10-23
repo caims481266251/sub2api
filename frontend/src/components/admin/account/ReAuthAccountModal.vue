@@ -48,6 +48,8 @@
         </div>
       </div>
 
+      <SavedTwoFAReauth v-if="show && isOpenAI && account.execution_mode === 'docker_kernel'" :key="account.id" :account-id="account.id" @reauthorized="handleSavedTwoFAReauthorized" />
+
       <!-- Add Method Selection (Claude only) -->
       <fieldset v-if="isAnthropic" class="border-0 p-0">
         <legend class="input-label">{{ t('admin.accounts.oauth.authMethod') }}</legend>
@@ -204,6 +206,7 @@ import { useGeminiOAuth } from '@/composables/useGeminiOAuth'
 import { useAntigravityOAuth } from '@/composables/useAntigravityOAuth'
 import { useGrokOAuth } from '@/composables/useGrokOAuth'
 import type { Account } from '@/types'
+import SavedTwoFAReauth from '@/components/account/SavedTwoFAReauth.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import OAuthAuthorizationFlow from '@/components/account/OAuthAuthorizationFlow.vue'
@@ -232,6 +235,17 @@ const emit = defineEmits<{
 
 const appStore = useAppStore()
 const { t } = useI18n()
+
+async function handleSavedTwoFAReauthorized() {
+  const accountID = props.account?.id
+  if (!accountID) return
+  try {
+    const updated = await adminAPI.accounts.getById(accountID)
+    if (props.show && props.account?.id === accountID) emit('reauthorized', updated)
+  } catch {
+    appStore.showError(t('savedTwoFA.loadFailed'))
+  }
+}
 
 // OAuth composables
 const claudeOAuth = useAccountOAuth()

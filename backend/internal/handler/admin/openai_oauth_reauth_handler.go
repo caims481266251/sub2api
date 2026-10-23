@@ -54,6 +54,9 @@ func (h *OpenAIOAuthReauthHandler) SaveConfig(c *gin.Context) {
 }
 
 func (h *OpenAIOAuthReauthHandler) GetStatus(c *gin.Context) {
+	if !rotationPrivate(c) {
+		return
+	}
 	accountID, ok := parseReauthAccountID(c)
 	if !ok {
 		return
@@ -67,6 +70,9 @@ func (h *OpenAIOAuthReauthHandler) GetStatus(c *gin.Context) {
 }
 
 func (h *OpenAIOAuthReauthHandler) CreateTask(c *gin.Context) {
+	if !rotationPrivate(c) {
+		return
+	}
 	accountID, ok := parseReauthAccountID(c)
 	if !ok {
 		return

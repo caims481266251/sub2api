@@ -64,6 +64,13 @@ func (s *OpenAIGatewayService) observeVMKernelOpenAIResult(ctx context.Context, 
 	if snapshot := ParseCodexRateLimitHeaders(result.Headers); snapshot != nil {
 		s.updateCodexUsageSnapshot(ctx, account.ID, snapshot)
 	}
+	if len(result.ErrorEvent) != 0 && vmKernelProviderErrorStatus(result.ErrorEvent) == http.StatusUnauthorized && s.excelOAuthReauth != nil {
+		stateCtx, cancel := openAIAccountStateContext(ctx)
+		defer cancel()
+		if s.excelOAuthReauth.handleContainerUnauthorized(stateCtx, account, result.DispatchedCredentialsHash) {
+			return
+		}
+	}
 	if len(result.ErrorEvent) != 0 && s.rateLimitService != nil {
 		s.handleOpenAIWSFailureAccountSideEffects(ctx, account, model, result.Headers, result.ErrorEvent)
 	}

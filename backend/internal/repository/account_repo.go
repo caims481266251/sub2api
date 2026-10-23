@@ -1121,8 +1121,8 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 // account still has the credential snapshot captured before protocol login.
 // Re-authentication may take several minutes; the expected-value guard keeps a
 // concurrent manual edit or token refresh from being overwritten by a stale
-// callback. Successful swaps also restore the account's active/schedulable
-// state and clear transient scheduling quarantine.
+// callback. Container swaps restore only this flow's authentication pause;
+// normal accounts retain the existing scheduling recovery behavior.
 func (r *accountRepository) ApplyOpenAIOAuthReauth(
 	ctx context.Context,
 	taskID int64,
@@ -1167,14 +1167,14 @@ func (r *accountRepository) ApplyOpenAIOAuthReauth(
 				ELSE COALESCE(a.extra, '{}'::jsonb) || $2::jsonb
 			END,
 			expires_at = COALESCE($14::timestamptz, a.expires_at),
-			status = $5,
-			error_message = '',
-			schedulable = CASE WHEN a.extra ? 'openai_two_fa_admission' THEN a.schedulable ELSE TRUE END,
-			rate_limited_at = NULL,
-			rate_limit_reset_at = NULL,
-			overload_until = NULL,
-			temp_unschedulable_until = NULL,
-			temp_unschedulable_reason = NULL,
+			status = CASE WHEN a.execution_mode = 'docker_kernel' AND (a.status <> 'error' OR a.error_message IS DISTINCT FROM $15) THEN a.status ELSE $5 END,
+			error_message = CASE WHEN a.execution_mode = 'docker_kernel' AND a.error_message IS DISTINCT FROM $15 THEN a.error_message ELSE '' END,
+			schedulable = CASE WHEN a.execution_mode = 'docker_kernel' OR a.extra ? 'openai_two_fa_admission' THEN a.schedulable ELSE TRUE END,
+			rate_limited_at = CASE WHEN a.execution_mode = 'docker_kernel' THEN a.rate_limited_at ELSE NULL END,
+			rate_limit_reset_at = CASE WHEN a.execution_mode = 'docker_kernel' THEN a.rate_limit_reset_at ELSE NULL END,
+			overload_until = CASE WHEN a.execution_mode = 'docker_kernel' THEN a.overload_until ELSE NULL END,
+			temp_unschedulable_until = CASE WHEN a.execution_mode = 'docker_kernel' THEN a.temp_unschedulable_until ELSE NULL END,
+			temp_unschedulable_reason = CASE WHEN a.execution_mode = 'docker_kernel' THEN a.temp_unschedulable_reason ELSE NULL END,
 			updated_at = NOW()
 		FROM locked_task
 		WHERE a.id = $3
@@ -1205,7 +1205,7 @@ func (r *accountRepository) ApplyOpenAIOAuthReauth(
 		service.SchedulerOutboxEventAccountChanged, taskID, workerID,
 		service.OpenAIOAuthReauthStatusCallbackProcessing,
 		service.OpenAIOAuthReauthStatusSucceeded, service.OpenAIOAuthReauthStageSucceeded,
-		subscriptionExpiresAt)
+		subscriptionExpiresAt, service.OpenAIContainerAuthRequired)
 	if err != nil {
 		return false, err
 	}

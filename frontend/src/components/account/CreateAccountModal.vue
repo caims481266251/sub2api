@@ -3801,7 +3801,7 @@
 
     <!-- Step 2: OAuth Authorization -->
     <div v-else class="space-y-5">
-      <OpenAITwoFAImport v-if="isOpenAITwoFA" :import-credential="importTwoFACredential" @busy="twoFABusy = $event" />
+      <OpenAITwoFAImport v-if="isOpenAITwoFA" :execution-mode="form.execution_mode" :import-credential="importTwoFACredential" @busy="twoFABusy = $event" />
       <OAuthAuthorizationFlow
         v-else
         ref="oauthFlowRef"

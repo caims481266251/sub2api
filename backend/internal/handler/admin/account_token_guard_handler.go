@@ -130,6 +130,7 @@ func (h *AccountTokenGuardHandler) StartTwoFALogin(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 16<<10)
 	var input struct {
 		service.AccountTokenGuardReloginAccount
+		ExecutionMode    string `json:"execution_mode"`
 		CredentialTarget string `json:"credential_target"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
@@ -154,7 +155,11 @@ func (h *AccountTokenGuardHandler) StartTwoFALogin(c *gin.Context) {
 			response.BadRequest(c, "请先在凭证运营中启用凭据加密，再进行 2FA 导入")
 			return
 		}
-		job, err = h.svc.StartTwoFALoginForOperations(c.Request.Context(), entry)
+		if input.ExecutionMode == service.AccountExecutionModeDockerKernel {
+			job, err = h.svc.StartContainerTwoFALogin(c.Request.Context(), entry)
+		} else {
+			job, err = h.svc.StartTwoFALoginForOperations(c.Request.Context(), entry)
+		}
 	case "", "guard": // Preserve the contract for older clients.
 		job, err = h.svc.StartTwoFALogin(c.Request.Context(), entry)
 	default:

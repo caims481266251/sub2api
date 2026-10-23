@@ -44,6 +44,8 @@
         </div>
       </div>
 
+      <SavedTwoFAReauth v-if="show && isOpenAI && account.execution_mode === 'docker_kernel'" :key="account.id" :account-id="account.id" @reauthorized="emit('reauthorized')" />
+
       <!-- Add Method Selection (Claude only) -->
       <fieldset v-if="isAnthropic" class="border-0 p-0">
         <legend class="input-label">{{ t('admin.accounts.oauth.authMethod') }}</legend>
@@ -194,6 +196,7 @@ import { useOpenAIOAuth } from '@/composables/useOpenAIOAuth'
 import { useGeminiOAuth } from '@/composables/useGeminiOAuth'
 import { useAntigravityOAuth } from '@/composables/useAntigravityOAuth'
 import type { Account } from '@/types'
+import SavedTwoFAReauth from '@/components/account/SavedTwoFAReauth.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import OAuthAuthorizationFlow from './OAuthAuthorizationFlow.vue'

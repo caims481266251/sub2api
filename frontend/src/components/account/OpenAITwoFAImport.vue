@@ -40,6 +40,7 @@ import { deleteTwoFALogin, getTwoFALogin, parseTwoFALoginText, startTwoFALogin }
 import type { TokenGuardReloginAccount } from '@/api/admin/accountTokenGuard'
 
 const props = defineProps<{
+  executionMode?: 'normal' | 'docker_kernel'
   importCredential: (credential: Record<string, unknown>, email: string, login: TokenGuardReloginAccount) => Promise<'created' | 'skipped'>
 }>()
 const emit = defineEmits<{ busy: [value: boolean] }>()
@@ -92,7 +93,7 @@ async function run() {
         if (!row.credential) {
           row.status = 'login'
           // Keep the job ID on polling failures; retry resumes the same login.
-          if (!row.jobId) row.jobId = (await startTwoFALogin(row.entry)).id
+          if (!row.jobId) row.jobId = (await startTwoFALogin(row.entry, props.executionMode)).id
           let job = await getTwoFALogin(row.jobId)
           while (job.status === 'running' && !stopRequested.value && !disposed) {
             await new Promise(resolve => setTimeout(resolve, 1500))
