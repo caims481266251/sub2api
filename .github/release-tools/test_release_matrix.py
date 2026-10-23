@@ -76,6 +76,7 @@ class ReleaseMatrixTest(unittest.TestCase):
                 release.generate_config(argparse.Namespace(mode='publish', simple=simple, output='publisher.yaml'))
                 data = yaml.safe_load(Path('publisher.yaml').read_text())
                 self.assertTrue(data['builds'][0]['skip'])
+                self.assertTrue(data['release']['draft'])
                 self.assertFalse(data['archives'])
                 self.assertFalse(data['dockers'])
                 self.assertEqual(data['release']['header'], original['release']['header'])

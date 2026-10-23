@@ -1,2 +1,5 @@
 artifacts/
 __pycache__/
+!tests/
+tests/*
+!tests/test_update_agent.py

@@ -25,6 +25,7 @@ import (
 var revisionPattern = regexp.MustCompile(`^[a-zA-Z0-9._-]{1,128}$`)
 
 type Helper struct {
+	Version    string
 	serviceGID int
 	root       string
 	driver     Driver

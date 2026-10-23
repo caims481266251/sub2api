@@ -227,10 +227,14 @@ jobs:
 
   build-docker-kernel-tools:
     needs: prepare
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
-        arch: [amd64, arm64]
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v6
         with:
@@ -358,6 +362,20 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "$RELEASE_TAG" docker-kernel-tools-output/* --repo "$GITHUB_REPOSITORY"
+      - name: Publish only after all companion assets are present
+        if: ${{ env.DRY_RUN != 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets > "$RUNNER_TEMP/assets.json"
+          python - "$RUNNER_TEMP/assets.json" "$RELEASE_VERSION" <<'PYASSETS'
+          import json,sys
+          names={a['name'] for a in json.load(open(sys.argv[1]))['assets']}
+          for arch in ('amd64','arm64'):
+              base='docker-kernel-tools-%s-linux-%s.tar.gz' % (sys.argv[2],arch)
+              assert {base,base+'.sha256'} <= names, 'incomplete runtime release'
+          PYASSETS
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false
       - name: Upload dry-run checksums and metadata
         if: ${{ env.DRY_RUN == 'true' }}
         uses: actions/upload-artifact@v7

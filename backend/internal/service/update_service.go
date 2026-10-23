@@ -21,6 +21,7 @@ import (
 	"time"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/Wei-Shaw/sub2api/internal/vmruntime"
 	"golang.org/x/mod/semver"
 )
 
@@ -72,6 +73,7 @@ type UpdateService struct {
 	currentVersion  string
 	buildType       string // "source" for manual builds, "release" for CI builds
 	installMu       sync.Mutex
+	runtimeSocket   string
 	restartRequired bool
 }
 
@@ -280,6 +282,17 @@ func (s *UpdateService) applyReleaseAssets(ctx context.Context, releaseAssets []
 		return fmt.Errorf("chmod failed: %w", err)
 	}
 
+	// Prepare the complete matching runtime before touching the executable.
+	if s.runtimeSocket != "" {
+		version := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(downloadURL), "sub2api_"), "_"+archiveName+".tar.gz")
+		if checksumURL == "" {
+			return fmt.Errorf("Docker runtime updates require release checksums")
+		}
+		if err := vmruntime.ReleaseOperation(ctx, s.runtimeSocket, "prepare", version); err != nil {
+			return err
+		}
+	}
+
 	// Atomic replacement using rename pattern:
 	// 1. Rename current -> backup (atomic on Unix)
 	// 2. Rename new -> current (atomic on Unix, same filesystem)
@@ -288,6 +301,12 @@ func (s *UpdateService) applyReleaseAssets(ctx context.Context, releaseAssets []
 
 	// Remove old backup if exists
 	_ = os.Remove(backupPath)
+
+	if s.runtimeSocket != "" {
+		if err := os.WriteFile(backupPath+".version", []byte(s.currentVersion), 0600); err != nil {
+			return err
+		}
+	}
 
 	// Step 1: Move current binary to backup
 	if err := os.Rename(exePath, backupPath); err != nil {
@@ -332,6 +351,15 @@ func (s *UpdateService) Rollback() error {
 		return fmt.Errorf("no backup found")
 	}
 
+	if s.runtimeSocket != "" {
+		version, err := os.ReadFile(backupFile + ".version")
+		if err != nil {
+			return fmt.Errorf("runtime rollback version unavailable; select a complete release")
+		}
+		if err := vmruntime.ReleaseOperation(context.Background(), s.runtimeSocket, "prepare", strings.TrimSpace(string(version))); err != nil {
+			return err
+		}
+	}
 	// Replace current with backup
 	if err := os.Rename(backupFile, exePath); err != nil {
 		return fmt.Errorf("rollback failed: %w", err)

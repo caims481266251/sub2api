@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -18,7 +19,10 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/vmruntime"
 )
 
+var Version = "dev"
+
 func main() {
+	showVersion := flag.Bool("version", false, "print release version")
 	enabled := flag.Bool("enabled", false, "explicitly enable the privileged helper")
 	root := flag.String("root", "/var/lib/sub2-docker", "private persistent instance root")
 	socket := flag.String("socket", "/run/sub2-docker/helper.sock", "private local Unix socket")
@@ -27,6 +31,10 @@ func main() {
 	serviceUID := flag.Int("service-uid", 0, "application UID owning the automatically prepared coordinator lock")
 	networkPool := flag.String("network-pool", "10.240.0.0/16", "local per-account runner subnet pool")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(Version)
+		return
+	}
 	if !*enabled {
 		log.Print("Docker helper disabled")
 		return
@@ -55,6 +63,7 @@ func main() {
 		log.Fatal("cannot acquire helper state lock")
 	}
 	defer helper.Close()
+	helper.Version = Version
 	if err = helper.ConfigureServiceGroup(*serviceGID); err != nil {
 		log.Fatal("cannot configure service group")
 	}

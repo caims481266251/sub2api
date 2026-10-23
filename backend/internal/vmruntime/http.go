@@ -23,6 +23,10 @@ type reply struct {
 func (h *Helper) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/v1/version" && r.Method == http.MethodGet {
+			json.NewEncoder(w).Encode(map[string]any{"version": h.Version, "runtime": "container-v1", "protocol": ProtocolVersion})
+			return
+		}
 		if r.URL.Path == "/v1/inventory" && r.Method == http.MethodGet {
 			states, err := h.Inventory()
 			if err != nil {

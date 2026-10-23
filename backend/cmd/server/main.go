@@ -24,6 +24,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/Wei-Shaw/sub2api/internal/setup"
+	"github.com/Wei-Shaw/sub2api/internal/vmruntime"
 	"github.com/Wei-Shaw/sub2api/internal/web"
 
 	"github.com/gin-gonic/gin"
@@ -167,6 +168,15 @@ func runMainServer() {
 	if cfg.RunMode == config.RunModeSimple {
 		log.Println("⚠️  WARNING: Running in SIMPLE mode - billing and quota checks are DISABLED")
 	}
+	if cfg.VMKernel.Enabled {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		err := vmruntime.ReleaseOperation(ctx, cfg.VMKernel.HelperSocket, "activate", Version)
+		cancel()
+		if err != nil {
+			log.Fatalf("Docker runtime activation failed; server was not started: %v", err)
+		}
+	}
+
 	releaseVMCoordinator, err := service.AcquireVMKernelStartupGuard(cfg)
 	if err != nil {
 		log.Fatalf("Failed to initialize VM coordinator: %v", err)

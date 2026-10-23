@@ -103,7 +103,7 @@ func TestUpdateServiceRequiresRestartBeforeNextMutation(t *testing.T) {
 		return
 	}
 
-	for _, scenario := range []string{"update-update", "update-rollback", "rollback-update", "rollback-rollback", "failed-update-retry"} {
+	for _, scenario := range []string{"update-update", "update-rollback", "rollback-update", "rollback-rollback", "failed-update-retry", "runtime-checksum-missing"} {
 		t.Run(scenario, func(t *testing.T) {
 			// Never rename the parent test runner: only the disposable child copy.
 			executable, err := os.Executable()
@@ -141,6 +141,14 @@ func runUpdateInstallScenario(t *testing.T, scenario string) {
 		}},
 	}
 	update := func() error { return svc.PerformUpdate(context.Background()) }
+	if scenario == "runtime-checksum-missing" {
+		svc.runtimeSocket = filepath.Join(t.TempDir(), "missing-helper")
+		before := updateInstallFileHashes(t, executable)
+		require.ErrorContains(t, update(), "require release checksums")
+		require.Equal(t, before, updateInstallFileHashes(t, executable))
+		require.False(t, svc.restartRequired)
+		return
+	}
 	if scenario == "failed-update-retry" {
 		client.failDownload = true
 		require.ErrorContains(t, update(), "download unavailable")
