@@ -17,6 +17,9 @@ type Event struct {
 type Result struct {
 	// Settled means the attempt ended at the guest, including a provider rejection.
 	// It is deliberately independent of successful completion and usage presence.
+	// Cancellation only records the control response; HTTP 2xx alone never proves settlement.
+	CancelStatus                                                string
+	CancelHTTPStatus                                            int
 	Settled                                                     bool
 	RequestID                                                   string
 	ErrorEvent                                                  json.RawMessage

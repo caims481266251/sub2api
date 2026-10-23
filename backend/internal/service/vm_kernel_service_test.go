@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -234,33 +235,84 @@ func TestVMKernelLifecycleInactiveRejectsProbe(t *testing.T) {
 	}
 }
 
-func TestVMKernelLifecycleUnknownRequiresNewGeneration(t *testing.T) {
-	s, a, f := vmLifecycleSetup(t)
-	s.prepare(context.Background(), a)
-	// Exercise actual Execute -> publish -> sanitized Summary, not a manually
-	// constructed status that could hide an error-code projection mismatch.
-	f.state.ActualAccelerator = "docker"
-	s.publishHealth(a.ID, f.state, nil)
-	s.publish(a, f.state, nil)
-	f.kernelFail = true
-	r, err := s.Execute(context.Background(), a, "responses", []byte(`{}`), nil)
-	if err == nil || r == nil || !r.Dispatched || VMKernelRuntimeReady(a) || !s.slot(a.ID).quarantined {
-		t.Fatalf("unknown not quarantined %+v %v", r, err)
-	}
-	value, found := vmKernelReadiness.Load(a.ID)
-	if !found || value.(vmRuntimeStatus).state.ErrorCode != "kernel_attempt_unknown" {
-		t.Fatal("unknown attempt lost its controlled internal classification")
-	}
-	summary := VMKernelRuntimeSummary(a)
-	if summary == nil || !summary.Ready || summary.ErrorCode != "" || summary.ActualAccelerator != "docker" {
-		t.Fatalf("request outcome was displayed as a local runtime fault: %+v", summary)
-	}
-	f.kernelFail = false
-	s.prepare(context.Background(), a)
-	if f.state.Generation != 2 || !VMKernelRuntimeReady(a) || s.slot(a.ID).quarantined {
-		t.Fatalf("binding not reprovisioned %+v %v", f.state, f.operations())
+func TestVMKernelUnknownRequestDoesNotRestartHealthyRuntime(t *testing.T) {
+	for _, probe := range []bool{false, true} {
+		t.Run(fmt.Sprintf("probe=%v", probe), func(t *testing.T) {
+			s, a, f := vmLifecycleSetup(t)
+			s.prepare(context.Background(), a)
+			f.state.ActualAccelerator = "docker"
+			s.publishHealth(a.ID, f.state, nil)
+			f.kernelFail = true
+			call := s.Execute
+			if probe {
+				call = s.ExecuteProbe
+			}
+			r, err := call(context.Background(), a, "responses", []byte(`{}`), nil)
+			var attempt *vmkernel.AttemptError
+			if !errors.As(err, &attempt) || attempt.SafeToRetry || r == nil || !r.Dispatched || r.Settled || r.Completed {
+				t.Fatalf("unknown outcome became safe replay or success: %+v %v", r, err)
+			}
+			if !VMKernelRuntimeReady(a) {
+				t.Fatal("one incomplete request disabled healthy account")
+			}
+			if f.kernelCalls != 1 {
+				t.Fatal("failed attempt replayed")
+			}
+			f.kernelFail = false
+			for i := 0; i < 3; i++ {
+				s.prepare(context.Background(), a)
+			}
+			if f.state.Generation != 1 || !VMKernelRuntimeReady(a) {
+				t.Fatalf("healthy runtime reprovisioned: %+v %v", f.state, f.operations())
+			}
+			next, err := s.Execute(context.Background(), a, "responses", []byte(`{}`), nil)
+			if err != nil || !next.Completed || f.kernelCalls != 2 {
+				t.Fatalf("independent request blocked: %+v %v", next, err)
+			}
+		})
 	}
 }
+
+func TestVMKernelHeaderTimeoutDoesNotRestartHealthyRuntime(t *testing.T) {
+	s, a, f := vmLifecycleSetup(t)
+	s.prepare(context.Background(), a)
+	f.kernelRelease = make(chan struct{})
+	s.kernel.ResponseHeaderTimeout = 30 * time.Millisecond
+	r, err := s.Execute(context.Background(), a, "responses", []byte(`{}`), nil)
+	var attempt *vmkernel.AttemptError
+	if !errors.As(err, &attempt) || attempt.Code != "kernel_transport_failed" || attempt.SafeToRetry || !r.Dispatched || r.Settled {
+		t.Fatalf("timeout boundary changed: %+v %v", r, err)
+	}
+	close(f.kernelRelease)
+	s.prepare(context.Background(), a)
+	if f.state.Generation != 1 || !VMKernelRuntimeReady(a) {
+		t.Fatal("header timeout restarted account")
+	}
+	r, err = s.Execute(context.Background(), a, "responses", []byte(`{}`), nil)
+	if err != nil || !r.Completed {
+		t.Fatalf("next request failed: %v", err)
+	}
+}
+
+func TestVMKernelUsesExistingGatewayTimeoutPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		platform        string
+		openai, general int
+		want            time.Duration
+	}{
+		{PlatformOpenAI, 0, 600, 0},
+		{PlatformOpenAI, 1800, 600, 1800 * time.Second},
+		{PlatformAnthropic, 0, 600, 600 * time.Second},
+		{PlatformAnthropic, 1800, 0, 0},
+	} {
+		cfg := &config.Config{}
+		cfg.Gateway.OpenAIResponseHeaderTimeout, cfg.Gateway.ResponseHeaderTimeout = tc.openai, tc.general
+		if got := newVMKernelClient(cfg, tc.platform).ResponseHeaderTimeout; got != tc.want {
+			t.Fatalf("platform=%s got %v want %v", tc.platform, got, tc.want)
+		}
+	}
+}
+
 func TestVMKernelLifecycleFinalCredentialAndGroupFence(t *testing.T) {
 	for _, change := range []string{"credentials", "groups", "proxy"} {
 		t.Run(change, func(t *testing.T) {
@@ -573,7 +625,7 @@ func TestVMKernelAdmissionControlWaitHonorsCancellation(t *testing.T) {
 }
 
 func TestVMKernelTransientObservationRecoveryBound(t *testing.T) {
-	for _, scenario := range []string{"recovers", "persistent", "quarantined", "mismatch"} {
+	for _, scenario := range []string{"recovers", "persistent", "mismatch"} {
 		t.Run(scenario, func(t *testing.T) {
 			s, a, f := vmLifecycleSetup(t)
 			ctx := context.Background()
@@ -584,16 +636,13 @@ func TestVMKernelTransientObservationRecoveryBound(t *testing.T) {
 			f.inspectError = "docker_operation_unknown"
 			f.inspectErrorWithState = true
 			f.mu.Unlock()
-			if scenario == "quarantined" {
-				s.slot(a.ID).quarantined = true
-			}
 			if scenario == "mismatch" {
 				f.mu.Lock()
 				f.inspectError = "guest_generation_mismatch"
 				f.mu.Unlock()
 			}
 			s.prepare(ctx, a)
-			if scenario == "quarantined" || scenario == "mismatch" {
+			if scenario == "mismatch" {
 				f.mu.Lock()
 				defer f.mu.Unlock()
 				if f.state.Generation <= generation {
@@ -672,7 +721,7 @@ func TestVMKernelProbeModelUsesAccountAllowlist(t *testing.T) {
 	}
 }
 
-func TestVMKernelCancellationDrainsConcurrentPeerBeforeRecovery(t *testing.T) {
+func TestVMKernelCancellationPreservesPeerAndHealthyRuntime(t *testing.T) {
 	s, a, f := vmLifecycleSetup(t)
 	s.prepare(context.Background(), a)
 	f.kernelEntered, f.kernelRelease = make(chan struct{}, 2), make(chan struct{})
@@ -700,8 +749,8 @@ func TestVMKernelCancellationDrainsConcurrentPeerBeforeRecovery(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("cancel did not finish")
 	}
-	if VMKernelRuntimeReady(a) {
-		t.Fatal("unknown cancellation must stop new admission")
+	if !VMKernelRuntimeReady(a) {
+		t.Fatal("request cancellation disabled healthy account")
 	}
 	s.prepare(context.Background(), a)
 	if f.state.Generation != 1 {
@@ -717,8 +766,11 @@ func TestVMKernelCancellationDrainsConcurrentPeerBeforeRecovery(t *testing.T) {
 		t.Fatalf("peer failed: %v", err)
 	}
 	s.prepare(context.Background(), a)
-	if f.state.Generation != 2 || !VMKernelRuntimeReady(a) {
-		t.Fatal("drained runtime was not recovered")
+	if f.state.Generation != 1 || !VMKernelRuntimeReady(a) {
+		t.Fatal("request cancellation reprovisioned a healthy runtime")
+	}
+	if next, err := s.Execute(context.Background(), a, "responses", []byte(`{}`), nil); err != nil || !next.Completed {
+		t.Fatalf("new independent request blocked: %v", err)
 	}
 }
 
@@ -754,7 +806,7 @@ func TestVMKernelKnownUpstreamFailureDoesNotRebuildGuest(t *testing.T) {
 	if err == nil || result == nil || !result.Settled || result.Completed {
 		t.Fatalf("unexpected rejected outcome: %+v %v", result, err)
 	}
-	if s.slot(a.ID).quarantined || !VMKernelRuntimeReady(a) {
+	if !VMKernelRuntimeReady(a) {
 		t.Fatal("known upstream rejection quarantined healthy guest")
 	}
 	f.kernelKnownFailure = false
@@ -861,7 +913,7 @@ func TestVMKernelCapacityWaitCancellationDoesNotDispatchOrQuarantine(t *testing.
 		t.Fatal("cancelled waiter reached guest")
 	default:
 	}
-	if !VMKernelRuntimeReady(a) || s.slot(a.ID).quarantined {
+	if !VMKernelRuntimeReady(a) {
 		t.Fatal("undispatched cancellation quarantined peer")
 	}
 	f.kernelRelease <- struct{}{}
@@ -1048,7 +1100,7 @@ func TestVMKernelHTTPProviderErrorKeepsReadyAndDoesNotRebuild(t *testing.T) {
 	if err == nil || result == nil || !result.Dispatched || !result.Settled || result.Completed || len(result.ErrorEvent) == 0 {
 		t.Fatalf("HTTP provider error was not classified as settled: result=%+v err=%v", result, err)
 	}
-	if !VMKernelRuntimeReady(a) || s.slot(a.ID).quarantined {
+	if !VMKernelRuntimeReady(a) {
 		t.Fatal("HTTP provider rejection isolated a healthy VM")
 	}
 	before := len(f.operations())

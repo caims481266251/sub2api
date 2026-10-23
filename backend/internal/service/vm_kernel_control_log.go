@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
+	"net"
 	"strconv"
 	"strings"
 
@@ -57,4 +59,29 @@ func logVMKernelControlFailure(accountID int64, stage string, generation uint64,
 		stage = "control"
 	}
 	slog.Warn("vm_kernel_control_failed", "account_id", accountID, "stage", stage, "generation", generation, "code", vmKernelControlErrorCode(err))
+}
+
+// Request diagnostics contain only bounded classifications, never raw transport
+// errors, proxy URLs, credentials, request bodies or cancellation payloads.
+func logVMKernelAttemptFailure(accountID int64, generation uint64, result *vmkernel.Result, err error) {
+	reason := "transport_or_stream_error"
+	var netErr net.Error
+	switch {
+	case errors.Is(err, context.Canceled):
+		reason = "context_cancelled"
+	case errors.Is(err, context.DeadlineExceeded):
+		reason = "context_deadline_exceeded"
+	case errors.As(err, &netErr) && netErr.Timeout():
+		reason = "transport_timeout"
+	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+		reason = "unexpected_eof"
+	}
+	cancel := "not_attempted"
+	switch result.CancelStatus {
+	case "transport_failed", "response_incomplete", "rejected", "acknowledged":
+		cancel = result.CancelStatus
+	}
+	slog.Warn("vm_kernel_attempt_failed", "account_id", accountID, "generation", generation,
+		"attempt_id", result.AttemptID, "code", vmKernelControlErrorCode(err), "reason", reason,
+		"duration_ms", result.Duration.Milliseconds(), "cancel_status", cancel, "cancel_http_status", result.CancelHTTPStatus)
 }

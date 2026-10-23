@@ -116,15 +116,15 @@ func (m *vmKernelAccountMutex) lockContext(ctx context.Context) bool {
 }
 
 type vmKernelSlot struct {
-	mu                    vmKernelAccountMutex
-	active                int
-	activeDone            chan struct{}
-	activeChanged         chan struct{}
-	quarantined, deleting bool
-	revoked               atomic.Bool
-	observationFailures   int
-	verifiedBinding       string
-	nextProbe             time.Time
+	mu                  vmKernelAccountMutex
+	active              int
+	activeDone          chan struct{}
+	activeChanged       chan struct{}
+	deleting            bool
+	revoked             atomic.Bool
+	observationFailures int
+	verifiedBinding     string
+	nextProbe           time.Time
 }
 type VMKernelService struct {
 	cfg                config.VMKernelConfig
@@ -147,6 +147,17 @@ type VMKernelService struct {
 	healthLimit        chan struct{}
 }
 
+// Use the ordinary gateway's timeout policy; Docker mode has no extra deadline.
+func newVMKernelClient(cfg *config.Config, platform string) *vmkernel.Client {
+	client := vmkernel.NewClient()
+	seconds := cfg.Gateway.ResponseHeaderTimeout
+	if platform == PlatformOpenAI {
+		seconds = cfg.Gateway.OpenAIResponseHeaderTimeout
+	}
+	client.ResponseHeaderTimeout = time.Duration(seconds) * time.Second
+	return client
+}
+
 func NewVMKernelService(cfg *config.Config, repo AccountRepository, platform string, cp *ClaudeTokenProvider, op *OpenAITokenProvider) *VMKernelService {
 	if cfg == nil || !cfg.VMKernel.Enabled || repo == nil || !filepath.IsAbs(cfg.VMKernel.HelperSocket) {
 		return nil
@@ -156,7 +167,7 @@ func NewVMKernelService(cfg *config.Config, repo AccountRepository, platform str
 		slog.Error("vm_kernel_coordinator_unavailable", "code", err.Error())
 		return nil
 	}
-	s := &VMKernelService{cfg: cfg.VMKernel, repo: repo, platform: platform, helper: vmruntime.NewClient(cfg.VMKernel.HelperSocket), kernel: vmkernel.NewClient(), done: make(chan struct{})}
+	s := &VMKernelService{cfg: cfg.VMKernel, repo: repo, platform: platform, helper: vmruntime.NewClient(cfg.VMKernel.HelperSocket), kernel: newVMKernelClient(cfg, platform), done: make(chan struct{})}
 	s.releaseCoordinator = release
 	if platform == PlatformAnthropic && cp != nil {
 		s.tokens = cp
@@ -428,7 +439,7 @@ func (s *VMKernelService) prepare(ctx context.Context, account *Account) {
 	// A failed read-only observation never admits work. Give an already proven
 	// unchanged binding two further observations before destructive recovery.
 	eligibleObservationRetry := state != nil && slot.verifiedBinding != "" &&
-		!slot.quarantined && !slot.deleting && !state.DeleteRequested &&
+		!slot.deleting && !state.DeleteRequested &&
 		slot.verifiedBinding == vmBindingKey(state) &&
 		state.AppliedCredentialRevision == vmCredentialRevision(a) && state.AppliedProxyRevision == vmProxyRevision(a)
 	if eligibleObservationRetry && vmTransientObservationError(err) {
@@ -451,13 +462,13 @@ func (s *VMKernelService) prepare(ctx context.Context, account *Account) {
 		spec.ProxyID = *a.ProxyID
 		spec.ProxyRevision = vmProxyRevision(a)
 		changed := state.AppliedCredentialRevision != projection.Revision || state.AppliedProxyRevision != spec.ProxyRevision
-		mutate = changed || !state.Ready || slot.quarantined || (slot.verifiedBinding != "" && slot.verifiedBinding != vmBindingKey(state))
+		mutate = changed || !state.Ready || (slot.verifiedBinding != "" && slot.verifiedBinding != vmBindingKey(state))
 		if changed {
 			request.Operation = "apply-config"
 		}
 	}
 	if mutate {
-		// Configuration changes and unknown-outcome recovery may replace the
+		// Configuration changes and failed health observations may replace the
 		// guest. Stop new admission, but never interrupt other active attempts.
 		if slot.active > 0 {
 			vmKernelReadiness.Delete(a.ID)
@@ -504,7 +515,6 @@ func (s *VMKernelService) prepare(ctx context.Context, account *Account) {
 	// Readiness attests local guest/kernel health and its applied receipt.
 	// Provider model generation is an ordinary request, never a boot gate.
 	slot.verifiedBinding = vmBindingKey(state)
-	slot.quarantined = false
 	slot.nextProbe = time.Time{}
 	latest, err := s.repo.GetByID(ctx, a.ID)
 	if err != nil || !vmAccountEligible(latest) || vmCredentialRevision(a) != vmCredentialRevision(latest) || vmAccountRouteRevision(a) != vmAccountRouteRevision(latest) {
@@ -720,7 +730,7 @@ func (s *VMKernelService) execute(ctx context.Context, selected *Account, protoc
 			}
 		}
 		locked = true
-		if slot.deleting || slot.revoked.Load() || slot.quarantined {
+		if slot.deleting || slot.revoked.Load() {
 			return nil, &vmkernel.AttemptError{Code: "vm_runtime_unavailable", SafeToRetry: true}
 		}
 		latest, err = s.repo.GetByID(ctx, selected.ID)
@@ -785,10 +795,11 @@ func (s *VMKernelService) execute(ctx context.Context, selected *Account, protoc
 	defer func() {
 		slot.mu.Lock()
 		defer slot.mu.Unlock()
+		// An unknown request outcome forbids replay of that attempt, not other
+		// requests on a healthy account. Only independent runtime observations
+		// and configuration changes can trigger container recovery.
 		if err != nil && result != nil && result.Dispatched && !result.Settled && !result.Completed {
-			slot.quarantined = true
-			slot.verifiedBinding = ""
-			s.publish(latest, state, &vmruntime.Error{Code: "kernel_attempt_unknown"}, "attempt")
+			logVMKernelAttemptFailure(latest.ID, state.Generation, result, err)
 		}
 		slot.active--
 		if slot.activeChanged != nil {

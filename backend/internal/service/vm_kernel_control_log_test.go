@@ -30,3 +30,24 @@ func TestVMKernelControlFailureLogRedactsSecrets(t *testing.T) {
 		}
 	}
 }
+
+func TestVMKernelAttemptFailureLogKeepsRequestErrorsOutOfHealth(t *testing.T) {
+	var out bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&out, nil)))
+	defer slog.SetDefault(old)
+	secret := "secret-token-body-proxy"
+	result := &vmkernel.Result{AttemptID: "fixture", CancelStatus: "acknowledged", CancelHTTPStatus: 200}
+	logVMKernelAttemptFailure(42, 7, result, &vmkernel.AttemptError{Code: "kernel_transport_failed", Cause: context.DeadlineExceeded})
+	result.CancelStatus = secret
+	logVMKernelAttemptFailure(42, 7, result, &vmkernel.AttemptError{Code: secret, Cause: errors.New(secret)})
+	raw := out.String()
+	if strings.Contains(raw, secret) || strings.Contains(raw, "vm_kernel_control_failed") {
+		t.Fatal("request diagnostic leaked data or became runtime health failure")
+	}
+	for _, expected := range []string{"vm_kernel_attempt_failed", "context_deadline_exceeded", "acknowledged", "not_attempted"} {
+		if !strings.Contains(raw, expected) {
+			t.Errorf("missing %s", expected)
+		}
+	}
+}

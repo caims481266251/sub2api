@@ -103,7 +103,7 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 	resp, err := client.Do(req)
 	if err != nil {
 		if dispatched.Load() {
-			c.cancel(binding, attemptID)
+			result.CancelStatus, result.CancelHTTPStatus = c.cancel(binding, attemptID)
 		}
 		return result, &AttemptError{Code: "kernel_transport_failed", SafeToRetry: !dispatched.Load(), Cause: err}
 	}
@@ -299,7 +299,7 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 		if ctx.Err() != nil {
 			result.ClientDisconnect = true
 		}
-		c.cancel(binding, attemptID)
+		result.CancelStatus, result.CancelHTTPStatus = c.cancel(binding, attemptID)
 		return result, &AttemptError{Code: "kernel_stream_incomplete", Cause: err}
 	}
 	// A verified terminal plus normal EOF settles this HTTP attempt. A socket
@@ -309,7 +309,7 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 		return result, &AttemptError{Code: "kernel_response_failed"}
 	}
 	if result.Terminal == "" || !result.HasUsage || result.ResponseID == "" || (request.Protocol == "messages" && stopReason == "") {
-		c.cancel(binding, attemptID)
+		result.CancelStatus, result.CancelHTTPStatus = c.cancel(binding, attemptID)
 		return result, &AttemptError{Code: "kernel_completion_metadata_missing"}
 	}
 	for _, event := range terminals {
@@ -376,7 +376,7 @@ func settledHTTPFailure(raw []byte, terminal string, httpStatus int) (json.RawMe
 	return out, ""
 }
 
-func (c *Client) cancel(binding Binding, attempt string) {
+func (c *Client) cancel(binding Binding, attempt string) (string, int) {
 	timeout := c.CancelTimeout
 	if timeout <= 0 {
 		timeout = 3 * time.Second
@@ -393,10 +393,18 @@ func (c *Client) cancel(binding Binding, attempt string) {
 	req.Header.Set("x-internal-token", binding.Token)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := (&http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}).Do(req)
-	if err == nil {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-		_ = resp.Body.Close()
+	if err != nil {
+		return "transport_failed", 0
 	}
+	defer resp.Body.Close()
+	if _, err := io.Copy(io.Discard, io.LimitReader(resp.Body, 4096)); err != nil {
+		return "response_incomplete", resp.StatusCode
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "rejected", resp.StatusCode
+	}
+	// Acknowledgment is not proof that the original execution has finished.
+	return "acknowledged", resp.StatusCode
 }
 
 func readEvents(reader io.Reader, consume func(Event) error) error {

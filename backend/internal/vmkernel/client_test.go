@@ -387,3 +387,35 @@ func TestClientHTTPProviderFailureDropsPrivateDiagnostics(t *testing.T) {
 		})
 	}
 }
+
+func TestClientCancelResponseNeverInventsSettlement(t *testing.T) {
+	for _, status := range []int{200, 202, 404, 500} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			binding := fakeKernel(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/internal/v1/cancel" {
+					w.WriteHeader(status)
+					fmt.Fprint(w, `{"ok":true,"private":"never retain this"}`)
+					return
+				}
+				conn, _, err := w.(http.Hijacker).Hijack()
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				conn.Close()
+			})
+			r, err := NewClient().Execute(context.Background(), binding, Request{Protocol: "responses", Body: json.RawMessage(`{}`)}, nil)
+			var attempt *AttemptError
+			if !errors.As(err, &attempt) || attempt.SafeToRetry || r.Settled || r.Completed || r.CancelHTTPStatus != status {
+				t.Fatalf("cancel response became settlement: %+v %v", r, err)
+			}
+			want := "rejected"
+			if status < 300 {
+				want = "acknowledged"
+			}
+			if r.CancelStatus != want {
+				t.Fatalf("cancel status %q want %q", r.CancelStatus, want)
+			}
+		})
+	}
+}

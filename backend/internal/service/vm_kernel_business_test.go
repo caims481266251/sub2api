@@ -109,7 +109,7 @@ func TestVMKernelHTTPRateLimitWithoutTerminalPreservesReadyRuntime(t *testing.T)
 	if !strings.Contains(gjson.Get(w.Body.String(), "error.message").String(), "Rate limit exceeded") {
 		t.Fatalf("provider rate limit message lost: %s", w.Body.String())
 	}
-	if !VMKernelRuntimeReady(account) || runtime.slot(account.ID).quarantined || runtime.slot(account.ID).active != 0 {
+	if !VMKernelRuntimeReady(account) || runtime.slot(account.ID).active != 0 {
 		t.Fatal("settled provider rate limit changed VM readiness or retained an execution slot")
 	}
 
@@ -123,7 +123,7 @@ func TestVMKernelHTTPRateLimitWithoutTerminalPreservesReadyRuntime(t *testing.T)
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "hello") || attempts.Load() != 2 {
 		t.Fatalf("follow-up was not forwarded exactly once: status=%d attempts=%d body=%s", w.Code, attempts.Load(), w.Body.String())
 	}
-	if !VMKernelRuntimeReady(account) || runtime.slot(account.ID).quarantined || runtime.slot(account.ID).active != 0 {
+	if !VMKernelRuntimeReady(account) || runtime.slot(account.ID).active != 0 {
 		t.Fatal("successful follow-up changed VM readiness or retained an execution slot")
 	}
 }
@@ -157,8 +157,8 @@ func TestVMKernelForwardHasNoFixedTwoHundredRequestLimit(t *testing.T) {
 			t.Fatalf("request %d did not complete publicly: status=%d body=%s", i, w.Code, w.Body.String())
 		}
 	}
-	if attempts.Load() != requests || !VMKernelRuntimeReady(account) || runtime.slot(account.ID).quarantined || runtime.slot(account.ID).active != 0 {
-		t.Fatalf("fixed local cap or execution slot leak: attempts=%d ready=%v quarantined=%v active=%d", attempts.Load(), VMKernelRuntimeReady(account), runtime.slot(account.ID).quarantined, runtime.slot(account.ID).active)
+	if attempts.Load() != requests || !VMKernelRuntimeReady(account) || runtime.slot(account.ID).active != 0 {
+		t.Fatalf("fixed local cap or execution slot leak: attempts=%d ready=%v active=%d", attempts.Load(), VMKernelRuntimeReady(account), runtime.slot(account.ID).active)
 	}
 }
 
