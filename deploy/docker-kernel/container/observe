@@ -2,7 +2,6 @@
 import hashlib
 import http.client
 import json
-import os
 from pathlib import Path
 import socket
 import subprocess
@@ -16,21 +15,27 @@ class LocalHTTP(http.client.HTTPConnection):
         self.sock.connect('/slot/run/kernel.sock')
 
 
+def check_proxy_bridge():
+    try:
+        pid = int(Path('/tmp/sub2-proxy-bridge.pid').read_text())
+        argv = Path('/proc/' + str(pid) + '/cmdline').read_bytes().split(b'\0')
+        if len(argv) < 2 or argv[1] != b'/usr/local/lib/sub2-container/proxy_bridge.py': raise ValueError()
+        if not Path('/tmp/sub2-proxy-bridge.ready').is_file(): raise ValueError()
+        with socket.create_connection(('127.0.0.1',1081),timeout=1) as probe:
+            probe.settimeout(1); probe.sendall(b'\x05\x01\x00')
+            if probe.recv(2) != b'\x05\x00': raise ValueError()
+            probe.sendall(b'\x05\x01\x00\xff')
+            if probe.recv(2) != b'\x05\x08': raise ValueError()
+    except (OSError, ValueError): raise ValueError('proxy_bridge_not_ready')
+
+
 def main():
     proof = read('/run/sub2-container-applied.json')
     if proof['config_digest'] != hashlib.sha256(Path('/slot/run/codex-kernel.json').read_bytes()).hexdigest():
         raise ValueError('config_changed')
     subprocess.run(['/usr/local/lib/sub2-container/firewall','--check'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if read('/slot/run/codex-kernel.json').get('proxy_url') == 'socks5h://127.0.0.1:1081':
-        try:
-            os.kill(int(Path('/tmp/sub2-proxy-bridge.pid').read_text()), 0)
-            if not Path('/tmp/sub2-proxy-bridge.ready').is_file(): raise ValueError()
-            with socket.create_connection(('127.0.0.1',1081),timeout=1) as probe:
-                probe.settimeout(1); probe.sendall(b'\x05\x01\x00')
-                if probe.recv(2) != b'\x05\x00': raise ValueError()
-                probe.sendall(b'\x05\x01\x00\xff')
-                if probe.recv(2) != b'\x05\x08': raise ValueError()
-        except (OSError, ValueError): raise ValueError('proxy_bridge_not_ready')
+        check_proxy_bridge()
     process = process_identity()
     token = Path('/slot/run/internal.token').read_text().strip()
     conn = LocalHTTP('kernel')
