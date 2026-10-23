@@ -1,7 +1,0 @@
-#!/usr/bin/python3
-import json
-from common import observation
-try:
-    print(json.dumps(observation('observe')))
-except Exception:
-    raise SystemExit('runtime_observation_failed')

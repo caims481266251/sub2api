@@ -59,7 +59,7 @@ vi.mock('@/stores/auth', () => ({
 vi.mock('@/api/admin', () => ({
   adminAPI: {
     accounts: {
-      getManagementCapabilities: vi.fn().mockResolvedValue({ web_search_enabled: false, account_quota_notify_enabled: false }),
+      getManagementCapabilities: vi.fn().mockResolvedValue({ web_search_enabled: false, account_quota_notify_enabled: false, vm_kernel_enabled: true }),
       create: createAccountMock,
       generateAuthUrl: generateAuthUrlMock,
       exchangeCode: exchangeCodeMock,
@@ -202,7 +202,8 @@ async function submitApiKeyAccount(
   disableUpstreamBillingProbe = false
 ) {
   const wrapper = mountModal()
-  await selectButtonByText(wrapper, platform === 'openai' ? 'OpenAI' : 'admin.accounts.claudeConsole')
+  await selectButtonByText(wrapper, platform === 'openai' ? 'OpenAI' : 'Anthropic')
+  if (platform === 'anthropic') await selectButtonByText(wrapper, 'admin.accounts.claudeConsole')
   if (platform === 'openai') {
     await selectButtonByText(wrapper, 'API Key')
   }
@@ -251,6 +252,7 @@ function expectWSAcceleration(extra: unknown, enabled: boolean) {
 describe('CreateAccountModal OpenAI long-context billing', () => {
   it('offers WS SSE acceleration for OpenAI OAuth even while WS mode is off', async () => {
     const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'Anthropic')
     expect(wrapper.find('[data-testid="create-openai-ws-sse-acceleration"]').exists()).toBe(false)
     await selectButtonByText(wrapper, 'OpenAI')
     expect(wrapper.get('[data-testid="create-openai-ws-mode"]').exists()).toBe(true)
@@ -507,7 +509,7 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     const wrapper = mountModal()
     await selectButtonByText(wrapper, 'OpenAI')
     await wrapper.get('[data-testid="account-concurrency"]').setValue(17)
-    await wrapper.get('[data-testid="account-execution-mode"]').setValue('vm_kernel')
+    await wrapper.get('[data-testid="account-execution-mode"]').setValue('docker_kernel')
     expect(wrapper.get<HTMLInputElement>('[data-testid="account-concurrency"]').element.disabled).toBe(false)
     expect(wrapper.get<HTMLInputElement>('[data-testid="account-concurrency"]').element.value).toBe('17')
     await wrapper.get('[data-testid="account-concurrency"]').setValue(23)
@@ -516,7 +518,7 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     await wrapper.get('form#create-account-form').trigger('submit.prevent')
     await wrapper.get('[data-testid="import-codex-session"]').trigger('click')
     await flushPromises()
-    expect(importCodexSessionMock).toHaveBeenCalledWith(expect.objectContaining({ execution_mode: 'vm_kernel', concurrency: 23, proxy_id: 7 }))
+    expect(importCodexSessionMock).toHaveBeenCalledWith(expect.objectContaining({ execution_mode: 'docker_kernel', concurrency: 23, proxy_id: 7 }))
     wrapper.unmount()
   })
 
@@ -524,7 +526,7 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     const wrapper = mountModal()
     await selectButtonByText(wrapper, 'OpenAI')
     await selectButtonByText(wrapper, 'API Key')
-    await wrapper.get('[data-testid="account-execution-mode"]').setValue('vm_kernel')
+    await wrapper.get('[data-testid="account-execution-mode"]').setValue('docker_kernel')
     await wrapper.get('form#create-account-form input[type="text"]').setValue('VM API key')
     await wrapper.get('form#create-account-form input[type="password"]').setValue('test-api-key')
     await wrapper.get('form#create-account-form').trigger('submit.prevent')
@@ -533,12 +535,12 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     wrapper.unmount()
   })
 
-  it.each(['normal', 'vm_kernel'])('offers 2FA initial login and credential operations in %s mode', async (executionMode) => {
+  it.each(['normal', 'docker_kernel'])('offers 2FA initial login and credential operations in %s mode', async (executionMode) => {
     const wrapper = mountModal()
     await selectButtonByText(wrapper, 'OpenAI')
     await wrapper.get('[data-testid="openai-two-fa"]').trigger('click')
     await wrapper.get('[data-testid="account-execution-mode"]').setValue(executionMode)
-    const proxyID = executionMode === 'vm_kernel' ? 7 : null
+    const proxyID = executionMode === 'docker_kernel' ? 7 : null
     wrapper.getComponent({ name: 'ProxySelector' }).vm.$emit('update:modelValue', proxyID)
     expect(wrapper.get('[data-tour="account-form-name"]').attributes('required')).toBeUndefined()
     await wrapper.get('form#create-account-form').trigger('submit.prevent')
@@ -1427,6 +1429,7 @@ describe('CreateAccountModal Vertex API key auth', () => {
 
   it('keeps Anthropic Vertex accounts on Service Account JSON only', async () => {
     const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'Anthropic')
     await selectButtonByText(wrapper, 'admin.accounts.vertexLabel')
     expect(wrapper.find('[data-testid="vertex-auth-mode-apikey"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="vertex-api-key-input"]').exists()).toBe(false)

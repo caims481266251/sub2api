@@ -19,12 +19,12 @@ func TestDockerLiveIsolatedAllocationAndRestart(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	d := &DockerDriver{AllowTCG: true}
+	d := &DockerDriver{}
 	image, err := d.run(ctx, "image", "inspect", "--format", "{{.Id}}", "debian:trixie-slim")
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.Templates = map[string]Template{"fixture": {Runtime: "upstream-v1", Acceleration: "tcg", Image: strings.TrimSpace(string(image))}}
+	d.Templates = map[string]Template{"fixture": {Runtime: "container-v1", Image: strings.TrimSpace(string(image))}}
 	h, err := OpenHelper(t.TempDir(), d)
 	if err != nil {
 		t.Fatal(err)
@@ -53,10 +53,10 @@ func TestDockerLiveIsolatedAllocationAndRestart(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if a.Network.Subnet == b.Network.Subnet || a.Network.GuestSubnet == b.Network.GuestSubnet {
+	if a.Network.Subnet == b.Network.Subnet {
 		t.Fatal("allocation collision")
 	}
-	args := []string{"run", "-d", "--pull=never", "--name", containerName(a), "--network=" + a.Network.NetworkName, "--ip=" + a.Network.Address, "--label", "sub2.vm.instance=" + a.InstanceID, "--label", "sub2.vm.account=900001", "--label", "sub2.vm.runtime=upstream-v1", "--label", "sub2.vm.acceleration=tcg", "--entrypoint=/bin/sleep", strings.TrimSpace(string(image)), "120"}
+	args := []string{"run", "-d", "--pull=never", "--name", containerName(a), "--network=" + a.Network.NetworkName, "--ip=" + a.Network.Address, "--label", "sub2.vm.instance=" + a.InstanceID, "--label", "sub2.vm.account=900001", "--label", "sub2.vm.runtime=container-v1", "--label", "sub2.vm.service-gid=0", "--entrypoint=/bin/sleep", strings.TrimSpace(string(image)), "120"}
 	if _, err = d.run(ctx, args...); err != nil {
 		t.Fatal(err)
 	}

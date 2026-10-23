@@ -339,7 +339,7 @@ function mountModal(account = buildAccount(), renderGroupSelector = false) {
 
 describe('EditAccountModal', () => {
   it('preserves editable VM account concurrency through save', async () => {
-    const account = { ...buildOpenAIOAuthParentAccount(), execution_mode: 'vm_kernel', concurrency: 12, proxy_id: 7 }
+    const account = { ...buildOpenAIOAuthParentAccount(), execution_mode: 'docker_kernel', concurrency: 12, proxy_id: 7 }
     updateAccountMock.mockReset().mockResolvedValue(account)
     checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
     const wrapper = mountModal(account)

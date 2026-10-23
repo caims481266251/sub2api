@@ -71,10 +71,10 @@
         <label class="input-label">{{ t('admin.accounts.executionMode') }}</label>
         <select v-model="form.execution_mode" data-testid="account-execution-mode" class="input mt-2">
           <option value="normal">{{ t('admin.accounts.executionModeNormal') }}</option>
-          <option value="vm_kernel" :disabled="!['anthropic', 'openai'].includes(form.platform) || vmKernelEnabled !== true">{{ t('admin.accounts.executionModeVM') }}</option>
+          <option value="docker_kernel" :disabled="form.platform !== 'openai' || vmKernelEnabled !== true">{{ t('admin.accounts.executionModeVM') }}</option>
         </select>
         <p v-if="vmKernelEnabled === false && ['anthropic', 'openai'].includes(form.platform)" class="input-hint">{{ t('admin.accounts.vmKernelUnavailable') }}</p>
-        <p v-if="form.execution_mode === 'vm_kernel'" class="mt-2 text-sm text-gray-500">{{ t('admin.accounts.executionModeVMHint') }}</p>
+        <p v-if="form.execution_mode === 'docker_kernel'" class="mt-2 text-sm text-gray-500">{{ t('admin.accounts.executionModeVMHint') }}</p>
       </div>
 
       <!-- Platform Selection - Segmented Control Style -->
@@ -4458,11 +4458,11 @@ const isOpenAITwoFA = computed(() => form.platform === 'openai' && accountCatego
 // 「降智后自动开启 BPS」：OpenAI OAuth / 2FA 添加时可选，账号建好后按这里的设置给每个新账号建一条质量运维规则。
 const autoBPS = useAccountAutoBPS()
 const globalBpsEnabled = computed(() => appStore.cachedPublicSettings?.excel_bps_enabled !== false)
-const autoBPSAvailable = computed(() => globalBpsEnabled.value && form.execution_mode !== 'vm_kernel' && form.platform === 'openai' && accountCategory.value === 'oauth-based' && !isOpenAIBPSOAuth.value)
+const autoBPSAvailable = computed(() => globalBpsEnabled.value && form.execution_mode !== 'docker_kernel' && form.platform === 'openai' && accountCategory.value === 'oauth-based' && !isOpenAIBPSOAuth.value)
 const submitting = ref(false)
 const accountCategory = ref<'oauth-based' | 'apikey' | 'bedrock' | 'service_account'>('oauth-based') // UI selection for account category
 const addMethod = ref<AddMethod>('oauth') // For oauth-based: 'oauth' or 'setup-token'
-const apiKeyBaseUrl = ref('https://api.anthropic.com')
+const apiKeyBaseUrl = ref('https://api.openai.com')
 const apiKeyValue = ref('')
 const upstreamBillingAutoProbeEnabled = ref(true)
 
@@ -5096,10 +5096,10 @@ const tempUnschedPresets = computed(() => [
 ])
 
 const form = reactive({
-  execution_mode: 'normal' as 'normal' | 'vm_kernel',
+  execution_mode: 'normal' as 'normal' | 'docker_kernel',
   name: '',
   notes: '',
-  platform: 'anthropic' as AccountPlatform,
+  platform: 'openai' as AccountPlatform,
   type: 'oauth' as AccountType, // Will be 'oauth', 'setup-token', or 'apikey'
   credentials: {} as Record<string, unknown>,
   proxy_id: null as number | null,
@@ -5703,7 +5703,7 @@ const resetForm = () => {
   form.name = ''
   openAIRequestTimezone.value = 'Asia/Singapore'
   form.notes = ''
-  form.platform = 'anthropic'
+  form.platform = 'openai'
   form.type = 'oauth'
   form.credentials = {}
   form.proxy_id = null
@@ -5721,7 +5721,7 @@ const resetForm = () => {
   apiProtocol.value = 'adaptive'
   openCodeGoProtocolRules.value = cloneOpenCodeGoProtocolRules(defaultOpenCodeProtocolRules('zen'))
   adaptiveBaseUrls.value = { chat_completions: '', anthropic: '', responses: '' }
-  apiKeyBaseUrl.value = 'https://api.anthropic.com'
+  apiKeyBaseUrl.value = 'https://api.openai.com'
   apiKeyValue.value = ''
   upstreamRequestIdHeader.value = ''
   upstreamBillingAutoProbeEnabled.value = true
@@ -6060,7 +6060,7 @@ const handleVertexServiceAccountDrop = async (event: DragEvent) => {
 }
 
 const handleSubmit = async () => {
-  if (form.execution_mode === 'vm_kernel') {
+  if (form.execution_mode === 'docker_kernel') {
     try {
       const capabilities = await adminAPI.accounts.getManagementCapabilities()
       vmKernelEnabled.value = capabilities.vm_kernel_enabled === true
@@ -6070,7 +6070,7 @@ const handleSubmit = async () => {
     if (!vmKernelEnabled.value) { appStore.showError(t('admin.accounts.vmKernelUnavailable')); return }
     if (!form.proxy_id) { appStore.showError(t('admin.accounts.vmProxyRequired')); return }
   }
-  if (form.execution_mode === 'vm_kernel' && (!['anthropic', 'openai'].includes(form.platform) || accountCategory.value !== 'oauth-based' || addMethod.value !== 'oauth' || isOpenAIBPSOAuth.value)) {
+  if (form.execution_mode === 'docker_kernel' && (form.platform !== 'openai' || accountCategory.value !== 'oauth-based' || addMethod.value !== 'oauth' || isOpenAIBPSOAuth.value)) {
     appStore.showError(t('admin.accounts.executionModeVMHint'))
     return
   }
@@ -7070,7 +7070,7 @@ const handleOpenAIImportCodexSession = async (content: string) => {
 }
 
 const handleOpenAIImportCodexPAT = async (accessToken: string) => {
-  if (form.execution_mode === 'vm_kernel') { appStore.showError(t('admin.accounts.executionModeVMHint')); return }
+  if (form.execution_mode === 'docker_kernel') { appStore.showError(t('admin.accounts.executionModeVMHint')); return }
   const oauthClient = openaiOAuth
   const trimmed = accessToken.trim()
   if (!trimmed) {

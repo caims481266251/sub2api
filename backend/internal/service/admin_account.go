@@ -260,7 +260,7 @@ func (s *adminServiceImpl) DuplicateAccount(ctx context.Context, id int64, actor
 		return nil, err
 	}
 	if source.IsVMKernel() && (s.cfg == nil || !s.cfg.VMKernel.Enabled) {
-		return nil, infraerrors.BadRequest("VM_KERNEL_DISABLED", "VM kernel execution is not enabled on this deployment")
+		return nil, infraerrors.BadRequest("VM_KERNEL_DISABLED", "Docker kernel execution is not enabled on this deployment")
 	}
 
 	if source.IsCredentialShadow() {
@@ -440,7 +440,7 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 	}
 	if mode == AccountExecutionModeVMKernel {
 		if input.ProxyID == nil || *input.ProxyID <= 0 {
-			return nil, infraerrors.BadRequest("VM_KERNEL_PROXY_REQUIRED", "VM kernel accounts require a configured proxy")
+			return nil, infraerrors.BadRequest("VM_KERNEL_PROXY_REQUIRED", "Docker kernel accounts require a configured proxy")
 		}
 	}
 	if err := ValidateVMKernelAccount(&Account{ExecutionMode: mode, Platform: input.Platform, Type: input.Type, Credentials: input.Credentials, Extra: accountExtra}); err != nil {
@@ -531,8 +531,11 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if input == nil {
 		return nil, ErrAccountNilInput
 	}
+	if input.ExecutionMode == AccountExecutionModeVMKernel && input.Platform != PlatformOpenAI {
+		return nil, infraerrors.BadRequest("DOCKER_KERNEL_PLATFORM_UNSUPPORTED", "Docker kernel currently supports OpenAI OAuth")
+	}
 	if input.ExecutionMode == AccountExecutionModeVMKernel && (s.cfg == nil || !s.cfg.VMKernel.Enabled) {
-		return nil, infraerrors.BadRequest("VM_KERNEL_DISABLED", "VM kernel execution is not enabled on this deployment")
+		return nil, infraerrors.BadRequest("VM_KERNEL_DISABLED", "Docker kernel execution is not enabled on this deployment")
 	}
 	if err := ValidateAccountCostMultiplierExtra(input.Extra); err != nil {
 		return nil, err
@@ -979,7 +982,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	}
 	if account.IsVMKernel() {
 		if account.ProxyID == nil || *account.ProxyID <= 0 {
-			return nil, infraerrors.BadRequest("VM_KERNEL_PROXY_REQUIRED", "VM kernel accounts require a configured proxy")
+			return nil, infraerrors.BadRequest("VM_KERNEL_PROXY_REQUIRED", "Docker kernel accounts require a configured proxy")
 		}
 	}
 	if err := ValidateVMKernelAccount(account); err != nil {
@@ -1216,7 +1219,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 			continue
 		}
 		if input.ProxyID != nil && *input.ProxyID <= 0 {
-			return nil, infraerrors.BadRequest("VM_KERNEL_PROXY_REQUIRED", "VM kernel accounts require a configured proxy")
+			return nil, infraerrors.BadRequest("VM_KERNEL_PROXY_REQUIRED", "Docker kernel accounts require a configured proxy")
 		}
 		merged := *target
 		merged.Credentials = maps.Clone(target.Credentials)
@@ -1640,7 +1643,7 @@ func (s *adminServiceImpl) CreateShadow(ctx context.Context, parentID int64, opt
 		return nil, fmt.Errorf("get parent account: %w", err)
 	}
 	if parent.IsVMKernel() {
-		return nil, infraerrors.BadRequest("VM_KERNEL_SHADOW_UNSUPPORTED", "VM kernel accounts cannot create shadow accounts")
+		return nil, infraerrors.BadRequest("VM_KERNEL_SHADOW_UNSUPPORTED", "Docker kernel accounts cannot create shadow accounts")
 	}
 	if !parent.IsOpenAIOAuth() {
 		return nil, infraerrors.New(http.StatusBadRequest, "SPARK_SHADOW_INVALID_PARENT",

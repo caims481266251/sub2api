@@ -25,7 +25,7 @@ func TestAccountExecutionModeJSONCompatibility(t *testing.T) {
 }
 
 func TestAccountExecutionModeBackupRoundTrip(t *testing.T) {
-	encoded, err := json.Marshal(DataAccount{Name: "vm", Platform: "openai", Type: "oauth", ExecutionMode: "vm_kernel"})
+	encoded, err := json.Marshal(DataAccount{Name: "vm", Platform: "openai", Type: "oauth", ExecutionMode: "docker_kernel"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func TestAccountExecutionModeBackupRoundTrip(t *testing.T) {
 	if err = json.Unmarshal(encoded, &imported); err != nil {
 		t.Fatal(err)
 	}
-	if imported.ExecutionMode != "vm_kernel" {
+	if imported.ExecutionMode != "docker_kernel" {
 		t.Fatal("backup lost execution mode")
 	}
 	var legacy DataAccount

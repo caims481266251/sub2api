@@ -13,7 +13,7 @@ func TestAccountExecutionModeDefaultsAndValidation(t *testing.T) {
 	for _, tc := range []struct {
 		input, want string
 		invalid     bool
-	}{{"", "normal", false}, {"normal", "normal", false}, {"vm_kernel", "vm_kernel", false}, {"vm", "", true}, {" normal", "", true}} {
+	}{{"", "normal", false}, {"normal", "normal", false}, {"docker_kernel", "docker_kernel", false}, {"vm", "", true}, {" normal", "", true}} {
 		got, err := NormalizeAccountExecutionMode(tc.input)
 		if (err != nil) != tc.invalid || got != tc.want {
 			t.Fatalf("mode %q: got %q, err=%v", tc.input, got, err)
@@ -30,7 +30,7 @@ func TestAccountExecutionModeUpdatePreservesAndRejectsSwitch(t *testing.T) {
 	if err := ValidateAccountExecutionModeUpdate(a, nil); err != nil || !a.IsVMKernel() {
 		t.Fatal("omitted update changed VM mode", err)
 	}
-	normal, vm := "normal", "vm_kernel"
+	normal, vm := "normal", "docker_kernel"
 	if err := ValidateAccountExecutionModeUpdate(a, &normal); err == nil {
 		t.Fatal("allowed VM to normal")
 	}
@@ -231,5 +231,20 @@ func TestVMKernelAccountsAcceptOriginalProxyProtocols(t *testing.T) {
 				require.False(t, vmAccountRequestEligible(account, false))
 			})
 		}
+	}
+}
+
+func TestRetiredVMModeDoesNotMigrateOrFallBack(t *testing.T) {
+	a := &Account{ID: 42, Platform: PlatformOpenAI, ExecutionMode: "vm_kernel", Status: StatusActive, Schedulable: true}
+	if _, err := NormalizeAccountExecutionMode("vm_kernel"); err == nil {
+		t.Fatal("removed VM mode accepted for creation")
+	}
+	if VMKernelRuntimeReady(a) || a.IsSchedulable() {
+		t.Fatal("old account fell back to normal scheduling")
+	}
+	// An empty service would panic if it attempted to mutate or start resources.
+	(&VMKernelService{}).prepare(context.Background(), a)
+	if a.ExecutionMode != "vm_kernel" {
+		t.Fatal("legacy account data changed")
 	}
 }

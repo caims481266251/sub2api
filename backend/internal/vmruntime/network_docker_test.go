@@ -71,10 +71,10 @@ func (f *networkCommands) Run(_ context.Context, args ...string) ([]byte, error)
 }
 func networkDriverFixture() (*DockerDriver, State, *networkCommands) {
 	s := State{AccountID: 42, InstanceID: "test-instance"}
-	l := leaseAt(s.InstanceID, netip.MustParsePrefix("10.240.0.0/16"), netip.MustParsePrefix("10.241.0.0/16"), 0)
+	l := leaseAt(s.InstanceID, netip.MustParsePrefix("10.240.0.0/16"), 0)
 	s.Network = &l
 	f := &networkCommands{state: s}
-	return &DockerDriver{Commands: f, AllowTCG: true}, s, f
+	return &DockerDriver{Commands: f, Templates: map[string]Template{"": {Runtime: "container-v1", Image: "sha256:" + strings.Repeat("a", 64)}}}, s, f
 }
 func TestDockerNetworkLifecycleAndOwnership(t *testing.T) {
 	d, s, f := networkDriverFixture()
@@ -112,7 +112,7 @@ func TestDockerNetworkLifecycleAndOwnership(t *testing.T) {
 func TestDockerNetworkCreateFailureNeverStartsGuest(t *testing.T) {
 	d, s, f := networkDriverFixture()
 	f.createErr = true
-	_, err := d.upstreamCreate(context.Background(), s, t.TempDir(), Template{Acceleration: "tcg"})
+	_, err := d.Ensure(context.Background(), s, t.TempDir())
 	if errorCode(err) != "network_create_unknown" {
 		t.Fatal(err)
 	}
@@ -122,20 +122,14 @@ func TestDockerNetworkCreateFailureNeverStartsGuest(t *testing.T) {
 		}
 	}
 }
-func TestDockerFailedContainerCreateReclaimsOnlyConfirmedEmptyNetwork(t *testing.T) {
-	for _, present := range []bool{false, true} {
-		t.Run(map[bool]string{false: "absent", true: "unknown_created"}[present], func(t *testing.T) {
-			d, s, f := networkDriverFixture()
-			f.runErr = true
-			f.containerPresent = present
-			_, err := d.upstreamCreate(context.Background(), s, t.TempDir(), Template{Acceleration: "tcg"})
-			if err == nil {
-				t.Fatal("expected create error")
-			}
-			if (f.network != nil) != present {
-				t.Fatal("wrong cleanup decision")
-			}
-		})
+func TestDockerFailedCreateRetainsNetworkForReconciliation(t *testing.T) {
+	d, s, f := networkDriverFixture()
+	f.runErr = true
+	if _, err := d.Ensure(context.Background(), s, t.TempDir()); err == nil {
+		t.Fatal("expected create failure")
+	}
+	if f.network == nil {
+		t.Fatal("network was prematurely released")
 	}
 }
 func TestDockerNetworkUnavailableInventoryNeverCreates(t *testing.T) {

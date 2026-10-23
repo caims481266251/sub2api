@@ -146,9 +146,10 @@ func vmLifecycleSetup(t *testing.T) (*VMKernelService, *Account, *vmLifecycleFix
 	})
 	client := vmruntime.NewClient(helper)
 	t.Cleanup(client.CloseIdleConnections)
-	s := &VMKernelService{cfg: config.VMKernelConfig{Template: "default", CPU: 2, MemoryMiB: 2048, DiskGiB: 20}, repo: &vmLifecycleRepo{account: a}, platform: PlatformOpenAI, tokens: vmLifecycleTokens{}, helper: client, kernel: vmkernel.NewClient()}
+	s := &VMKernelService{cfg: config.VMKernelConfig{Template: "default", CPU: 2, MemoryMiB: 2048}, repo: &vmLifecycleRepo{account: a}, platform: PlatformOpenAI, tokens: vmLifecycleTokens{}, helper: client, kernel: vmkernel.NewClient()}
 	t.Cleanup(func() {
 		vmKernelReadiness.Delete(a.ID)
+		vmKernelHealth.Delete(a.ID)
 		vmKernelServices.CompareAndDelete(a.Platform, s)
 	})
 	return s, a, fixture
@@ -238,7 +239,8 @@ func TestVMKernelLifecycleUnknownRequiresNewGeneration(t *testing.T) {
 	s.prepare(context.Background(), a)
 	// Exercise actual Execute -> publish -> sanitized Summary, not a manually
 	// constructed status that could hide an error-code projection mismatch.
-	f.state.ActualAccelerator = "tcg"
+	f.state.ActualAccelerator = "docker"
+	s.publishHealth(a.ID, f.state, nil)
 	s.publish(a, f.state, nil)
 	f.kernelFail = true
 	r, err := s.Execute(context.Background(), a, "responses", []byte(`{}`), nil)
@@ -250,7 +252,7 @@ func TestVMKernelLifecycleUnknownRequiresNewGeneration(t *testing.T) {
 		t.Fatal("unknown attempt lost its controlled internal classification")
 	}
 	summary := VMKernelRuntimeSummary(a)
-	if summary == nil || summary.Ready || summary.ErrorCode != "" || summary.Phase != "pending" || summary.ActualAccelerator != "tcg" {
+	if summary == nil || !summary.Ready || summary.ErrorCode != "" || summary.ActualAccelerator != "docker" {
 		t.Fatalf("request outcome was displayed as a local runtime fault: %+v", summary)
 	}
 	f.kernelFail = false
@@ -1064,5 +1066,42 @@ func TestVMKernelHTTPProviderErrorKeepsReadyAndDoesNotRebuild(t *testing.T) {
 	}
 	if f.state.Generation != 1 {
 		t.Fatal("next dispatch unexpectedly changed VM generation")
+	}
+}
+
+type vmFailingTokens struct{}
+
+func (vmFailingTokens) GetAccessToken(context.Context, *Account) (string, error) {
+	return "", fmt.Errorf("oauth_refresh_failed")
+}
+
+func TestVMKernelBusinessIneligibilityDoesNotStopHealthyContainer(t *testing.T) {
+	for _, scenario := range []string{"proxy_disabled", "proxy_expired", "account_disabled", "oauth_refresh"} {
+		t.Run(scenario, func(t *testing.T) {
+			s, a, f := vmLifecycleSetup(t)
+			s.prepare(context.Background(), a)
+			f.requests = nil
+			switch scenario {
+			case "proxy_disabled":
+				a.Proxy.Status = StatusDisabled
+			case "proxy_expired":
+				expired := time.Now().Add(-time.Hour)
+				a.Proxy.ExpiresAt = &expired
+			case "account_disabled":
+				a.Status = StatusDisabled
+			case "oauth_refresh":
+				s.tokens = vmFailingTokens{}
+			}
+			s.prepare(context.Background(), a)
+			if fmt.Sprint(f.operations()) != "[inspect:0]" {
+				t.Fatalf("business failure mutated container: %v", f.operations())
+			}
+			if VMKernelRuntimeReady(a) {
+				t.Fatal("business-ineligible account admitted requests")
+			}
+			if summary := VMKernelRuntimeSummary(a); summary == nil || !summary.Ready || summary.ErrorCode != "" {
+				t.Fatalf("business failure corrupted local health: %+v", summary)
+			}
+		})
 	}
 }

@@ -98,9 +98,6 @@ func validate(req Request) error {
 	if err != nil || parsed.String() != req.InstanceID || req.AccountID <= 0 || (req.Generation == 0 && req.Operation != "inspect") || req.Version != ProtocolVersion {
 		return fault("invalid_request")
 	}
-	if req.MigrateNetwork && req.Operation != "prepare" {
-		return fault("network_migration_operation_invalid")
-	}
 	switch req.Operation {
 	case "prepare", "apply-config", "inspect", "drain", "stop", "remove":
 	default:
@@ -108,7 +105,7 @@ func validate(req Request) error {
 	}
 	if req.Spec != nil {
 		s := req.Spec
-		if (s.Platform != "claude" && s.Platform != "codex") || !revisionPattern.MatchString(s.Template) || s.CPU < 1 || s.CPU > 32 || s.MemoryMiB < 512 || s.MemoryMiB > 131072 || s.DiskGiB < 4 || s.DiskGiB > 1024 || s.ProxyID <= 0 || !revisionPattern.MatchString(s.ProxyRevision) {
+		if (s.Platform != "claude" && s.Platform != "codex") || !revisionPattern.MatchString(s.Template) || s.CPU < 1 || s.CPU > 32 || s.MemoryMiB < 128 || s.MemoryMiB > 131072 || s.ProxyID <= 0 || !revisionPattern.MatchString(s.ProxyRevision) {
 			return fault("invalid_spec")
 		}
 	}
@@ -154,7 +151,7 @@ func newIdentity() (Identity, error) {
 	}
 	mac := append([]byte(nil), b[:6]...)
 	mac[0] = (mac[0] | 2) & 0xfe
-	return Identity{UUID: uuid.NewString(), Serial: "sub2-" + hex.EncodeToString(b[:8]), MAC: fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]), DiskSerial: hex.EncodeToString(b[4:12]), MachineID: hex.EncodeToString(b), Hostname: "sub2-" + hex.EncodeToString(b[:6])}, nil
+	return Identity{UUID: uuid.NewString(), MAC: fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]), MachineID: hex.EncodeToString(b), Hostname: "sub2-" + hex.EncodeToString(b[:6])}, nil
 }
 
 func (h *Helper) resolve(req Request) (Request, *State, error) {
@@ -262,10 +259,6 @@ func (h *Helper) Do(ctx context.Context, req Request) (*State, error) {
 	if req.Generation < s.Generation {
 		return nil, fault("stale_generation")
 	}
-	migrateLegacyNetwork := req.MigrateNetwork && s.Network == nil
-	if migrateLegacyNetwork && req.Generation <= s.Generation {
-		return nil, fault("network_migration_requires_new_generation")
-	}
 	if s.DeleteRequested && req.Operation != "inspect" && req.Operation != "remove" {
 		return nil, fault("instance_deleting")
 	}
@@ -308,6 +301,18 @@ func (h *Helper) Do(ctx context.Context, req Request) (*State, error) {
 	if req.Operation == "remove" && !s.DeleteRequested && req.Generation <= s.Generation {
 		return nil, fault("mutation_requires_new_generation")
 	}
+	// Resolve and validate new configuration before persisting a new generation
+	// or stopping the running kernel. A bad proxy is not a process failure.
+	var preparedProxy []byte
+	if req.Projection != nil {
+		if req.Operation != "prepare" && req.Operation != "apply-config" {
+			return s, fault("projection_operation_invalid")
+		}
+		preparedProxy, err = prepareProjection(dir, s, *req.Projection)
+		if err != nil {
+			return s, err
+		}
+	}
 	s.Capacity = 0 // Business concurrency belongs to the account scheduler.
 	s.Generation = req.Generation
 	if req.Operation == "remove" {
@@ -322,6 +327,7 @@ func (h *Helper) Do(ctx context.Context, req Request) (*State, error) {
 		return nil, err
 	}
 	fail := func(err error) (*State, error) {
+		s.Healthy = false
 		s.Ready = false
 		s.Phase = "error"
 		s.ErrorCode = errorCode(err)
@@ -338,27 +344,9 @@ func (h *Helper) Do(ctx context.Context, req Request) (*State, error) {
 			return s, err
 		}
 	}
-	// This private operator action requires the caller to stop application
-	// admission and drain all requests first. It replaces only the container;
-	// instance identity, credentials, home and guest disk remain in place.
-	if migrateLegacyNetwork {
-		if err := h.driver.Stop(ctx, *s); err != nil {
-			return fail(err)
-		}
-		if err := h.driver.Remove(ctx, *s); err != nil {
-			return fail(err)
-		}
-		s.ContainerID = ""
-		if err := h.save(dir, s); err != nil {
-			return s, err
-		}
-	}
-	// A legacy create may have succeeded externally before ContainerID was
-	// saved. Its projected credentials distinguish it from a fresh instance:
-	// this allocator always saves Network before projecting any credentials.
-	// Keep such unknown legacy outcomes on their old network until explicit
-	// migration confirms container removal; inspect never migrates a guest.
-	allocateNetwork := s.Network != nil || migrateLegacyNetwork || (s.ContainerID == "" && s.DesiredCredentialRevision == "")
+	// New instances reserve before any external create. Unknown create
+	// outcomes retain their account lease for reconciliation.
+	allocateNetwork := s.Network != nil || (s.ContainerID == "" && s.DesiredCredentialRevision == "")
 	if (req.Operation == "prepare" || req.Operation == "apply-config") && allocateNetwork {
 		if err := h.reserveNetwork(ctx, s); err != nil {
 			return fail(err)
@@ -410,8 +398,9 @@ func (h *Helper) Do(ctx context.Context, req Request) (*State, error) {
 			if err := h.driver.Stop(ctx, *s); err != nil {
 				return fail(err)
 			}
+			s.Healthy = false
 		}
-		if err := h.project(dir, s, *req.Projection); err != nil {
+		if err := h.project(dir, s, *req.Projection, preparedProxy); err != nil {
 			return fail(err)
 		}
 	}
@@ -455,6 +444,9 @@ func (h *Helper) Do(ctx context.Context, req Request) (*State, error) {
 	case "drain", "stop":
 		err = h.driver.Stop(ctx, *s)
 		s.Phase = "stopped"
+		if err == nil {
+			s.Healthy = false
+		}
 	case "remove":
 		if err = h.driver.Stop(ctx, *s); err == nil {
 			err = h.driver.Remove(ctx, *s)
@@ -471,15 +463,12 @@ func (h *Helper) Do(ctx context.Context, req Request) (*State, error) {
 		return fail(err)
 	}
 	if req.Operation == "prepare" || req.Operation == "apply-config" || req.Operation == "inspect" {
+		s.Healthy = observation.Running && (observation.Healthy || observation.KernelReady)
 		s.GuestBootID = observation.GuestBootID
 		s.AppliedCredentialRevision = observation.CredentialRevision
 		s.AppliedProxyRevision = observation.ProxyRevision
 		s.ActualAccelerator = observation.ActualAccelerator
-		acceleratorOK := observation.KVMEnabled && (observation.ActualAccelerator == "" || observation.ActualAccelerator == "kvm")
-		if policy, ok := h.driver.(interface{ AllowsTCG(State) bool }); ok && policy.AllowsTCG(*s) {
-			acceleratorOK = observation.ActualAccelerator == "tcg" && !observation.KVMEnabled
-		}
-		s.Ready = !s.DeleteRequested && observation.Running && acceleratorOK && observation.KernelReady && observation.GuestBootID != "" && observation.CredentialRevision == s.DesiredCredentialRevision && observation.ProxyRevision == s.Spec.ProxyRevision
+		s.Ready = !s.DeleteRequested && observation.Running && observation.ActualAccelerator == "docker" && observation.KernelReady && observation.GuestBootID != "" && observation.CredentialRevision == s.DesiredCredentialRevision && observation.ProxyRevision == s.Spec.ProxyRevision
 		s.Phase = "preparing"
 		if s.Ready {
 			s.Phase = "kernel_ready"
@@ -533,19 +522,30 @@ func (h *Helper) save(dir string, s *State) error {
 	copy.InternalToken = ""
 	return atomicJSON(filepath.Join(dir, "manifest.json"), copy)
 }
-func (h *Helper) project(dir string, s *State, p Projection) error {
+func prepareProjection(dir string, s *State, p Projection) ([]byte, error) {
 	projectionDir := filepath.Join(dir, "credentials")
-	if err := privateDir(projectionDir); err != nil {
-		return err
+	sum := sha256.Sum256(p.Credential)
+	stampPath := filepath.Join(projectionDir, "revision.json")
+	if old, err := os.ReadFile(stampPath); err == nil {
+		var previous struct {
+			Revision string `json:"revision"`
+			Digest   string `json:"digest"`
+		}
+		if json.Unmarshal(old, &previous) != nil {
+			return nil, fault("projection_revision_corrupt")
+		}
+		if previous.Revision == p.Revision && previous.Digest != hex.EncodeToString(sum[:]) {
+			return nil, fault("projection_revision_conflict")
+		}
 	}
 	if p.ProxyURL != "" {
 		u, e := url.Parse(p.ProxyURL)
 		if e != nil || u.Hostname() == "" || u.Port() == "" || (u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "socks5" && u.Scheme != "socks5h") || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
-			return fault("proxy_url_invalid")
+			return nil, fault("proxy_url_invalid")
 		}
 		addresses, e := net.LookupIP(u.Hostname())
 		if e != nil {
-			return fault("proxy_resolution_failed")
+			return nil, fault("proxy_resolution_failed")
 		}
 		ips := []string{}
 		for _, ip := range addresses {
@@ -554,7 +554,7 @@ func (h *Helper) project(dir string, s *State, p Projection) error {
 			}
 		}
 		if len(ips) == 0 {
-			return fault("proxy_ipv4_required")
+			return nil, fault("proxy_ipv4_required")
 		}
 		projection := struct {
 			URL      string   `json:"url"`
@@ -562,11 +562,22 @@ func (h *Helper) project(dir string, s *State, p Projection) error {
 			Port     string   `json:"port"`
 			Revision string   `json:"revision"`
 		}{normalizeKernelProxyURL(p.ProxyURL), ips, u.Port(), s.Spec.ProxyRevision}
-		if e = atomicJSON(filepath.Join(projectionDir, "proxy.json"), projection); e != nil {
-			return e
-		}
+		return json.Marshal(projection)
 	} else if _, e := os.Stat(filepath.Join(projectionDir, "proxy.json")); e != nil {
-		return fault("proxy_projection_required")
+		return nil, fault("proxy_projection_required")
+	}
+	return nil, nil
+}
+
+func (h *Helper) project(dir string, s *State, p Projection, preparedProxy []byte) error {
+	projectionDir := filepath.Join(dir, "credentials")
+	if err := privateDir(projectionDir); err != nil {
+		return err
+	}
+	if preparedProxy != nil {
+		if err := atomicBytes(filepath.Join(projectionDir, "proxy.json"), preparedProxy); err != nil {
+			return err
+		}
 	}
 	sum := sha256.Sum256(p.Credential)
 	stamp := struct {
@@ -574,18 +585,6 @@ func (h *Helper) project(dir string, s *State, p Projection) error {
 		Digest   string `json:"digest"`
 	}{p.Revision, hex.EncodeToString(sum[:])}
 	stampPath := filepath.Join(projectionDir, "revision.json")
-	if old, err := os.ReadFile(stampPath); err == nil {
-		var previous struct {
-			Revision string `json:"revision"`
-			Digest   string `json:"digest"`
-		}
-		if json.Unmarshal(old, &previous) != nil {
-			return fault("projection_revision_corrupt")
-		}
-		if previous.Revision == p.Revision && previous.Digest != stamp.Digest {
-			return fault("projection_revision_conflict")
-		}
-	}
 	// The driver drains/stops the guest kernel before application. Files are
 	// atomically replaced within a directory-mounted read-only guest share.
 	if err := atomicBytes(filepath.Join(projectionDir, "credential.json"), p.Credential); err != nil {

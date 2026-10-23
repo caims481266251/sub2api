@@ -1,0 +1,98 @@
+#!/usr/bin/python3
+import hashlib
+import ipaddress
+import json
+import os
+from pathlib import Path
+import socket
+import subprocess
+import time
+import uuid
+import traceback
+from urllib.parse import urlparse
+from common import projection
+
+
+def main():
+    state, proxy, receipt = projection()
+    if state['spec']['platform'] != 'codex':
+        raise ValueError('container_platform_unsupported')
+    device = str(uuid.UUID(receipt['device_id']))
+    token = Path('/slot/run/internal.token').read_text().strip()
+    if len(token) != 64 or not proxy['url']:
+        raise ValueError('projection_invalid')
+    host = urlparse(proxy['url']).hostname
+    if not host or any(ch.isspace() for ch in host):
+        raise ValueError('proxy_host_invalid')
+    hosts = Path('/etc/hosts')
+    lines = [line for line in hosts.read_text().splitlines() if '# sub2-proxy' not in line]
+    lines += [str(ipaddress.IPv4Address(ip))+' '+host+' # sub2-proxy' for ip in proxy['ips']]
+    hosts.write_text('\n'.join(lines)+'\n')
+    # Rules are initialized as root, then every capability is dropped before
+    # executing the model kernel. Only the configured proxy can be reached.
+    subprocess.run(['/usr/local/lib/sub2-container/firewall'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    kernel_proxy_url = proxy['url']
+    parsed_proxy = urlparse(kernel_proxy_url)
+    if parsed_proxy.scheme in ('socks5', 'socks5h'):
+        ready = Path('/tmp/sub2-proxy-bridge.pid')
+        ready.unlink(missing_ok=True)
+        bridge = subprocess.Popen([
+            '/usr/bin/setpriv','--reuid=10001','--regid=10001','--clear-groups',
+            '--bounding-set=-all','--inh-caps=-all','--ambient-caps=-all','--no-new-privs',
+            '/usr/bin/python3','/usr/local/lib/sub2-container/proxy_bridge.py',str(ready),
+        ], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, close_fds=True, start_new_session=True)
+        ready_mode = Path('/tmp/sub2-proxy-bridge.ready')
+        for _ in range(100):
+            if ready_mode.exists() and ready.exists():
+                break
+            if bridge.poll() is not None:
+                raise ValueError('proxy_bridge_start_failed')
+            time.sleep(0.05)
+        else:
+            bridge.terminate()
+            raise ValueError('proxy_bridge_start_timeout')
+        try:
+            with socket.create_connection(('127.0.0.1',1081),timeout=1) as probe:
+                probe.settimeout(1); probe.sendall(b'\x05\x01\x00')
+                if probe.recv(2) != b'\x05\x00': raise ValueError('proxy_bridge_protocol_invalid')
+                probe.sendall(b'\x05\x01\x00\xff')
+                if probe.recv(2) != b'\x05\x08': raise ValueError('proxy_bridge_protocol_invalid')
+        except (OSError, ValueError) as error:
+            bridge.terminate()
+            raise ValueError('proxy_bridge_listener_failed') from error
+        kernel_proxy_url = 'socks5h://127.0.0.1:1081'
+    config = {'vm_id': state['instance_id'], 'device_id': device,
+              'socket_path': '/slot/run/kernel.sock', 'internal_token': token,
+              'credential_path': '/slot/credentials/credential.json',
+              'proxy_url': kernel_proxy_url, 'proxy_required': True,
+              'max_request_bytes': 33554432, 'upstream_transport': 'http',
+              'client_features': False, 'analytics': False, 'test_endpoints': False}
+    target = Path('/slot/run/codex-kernel.json')
+    if target.is_symlink(): raise ValueError('config_path_invalid')
+    if target.exists(): os.chown(target,0,0)
+    target.write_text(json.dumps(config)); target.chmod(0o600); os.chown(target,10001,10001)
+    receipt['config_digest'] = hashlib.sha256(target.read_bytes()).hexdigest()
+    proof = Path('/run/sub2-container-applied.json')
+    proof.write_text(json.dumps(receipt)); proof.chmod(0o600)
+    for name in ('internal.token','instance.json'):
+        os.chown(Path('/slot/run')/name,10001,10001)
+    gid = int(os.environ.get('SUB2_VM_SERVICE_GID','0')) or 10001
+    os.chown('/slot/run',0,0); os.chmod('/slot/run',0o710); os.chown('/slot/run',10001,gid)
+    os.chown('/slot/home',10001,10001)
+    sock = Path('/slot/run/kernel.sock')
+    if sock.exists() or sock.is_socket():
+        if not sock.is_socket(): raise ValueError('kernel_socket_invalid')
+        sock.unlink()
+    env = {key:value for key,value in os.environ.items() if key.lower() not in ('http_proxy','https_proxy','all_proxy','no_proxy')}
+    argv = ['setpriv','--reuid=10001','--regid=10001','--clear-groups',
+            '--bounding-set=-all','--inh-caps=-all','--ambient-caps=-all','--no-new-privs',
+            '/opt/kin-payload/usr/local/bin/kin-codex-kernel',str(target)]
+    os.execve('/usr/bin/setpriv',argv,env)
+
+
+if __name__ == '__main__':
+    try: main()
+    except Exception as error:
+        frames = traceback.extract_tb(error.__traceback__)
+        frame = next((f for f in reversed(frames) if f.filename == __file__), frames[-1])
+        raise SystemExit('container_initialization_failed kind='+type(error).__name__+' line='+str(frame.lineno)+' errno='+str(getattr(error,'errno',None)))

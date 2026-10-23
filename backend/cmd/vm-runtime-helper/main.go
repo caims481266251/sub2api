@@ -1,4 +1,4 @@
-// vm-runtime-helper is a disabled-by-default local privileged KVM controller.
+// vm-runtime-helper is a disabled-by-default local privileged Docker kernel controller.
 package main
 
 import (
@@ -20,17 +20,15 @@ import (
 
 func main() {
 	enabled := flag.Bool("enabled", false, "explicitly enable the privileged helper")
-	root := flag.String("root", "/var/lib/sub2-vm", "private persistent instance root")
-	socket := flag.String("socket", "/run/sub2-vm/helper.sock", "private local Unix socket")
+	root := flag.String("root", "/var/lib/sub2-docker", "private persistent instance root")
+	socket := flag.String("socket", "/run/sub2-docker/helper.sock", "private local Unix socket")
 	config := flag.String("templates", "", "operator-owned fixed template JSON")
-	allowTCG := flag.Bool("allow-tcg", false, "explicitly allow software emulation for testing")
 	serviceGID := flag.Int("service-gid", 0, "optional dedicated application service group")
 	serviceUID := flag.Int("service-uid", 0, "application UID owning the automatically prepared coordinator lock")
 	networkPool := flag.String("network-pool", "10.240.0.0/16", "local per-account runner subnet pool")
-	guestPool := flag.String("guest-network-pool", "10.241.0.0/16", "local per-account guest subnet pool")
 	flag.Parse()
 	if !*enabled {
-		log.Print("VM helper disabled")
+		log.Print("Docker helper disabled")
 		return
 	}
 	if runtime.GOOS != "linux" || os.Geteuid() != 0 {
@@ -47,7 +45,12 @@ func main() {
 	if json.Unmarshal(b, &templates) != nil {
 		log.Fatal("invalid template configuration")
 	}
-	helper, err := vmruntime.OpenHelper(*root, &vmruntime.DockerDriver{Templates: templates, NetworkCIDR: *networkPool, GuestNetworkCIDR: *guestPool, AllowTCG: *allowTCG, ServiceGID: *serviceGID})
+	for _, template := range templates {
+		if template.Runtime != "container-v1" {
+			log.Fatal("VM/KVM mode has been removed; install the container-v1 template")
+		}
+	}
+	helper, err := vmruntime.OpenHelper(*root, &vmruntime.DockerDriver{Templates: templates, NetworkCIDR: *networkPool, ServiceGID: *serviceGID})
 	if err != nil {
 		log.Fatal("cannot acquire helper state lock")
 	}

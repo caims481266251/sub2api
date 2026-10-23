@@ -76,7 +76,7 @@ func vmForwardFixture(t *testing.T, platform string, handler http.HandlerFunc, s
 	if platform == PlatformAnthropic {
 		kernelPlatform = "claude"
 	}
-	state := vmruntime.State{Spec: vmruntime.Spec{Platform: kernelPlatform, Template: "default", CPU: 2, MemoryMiB: 2048, DiskGiB: 20, ProxyID: proxyID, ProxyRevision: vmProxyRevision(a)}, AccountID: a.ID, InstanceID: "fixture-instance", Generation: 1, Ready: true, GuestBootID: "boot-one", Capacity: 1, KernelSocket: vmForwardUDS(t, handler), InternalToken: "fixture-internal", AppliedCredentialRevision: vmCredentialRevision(a), AppliedProxyRevision: vmProxyRevision(a)}
+	state := vmruntime.State{Spec: vmruntime.Spec{Platform: kernelPlatform, Template: "default", CPU: 2, MemoryMiB: 2048, ProxyID: proxyID, ProxyRevision: vmProxyRevision(a)}, AccountID: a.ID, InstanceID: "fixture-instance", Generation: 1, Ready: true, GuestBootID: "boot-one", Capacity: 1, KernelSocket: vmForwardUDS(t, handler), InternalToken: "fixture-internal", AppliedCredentialRevision: vmCredentialRevision(a), AppliedProxyRevision: vmProxyRevision(a)}
 	helperSocket := vmForwardUDS(t, func(w http.ResponseWriter, r *http.Request) {
 		var request vmruntime.Request
 		if json.NewDecoder(r.Body).Decode(&request) != nil || request.Operation != "inspect" {

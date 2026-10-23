@@ -30,13 +30,13 @@ func (f *fakeDriver) Inspect(context.Context, State, string) (Observation, error
 	return f.observed, nil
 }
 func (f *fakeDriver) Apply(_ context.Context, s State, _ string) (Observation, error) {
-	f.observed = Observation{Running: true, KVMEnabled: true, KernelReady: true, GuestBootID: "boot-1", CredentialRevision: s.DesiredCredentialRevision, ProxyRevision: s.Spec.ProxyRevision}
+	f.observed = Observation{Running: true, ActualAccelerator: "docker", KernelReady: true, GuestBootID: "boot-1", CredentialRevision: s.DesiredCredentialRevision, ProxyRevision: s.Spec.ProxyRevision}
 	return f.observed, nil
 }
 func (f *fakeDriver) Stop(context.Context, State) error   { f.stopCount++; return nil }
 func (f *fakeDriver) Remove(context.Context, State) error { f.removeCount++; return f.removeError }
 func prepareRequest() Request {
-	return Request{Version: 1, Operation: "prepare", AccountID: 42, Generation: 1, Spec: &Spec{Platform: "claude", Template: "fixed", CPU: 1, MemoryMiB: 1024, DiskGiB: 8, ProxyID: 7, ProxyRevision: "px1"}, Projection: &Projection{Revision: "c1", ProxyURL: "http://192.0.2.1:3128", Credential: json.RawMessage(`{"claudeAiOauth":{"accessToken":"test-only"}}`)}}
+	return Request{Version: 1, Operation: "prepare", AccountID: 42, Generation: 1, Spec: &Spec{Platform: "claude", Template: "fixed", CPU: 1, MemoryMiB: 1024, ProxyID: 7, ProxyRevision: "px1"}, Projection: &Projection{Revision: "c1", ProxyURL: "http://192.0.2.1:3128", Credential: json.RawMessage(`{"claudeAiOauth":{"accessToken":"test-only"}}`)}}
 }
 func openTest(t *testing.T, f Driver) (*Helper, string) {
 	t.Helper()
@@ -121,7 +121,7 @@ func TestFencingAndImmutableDisk(t *testing.T) {
 		t.Fatal(err)
 	}
 	req.Generation = 3
-	req.Spec.DiskGiB = 16
+	req.Spec.MemoryMiB = 2048
 	if _, err = h.Do(context.Background(), req); errorCode(err) != "immutable_spec_mismatch" {
 		t.Fatal(err)
 	}
@@ -176,16 +176,9 @@ func TestLockAndArtifactVerification(t *testing.T) {
 	}
 }
 
-func TestUnsupportedHostNeverInvokesDocker(t *testing.T) {
-	d := &DockerDriver{HostOS: "darwin", HostArch: "arm64"}
-	if err := d.Preflight(context.Background(), State{}); errorCode(err) != "linux_amd64_required" {
-		t.Fatal(err)
-	}
-}
-
-func TestMissingPoCGateNeverStartsRuntime(t *testing.T) {
-	d := &DockerDriver{HostOS: "linux", HostArch: "amd64", Templates: map[string]Template{"fixed": {Image: "example.invalid/kvm@sha256:" + strings.Repeat("a", 64)}}}
-	if err := d.Preflight(context.Background(), State{Spec: Spec{Template: "fixed"}}); errorCode(err) != "template_poc_not_verified" {
+func TestRemovedVMTemplateNeverStartsRuntime(t *testing.T) {
+	d := &DockerDriver{Templates: map[string]Template{"fixed": {Runtime: "upstream-v1", Image: "sha256:" + strings.Repeat("a", 64)}}}
+	if err := d.Preflight(context.Background(), State{Spec: Spec{Template: "fixed"}}); errorCode(err) != "runtime_not_supported" {
 		t.Fatal(err)
 	}
 }
@@ -269,5 +262,38 @@ func TestUnknownCreationRequiresStopBeforeRecovery(t *testing.T) {
 	recovered, err := h.Do(context.Background(), req)
 	if err != nil || !recovered.Ready || f.stopCount != 1 {
 		t.Fatalf("unknown container not stopped before recovery: %v", err)
+	}
+}
+
+func TestInvalidProxyUpdatePreservesRunningInstance(t *testing.T) {
+	f := &fakeDriver{}
+	h, root := openTest(t, f)
+	s, err := h.Do(context.Background(), prepareRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(filepath.Join(root, s.InstanceID, "credentials", "proxy.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := prepareRequest()
+	req.Operation = "apply-config"
+	req.InstanceID = s.InstanceID
+	req.Generation = 2
+	req.Spec.ProxyRevision = "invalid-revision"
+	req.Projection.ProxyURL = "invalid://proxy"
+	if _, err = h.Do(context.Background(), req); errorCode(err) != "proxy_url_invalid" {
+		t.Fatal(err)
+	}
+	if f.stopCount != 0 {
+		t.Fatal("invalid configuration stopped running process")
+	}
+	after, _ := os.ReadFile(filepath.Join(root, s.InstanceID, "credentials", "proxy.json"))
+	if string(before) != string(after) {
+		t.Fatal("invalid update replaced working projection")
+	}
+	observed, err := h.Do(context.Background(), Request{Version: 1, Operation: "inspect", AccountID: 42})
+	if err != nil || !observed.Ready || !observed.Healthy || observed.Generation != 1 {
+		t.Fatalf("invalid update changed runtime: %+v %v", observed, err)
 	}
 }

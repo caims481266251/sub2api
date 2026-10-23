@@ -12,13 +12,13 @@ import (
 
 type allocationDriver struct {
 	fakeDriver
-	bridge, guest  string
+	bridge         string
 	conflicts      []string
 	conflictError  error
 	removedNetwork *NetworkLease
 }
 
-func (d *allocationDriver) NetworkPools() (string, string) { return d.bridge, d.guest }
+func (d *allocationDriver) NetworkPool() string { return d.bridge }
 func (d *allocationDriver) NetworkConflicts(context.Context) ([]string, error) {
 	return d.conflicts, d.conflictError
 }
@@ -34,13 +34,13 @@ func allocationState(account int64) *State {
 }
 
 func TestNetworkAllocatorPersistentUniqueAndExternalConflict(t *testing.T) {
-	driver := &allocationDriver{conflicts: []string{"10.240.0.0/28", "10.241.0.16/28"}}
+	driver := &allocationDriver{conflicts: []string{"10.240.0.0/28", "10.240.0.16/28"}}
 	h, root := openTest(t, driver)
 	a := allocationState(1)
 	if e := h.reserveNetwork(context.Background(), a); e != nil {
 		t.Fatal(e)
 	}
-	if a.Network.Subnet != "10.240.0.32/28" || a.Network.GuestSubnet != "10.241.0.32/28" || a.Network.Address != "10.240.0.34" || a.Network.GuestAddress != "10.241.0.36" {
+	if a.Network.Subnet != "10.240.0.32/28" || a.Network.Address != "10.240.0.34" {
 		t.Fatalf("wrong allocation %+v", a.Network)
 	}
 	original := *a.Network
@@ -60,7 +60,7 @@ func TestNetworkAllocatorPersistentUniqueAndExternalConflict(t *testing.T) {
 	if e = h2.reserveNetwork(context.Background(), b); e != nil {
 		t.Fatal(e)
 	}
-	if b.Network.Subnet == a.Network.Subnet || b.Network.GuestSubnet == a.Network.GuestSubnet {
+	if b.Network.Subnet == a.Network.Subnet {
 		t.Fatal("duplicate network")
 	}
 }
@@ -83,7 +83,7 @@ func TestNetworkAllocatorConcurrentReservationsAreUnique(t *testing.T) {
 	}
 	used := map[string]bool{}
 	for _, s := range states {
-		for _, subnet := range []string{s.Network.Subnet, s.Network.GuestSubnet} {
+		for _, subnet := range []string{s.Network.Subnet} {
 			if used[subnet] {
 				t.Fatal("overlapping concurrent lease")
 			}
@@ -92,7 +92,7 @@ func TestNetworkAllocatorConcurrentReservationsAreUnique(t *testing.T) {
 	}
 }
 func TestNetworkAllocatorExhaustionAndDeletionConfirmation(t *testing.T) {
-	driver := &allocationDriver{bridge: "10.240.0.0/28", guest: "10.241.0.0/28"}
+	driver := &allocationDriver{bridge: "10.240.0.0/28"}
 	h, _ := openTest(t, driver)
 	s, e := h.Do(context.Background(), prepareRequest())
 	if e != nil {
@@ -127,7 +127,7 @@ func TestNetworkAllocatorExhaustionAndDeletionConfirmation(t *testing.T) {
 	}
 }
 func TestNetworkAllocatorFailedCreateRetainsReservation(t *testing.T) {
-	driver := &allocationDriver{bridge: "10.240.0.0/28", guest: "10.241.0.0/28"}
+	driver := &allocationDriver{bridge: "10.240.0.0/28"}
 	driver.ensureError = fault("docker_operation_unknown")
 	h, _ := openTest(t, driver)
 	s, e := h.Do(context.Background(), prepareRequest())
@@ -173,13 +173,12 @@ func TestNetworkAllocatorRejectsInvalidPoolsInventoryAndOwnership(t *testing.T) 
 		conflicts     []string
 		want          string
 	}{
-		{"10.240.0.0/16", "10.240.0.0/16", nil, "network_pool_conflict"},
 		{"8.8.0.0/16", "10.241.0.0/16", nil, "network_pool_invalid"},
 		{"10.240.0.0/28", "10.241.0.0/28", []string{"invalid"}, "network_inventory_invalid"},
-		{"10.240.0.0/28", "10.241.0.0/28", []string{"10.241.0.0/16"}, "network_pool_exhausted"},
+		{"10.240.0.0/28", "10.241.0.0/28", []string{"10.240.0.0/16"}, "network_pool_exhausted"},
 	} {
 		t.Run(tc.want, func(t *testing.T) {
-			h, _ := openTest(t, &allocationDriver{bridge: tc.bridge, guest: tc.guest, conflicts: tc.conflicts})
+			h, _ := openTest(t, &allocationDriver{bridge: tc.bridge, conflicts: tc.conflicts})
 			if e := h.reserveNetwork(context.Background(), allocationState(1)); errorCode(e) != tc.want {
 				t.Fatalf("%v", e)
 			}
@@ -249,7 +248,7 @@ func TestNetworkAllocatorCorruptLedgerFailsClosed(t *testing.T) {
 	}
 	original := ledger.Reservations[s.InstanceID]
 	corrupt := original
-	corrupt.Lease.GuestAddress = corrupt.Lease.GuestGateway
+	corrupt.Lease.Address = corrupt.Lease.Gateway
 	ledger.Reservations[s.InstanceID] = corrupt
 	if e = atomicJSON(filepath.Join(root, "network-leases.json"), ledger); e != nil {
 		t.Fatal(e)
@@ -261,7 +260,7 @@ func TestNetworkAllocatorCorruptLedgerFailsClosed(t *testing.T) {
 	other := uuid.NewString()
 	duplicate := original
 	duplicate.AccountID++
-	duplicate.Lease.NetworkName = "sub2-vm-net-" + other
+	duplicate.Lease.NetworkName = "sub2-docker-net-" + other
 	ledger.Reservations[other] = duplicate
 	if e = atomicJSON(filepath.Join(root, "network-leases.json"), ledger); e != nil {
 		t.Fatal(e)

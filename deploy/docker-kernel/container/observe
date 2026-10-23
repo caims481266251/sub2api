@@ -1,0 +1,54 @@
+#!/usr/bin/python3
+import hashlib
+import http.client
+import json
+import os
+from pathlib import Path
+import socket
+import subprocess
+from common import projection, process_identity, read
+
+
+class LocalHTTP(http.client.HTTPConnection):
+    def connect(self):
+        self.sock = socket.socket(socket.AF_UNIX)
+        self.sock.settimeout(3)
+        self.sock.connect('/slot/run/kernel.sock')
+
+
+def main():
+    proof = read('/run/sub2-container-applied.json')
+    if proof['config_digest'] != hashlib.sha256(Path('/slot/run/codex-kernel.json').read_bytes()).hexdigest():
+        raise ValueError('config_changed')
+    subprocess.run(['/usr/local/lib/sub2-container/firewall','--check'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if read('/slot/run/codex-kernel.json').get('proxy_url') == 'socks5h://127.0.0.1:1081':
+        try:
+            os.kill(int(Path('/tmp/sub2-proxy-bridge.pid').read_text()), 0)
+            if not Path('/tmp/sub2-proxy-bridge.ready').is_file(): raise ValueError()
+            with socket.create_connection(('127.0.0.1',1081),timeout=1) as probe:
+                probe.settimeout(1); probe.sendall(b'\x05\x01\x00')
+                if probe.recv(2) != b'\x05\x00': raise ValueError()
+                probe.sendall(b'\x05\x01\x00\xff')
+                if probe.recv(2) != b'\x05\x08': raise ValueError()
+        except (OSError, ValueError): raise ValueError('proxy_bridge_not_ready')
+    process = process_identity()
+    token = Path('/slot/run/internal.token').read_text().strip()
+    conn = LocalHTTP('kernel')
+    conn.request('GET','/internal/health',headers={'x-kin-internal-token':token,'x-internal-token':token})
+    response = conn.getresponse(); health = json.loads(response.read(1048576)); conn.close()
+    if response.status != 200 or health.get('healthy',health.get('ok',False)) is not True or process_identity() != process:
+        raise ValueError('kernel_not_ready')
+    # Keep admission fencing separate from process health. A pending credential
+    # or proxy projection does not make a responding local kernel unhealthy.
+    applied = False
+    try:
+        _, _, expected = projection()
+        applied = all(proof.get(key) == value for key,value in expected.items())
+    except (ValueError, OSError, KeyError):
+        pass
+    print(json.dumps({key:proof[key] for key in ('generation','credential_revision','proxy_revision')} | {'process':process,'kernel_ready':True,'configuration_applied':applied}))
+
+
+if __name__ == '__main__':
+    try: main()
+    except Exception: raise SystemExit('container_observation_failed')

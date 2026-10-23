@@ -10,13 +10,13 @@ func TestVMKernelConfigEnvironmentAndDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.VMKernel.Enabled || cfg.VMKernel.HelperSocket != "/run/sub2api-vm/helper.sock" || cfg.VMKernel.Template != "default" || cfg.VMKernel.CPU != 2 || cfg.VMKernel.MemoryMiB != 2048 || cfg.VMKernel.DiskGiB != 20 {
+	if !cfg.VMKernel.Enabled || cfg.VMKernel.HelperSocket != "/run/sub2api-vm/helper.sock" || cfg.VMKernel.Template != "default" || cfg.VMKernel.CPU != 2 || cfg.VMKernel.MemoryMiB != 512 {
 		t.Fatalf("VM environment/default mismatch: %+v", cfg.VMKernel)
 	}
 }
 
 func TestVMKernelConfigValidation(t *testing.T) {
-	valid := Config{VMKernel: VMKernelConfig{Enabled: true, HelperSocket: "/run/vm/helper.sock", Template: "default", CPU: 2, MemoryMiB: 2048, DiskGiB: 20}}
+	valid := Config{VMKernel: VMKernelConfig{Enabled: true, HelperSocket: "/run/vm/helper.sock", Template: "default", CPU: 2, MemoryMiB: 2048}}
 	if err := valid.validateVMKernel(); err != nil {
 		t.Fatal(err)
 	}
@@ -24,8 +24,7 @@ func TestVMKernelConfigValidation(t *testing.T) {
 		"relative socket":      func(c *Config) { c.VMKernel.HelperSocket = "relative.sock" },
 		"template path":        func(c *Config) { c.VMKernel.Template = "../template" },
 		"cpu":                  func(c *Config) { c.VMKernel.CPU = 33 },
-		"memory":               func(c *Config) { c.VMKernel.MemoryMiB = 128 },
-		"disk":                 func(c *Config) { c.VMKernel.DiskGiB = 1025 },
+		"memory":               func(c *Config) { c.VMKernel.MemoryMiB = 127 },
 		"gateway":              func(c *Config) { c.Runtime.Role = RuntimeRoleGateway },
 		"regional scheduler":   func(c *Config) { c.Runtime.RegionalSchedulerFile = "snapshot" },
 		"regional auth":        func(c *Config) { c.Runtime.RegionalAuthFile = "auth" },

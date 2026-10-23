@@ -32,9 +32,15 @@ type vmRuntimeStatus struct {
 // Local readiness supplements the original administrator, group and quota
 // policy. It never writes the administrator-owned Schedulable flag.
 var vmKernelReadiness sync.Map
+
+// Independent local health observations; never derived from admission or provider errors.
+var vmKernelHealth sync.Map
 var vmKernelServices sync.Map
 
 func VMKernelRuntimeReady(a *Account) bool {
+	if a != nil && a.ExecutionMode == "vm_kernel" {
+		return false
+	}
 	if a == nil || !a.IsVMKernel() {
 		return true
 	}
@@ -165,10 +171,7 @@ func NewVMKernelService(cfg *config.Config, repo AccountRepository, platform str
 		s.cfg.CPU = 2
 	}
 	if s.cfg.MemoryMiB <= 0 {
-		s.cfg.MemoryMiB = 2048
-	}
-	if s.cfg.DiskGiB <= 0 {
-		s.cfg.DiskGiB = 20
+		s.cfg.MemoryMiB = 512
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel = cancel
@@ -206,7 +209,7 @@ func (s *VMKernelService) Stop() {
 			<-s.done
 		}
 		s.workers.Wait()
-		s.slots.Range(func(key, _ any) bool { vmKernelReadiness.Delete(key); return true })
+		s.slots.Range(func(key, _ any) bool { vmKernelReadiness.Delete(key); vmKernelHealth.Delete(key); return true })
 		vmKernelServices.CompareAndDelete(s.platform, s)
 		if s.helper != nil {
 			s.helper.CloseIdleConnections()
@@ -300,6 +303,11 @@ func (s *VMKernelService) reconcile(ctx context.Context) {
 			continue
 		}
 		a, e := s.repo.GetByID(ctx, state.AccountID)
+		// Removed VM mode is retained as data only. Never migrate or destroy
+		// its resources when the Docker coordinator starts.
+		if e == nil && a != nil && a.ExecutionMode == "vm_kernel" {
+			continue
+		}
 		if errors.Is(e, ErrAccountNotFound) || (e == nil && (a == nil || !a.IsVMKernel())) {
 			id := state.AccountID
 			s.enqueue(lifecycle, id, func(task context.Context) { s.retire(task, id, true) })
@@ -308,10 +316,6 @@ func (s *VMKernelService) reconcile(ctx context.Context) {
 		if e != nil {
 			vmKernelReadiness.Delete(state.AccountID)
 			continue
-		}
-		if !vmAccountEligible(a) {
-			id := a.ID
-			s.enqueue(lifecycle, id, func(task context.Context) { s.retire(task, id, false) })
 		}
 	}
 	for i := range accounts {
@@ -356,8 +360,7 @@ func (s *VMKernelService) controlLimits() {
 // Public inference never creates or starts a VM. Every restart/projection
 // change advances the helper generation and invalidates old WS bindings.
 func (s *VMKernelService) prepare(ctx context.Context, account *Account) {
-	if !vmAccountEligible(account) {
-		s.retire(ctx, account.ID, false)
+	if account != nil && account.ExecutionMode == "vm_kernel" {
 		return
 	}
 	slot := s.slot(account.ID)
@@ -380,6 +383,14 @@ func (s *VMKernelService) prepare(ctx context.Context, account *Account) {
 	if slot.deleting || slot.revoked.Load() {
 		return
 	}
+	// Inspect even when OAuth refresh or proxy business eligibility is failing.
+	// Such failures must not stop a healthy process or erase its health evidence.
+	state, inspectErr := s.helper.Do(ctx, vmruntime.Request{Operation: "inspect", AccountID: account.ID})
+	s.publishHealth(account.ID, state, inspectErr)
+	if !vmAccountEligible(account) {
+		vmKernelReadiness.Delete(account.ID)
+		return
+	}
 	if s.tokens == nil {
 		s.publish(account, nil, errors.New("vm_token_provider_unavailable"), "credentials")
 		return
@@ -398,7 +409,7 @@ func (s *VMKernelService) prepare(ctx context.Context, account *Account) {
 		s.publish(a, nil, err, "credentials")
 		return
 	}
-	state, err := s.helper.Do(ctx, vmruntime.Request{Operation: "inspect", AccountID: a.ID})
+	err = inspectErr
 	// A failed observation with a persisted binding can be drained/recovered at
 	// a newer generation. A transport/inventory failure with no binding cannot
 	// be reinterpreted as permission to create another instance.
@@ -430,7 +441,7 @@ func (s *VMKernelService) prepare(ctx context.Context, account *Account) {
 		slot.observationFailures = 0
 	}
 	projection := &vmruntime.Projection{Revision: vmCredentialRevision(a), Credential: credential, ProxyURL: a.Proxy.URL()}
-	spec := vmruntime.Spec{Platform: vmPlatform(a.Platform), Template: s.cfg.Template, CPU: s.cfg.CPU, MemoryMiB: s.cfg.MemoryMiB, DiskGiB: s.cfg.DiskGiB, ProxyID: *a.ProxyID, ProxyRevision: vmProxyRevision(a)}
+	spec := vmruntime.Spec{Platform: vmPlatform(a.Platform), Template: s.cfg.Template, CPU: s.cfg.CPU, MemoryMiB: s.cfg.MemoryMiB, ProxyID: *a.ProxyID, ProxyRevision: vmProxyRevision(a)}
 	request := vmruntime.Request{Operation: "prepare", AccountID: a.ID, Generation: 1, Spec: &spec, Projection: projection}
 	mutate := state == nil
 	if state != nil {
@@ -477,6 +488,7 @@ func (s *VMKernelService) prepare(ctx context.Context, account *Account) {
 		}
 		vmKernelReadiness.Delete(a.ID)
 		state, err = s.helper.Do(ctx, request)
+		s.publishHealth(a.ID, state, err)
 		if err != nil {
 			s.publish(a, state, err, request.Operation)
 			slot.nextProbe = time.Now().Add(time.Minute)
@@ -563,6 +575,7 @@ func (s *VMKernelService) retire(ctx context.Context, id int64, remove bool) {
 		return
 	}
 	state, err := s.helper.Do(ctx, vmruntime.Request{Operation: operation, AccountID: id, InstanceID: state.InstanceID, Generation: state.Generation + 1})
+	s.publishHealth(id, state, err)
 	if state != nil {
 		state.Ready = false
 		if err != nil {
@@ -720,9 +733,8 @@ func (s *VMKernelService) execute(ctx context.Context, selected *Account, protoc
 		if latest.Platform != s.platform || (protocol == "messages") != (latest.Platform == PlatformAnthropic) {
 			return nil, errors.New("vm_protocol_mismatch")
 		}
-		// The control plane already validated QMP, local kernel health and
-		// the applied guest receipt. Reuse that bounded observation; running a
-		// guest SSH inspect for every request serializes concurrent admission.
+		// Reuse the bounded local kernel observation and applied configuration.
+		// Per-request container inspection would serialize concurrent admission.
 		value, found := vmKernelReadiness.Load(latest.ID)
 		if !found || !VMKernelRuntimeReady(latest) {
 			return nil, &vmkernel.AttemptError{Code: "vm_runtime_not_ready", SafeToRetry: true}

@@ -9,8 +9,10 @@ import (
 )
 
 const (
-	AccountExecutionModeNormal   = "normal"
-	AccountExecutionModeVMKernel = "vm_kernel"
+	AccountExecutionModeNormal       = "normal"
+	AccountExecutionModeDockerKernel = "docker_kernel"
+	// Internal name retained to reuse the existing kernel business pipeline.
+	AccountExecutionModeVMKernel = AccountExecutionModeDockerKernel
 )
 
 // EffectiveExecutionMode preserves compatibility with pre-migration snapshots.
@@ -22,7 +24,7 @@ func (a *Account) EffectiveExecutionMode() string {
 	return a.ExecutionMode
 }
 func (a *Account) IsVMKernel() bool {
-	return a != nil && a.ExecutionMode == AccountExecutionModeVMKernel
+	return a != nil && (a.ExecutionMode == AccountExecutionModeVMKernel || a.ExecutionMode == "vm_kernel")
 }
 
 func NormalizeAccountExecutionMode(mode string) (string, error) {
@@ -30,7 +32,7 @@ func NormalizeAccountExecutionMode(mode string) (string, error) {
 		return AccountExecutionModeNormal, nil
 	}
 	if mode != AccountExecutionModeNormal && mode != AccountExecutionModeVMKernel {
-		return "", infraerrors.BadRequest("INVALID_EXECUTION_MODE", "execution_mode must be normal or vm_kernel")
+		return "", infraerrors.BadRequest("INVALID_EXECUTION_MODE", "execution_mode must be normal or docker_kernel")
 	}
 	return mode, nil
 }
@@ -61,7 +63,7 @@ func ValidateVMKernelAccount(account *Account) error {
 		return nil
 	}
 	invalid := func() error {
-		return infraerrors.BadRequest("VM_KERNEL_ACCOUNT_UNSUPPORTED", "VM kernel requires a standard Anthropic or OpenAI OAuth account without special execution settings")
+		return infraerrors.BadRequest("VM_KERNEL_ACCOUNT_UNSUPPORTED", "Docker kernel requires a standard OpenAI OAuth account without special execution settings")
 	}
 	if (account.Platform != PlatformAnthropic && account.Platform != PlatformOpenAI) || account.Type != AccountTypeOAuth || account.ParentAccountID != nil {
 		return invalid()

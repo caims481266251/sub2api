@@ -1,4 +1,4 @@
-// Package vmruntime is the local, account-scoped KVM helper protocol. It does
+// Package vmruntime is the local, account-scoped Docker kernel helper protocol. It does
 // not select accounts, refresh OAuth credentials, or record billable usage.
 package vmruntime
 
@@ -22,7 +22,6 @@ type Spec struct {
 	Template      string `json:"template"`
 	CPU           int    `json:"cpu"`
 	MemoryMiB     int    `json:"memory_mib"`
-	DiskGiB       int    `json:"disk_gib"`
 	ProxyID       int64  `json:"proxy_id"`
 	ProxyRevision string `json:"proxy_revision"`
 }
@@ -36,24 +35,20 @@ type Projection struct {
 }
 
 type Request struct {
-	// MigrateNetwork is a private operator action after the application is drained.
-	MigrateNetwork bool        `json:"migrate_network,omitempty"`
-	Version        int         `json:"version"`
-	Operation      string      `json:"operation"`
-	AccountID      int64       `json:"account_id"`
-	InstanceID     string      `json:"instance_id"`
-	Generation     uint64      `json:"generation"`
-	Spec           *Spec       `json:"spec,omitempty"`
-	Projection     *Projection `json:"projection,omitempty"`
+	Version    int         `json:"version"`
+	Operation  string      `json:"operation"`
+	AccountID  int64       `json:"account_id"`
+	InstanceID string      `json:"instance_id"`
+	Generation uint64      `json:"generation"`
+	Spec       *Spec       `json:"spec,omitempty"`
+	Projection *Projection `json:"projection,omitempty"`
 }
 
 type Identity struct {
-	UUID       string `json:"uuid"`
-	Serial     string `json:"serial"`
-	MAC        string `json:"mac"`
-	DiskSerial string `json:"disk_serial"`
-	MachineID  string `json:"machine_id"`
-	Hostname   string `json:"hostname"`
+	UUID      string `json:"uuid"`
+	MAC       string `json:"mac"`
+	MachineID string `json:"machine_id"`
+	Hostname  string `json:"hostname"`
 }
 
 // ClientIdentity is the stable per-instance kernel client identity. It is never
@@ -65,15 +60,11 @@ type ClientIdentity struct {
 // NetworkLease is allocated by the helper, never accepted from account input.
 // Empty Network on an existing manifest denotes its unchanged legacy network.
 type NetworkLease struct {
-	NetworkName  string `json:"network_name"`
-	Subnet       string `json:"subnet"`
-	Gateway      string `json:"gateway"`
-	Address      string `json:"address"`
-	GuestSubnet  string `json:"guest_subnet"`
-	GuestGateway string `json:"guest_gateway"`
-	GuestAddress string `json:"guest_address"`
-	GuestDNS     string `json:"guest_dns"`
-	Released     bool   `json:"released,omitempty"`
+	NetworkName string `json:"network_name"`
+	Subnet      string `json:"subnet"`
+	Gateway     string `json:"gateway"`
+	Address     string `json:"address"`
+	Released    bool   `json:"released,omitempty"`
 }
 
 // State is a private control-plane DTO, never an account API response. The
@@ -85,13 +76,14 @@ type State struct {
 	InstanceID                string          `json:"instance_id"`
 	Generation                uint64          `json:"generation"`
 	Phase                     string          `json:"phase"`
+	Healthy                   bool            `json:"healthy"` // local process/socket health, independent of request admission
 	Ready                     bool            `json:"ready"`
 	ActualAccelerator         string          `json:"actual_accelerator,omitempty"`
 	Capacity                  int             `json:"capacity"` // 0 means account-scheduler managed; legacy positive values are informational
 	Spec                      Spec            `json:"spec"`
 	Identity                  Identity        `json:"identity"`
 	ContainerID               string          `json:"container_id,omitempty"`
-	GuestBootID               string          `json:"guest_boot_id,omitempty"`
+	GuestBootID               string          `json:"kernel_boot_id,omitempty"`
 	DesiredCredentialRevision string          `json:"desired_credential_revision,omitempty"`
 	AppliedCredentialRevision string          `json:"applied_credential_revision,omitempty"`
 	AppliedProxyRevision      string          `json:"applied_proxy_revision,omitempty"`
@@ -123,9 +115,9 @@ type Driver interface {
 }
 
 type Observation struct {
+	Healthy            bool
 	ActualAccelerator  string
 	Running            bool
-	KVMEnabled         bool
 	GuestBootID        string
 	CredentialRevision string
 	ProxyRevision      string

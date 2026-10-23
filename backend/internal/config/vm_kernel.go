@@ -15,7 +15,6 @@ type VMKernelConfig struct {
 	Template     string `mapstructure:"template"`
 	CPU          int    `mapstructure:"cpu"`
 	MemoryMiB    int    `mapstructure:"memory_mib"`
-	DiskGiB      int    `mapstructure:"disk_gib"`
 }
 
 func (c *Config) validateVMKernel() error {
@@ -32,11 +31,8 @@ func (c *Config) validateVMKernel() error {
 	if vm.CPU < 1 || vm.CPU > 32 {
 		return fmt.Errorf("vm_kernel.cpu must be between 1 and 32")
 	}
-	if vm.MemoryMiB < 512 || vm.MemoryMiB > 131072 {
-		return fmt.Errorf("vm_kernel.memory_mib must be between 512 and 131072")
-	}
-	if vm.DiskGiB < 4 || vm.DiskGiB > 1024 {
-		return fmt.Errorf("vm_kernel.disk_gib must be between 4 and 1024")
+	if vm.MemoryMiB < 128 || vm.MemoryMiB > 131072 {
+		return fmt.Errorf("vm_kernel.memory_mib must be between 128 and 131072")
 	}
 	// Guest lifetime and accounting require the single local coordinator. Regional
 	// snapshots and funds/concurrency files belong to separate execution domains.

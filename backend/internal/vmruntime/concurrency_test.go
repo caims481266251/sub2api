@@ -19,7 +19,7 @@ func (d *blockingDriver) Ensure(_ context.Context, s State, _ string) (string, e
 	return s.InstanceID, nil
 }
 func (d *blockingDriver) Inspect(_ context.Context, s State, _ string) (Observation, error) {
-	return Observation{Running: true, KVMEnabled: true, KernelReady: true, GuestBootID: "boot", CredentialRevision: s.DesiredCredentialRevision, ProxyRevision: s.Spec.ProxyRevision}, nil
+	return Observation{Running: true, ActualAccelerator: "docker", KernelReady: true, GuestBootID: "boot", CredentialRevision: s.DesiredCredentialRevision, ProxyRevision: s.Spec.ProxyRevision}, nil
 }
 func (d *blockingDriver) Apply(ctx context.Context, s State, dir string) (Observation, error) {
 	return d.Inspect(ctx, s, dir)

@@ -11,14 +11,14 @@ import (
 
 func TestVMKernelRuntimeSummarySanitizesPrivateState(t *testing.T) {
 	account := &Account{ID: 987654322, Platform: PlatformOpenAI, ExecutionMode: AccountExecutionModeVMKernel, Concurrency: 12, Credentials: map[string]any{"access_token": "test-token"}}
-	t.Cleanup(func() { vmKernelReadiness.Delete(account.ID) })
+	t.Cleanup(func() { vmKernelHealth.Delete(account.ID) })
 	if VMKernelRuntimeSummary(&Account{}) != nil {
 		t.Fatal("ordinary account gained VM status")
 	}
 	if summary := VMKernelRuntimeSummary(account); summary.Phase != "pending" || summary.Ready {
 		t.Fatal("missing status must be pending")
 	}
-	vmKernelReadiness.Store(account.ID, vmRuntimeStatus{state: vmruntime.State{Phase: "kernel_ready", Ready: true, KernelSocket: "/secret/kernel.sock", InternalToken: "secret-token", ErrorCode: "private-error-detail"}, credentials: vmCredentialRevision(account), proxy: vmProxyRevision(account), checked: time.Now()})
+	vmKernelHealth.Store(account.ID, vmRuntimeStatus{state: vmruntime.State{Phase: "kernel_ready", Ready: true, KernelSocket: "/secret/kernel.sock", InternalToken: "secret-token", ErrorCode: "private-error-detail"}, credentials: vmCredentialRevision(account), proxy: vmProxyRevision(account), checked: time.Now()})
 	summary := VMKernelRuntimeSummary(account)
 	if !summary.Ready || summary.Capacity != 12 || summary.ErrorCode != "runtime_operation_failed" {
 		t.Fatalf("bad summary: %+v", summary)
@@ -40,11 +40,11 @@ func TestVMKernelRuntimeSummarySanitizesPrivateState(t *testing.T) {
 
 func TestVMKernelRuntimeSummaryAcceleratorIsAnAllowlistedObservation(t *testing.T) {
 	account := &Account{ID: 987654323, ExecutionMode: AccountExecutionModeVMKernel}
-	t.Cleanup(func() { vmKernelReadiness.Delete(account.ID) })
-	for _, actual := range []string{"tcg", "kvm", "/private/runtime/path"} {
-		vmKernelReadiness.Store(account.ID, vmRuntimeStatus{state: vmruntime.State{ActualAccelerator: actual}, checked: time.Now()})
+	t.Cleanup(func() { vmKernelHealth.Delete(account.ID) })
+	for _, actual := range []string{"docker", "kvm", "/private/runtime/path"} {
+		vmKernelHealth.Store(account.ID, vmRuntimeStatus{state: vmruntime.State{ActualAccelerator: actual}, checked: time.Now()})
 		summary := VMKernelRuntimeSummary(account)
-		if actual == "tcg" || actual == "kvm" {
+		if actual == "docker" {
 			if summary.ActualAccelerator != actual {
 				t.Fatalf("observed accelerator was lost")
 			}
@@ -56,14 +56,14 @@ func TestVMKernelRuntimeSummaryAcceleratorIsAnAllowlistedObservation(t *testing.
 
 func TestVMKernelRuntimeSummaryPreservesConfiguredConcurrency(t *testing.T) {
 	account := &Account{ID: 987654324, Platform: PlatformOpenAI, ExecutionMode: AccountExecutionModeVMKernel, Credentials: map[string]any{"access_token": "test-token"}}
-	t.Cleanup(func() { vmKernelReadiness.Delete(account.ID) })
+	t.Cleanup(func() { vmKernelHealth.Delete(account.ID) })
 	for _, concurrency := range []int{0, 12, 32} {
 		account.Concurrency = concurrency
-		vmKernelReadiness.Delete(account.ID)
+		vmKernelHealth.Delete(account.ID)
 		if summary := VMKernelRuntimeSummary(account); summary.Capacity != concurrency || summary.Ready {
 			t.Fatalf("pending configuration lost: %+v", summary)
 		}
-		vmKernelReadiness.Store(account.ID, vmRuntimeStatus{state: vmruntime.State{Phase: "kernel_ready", Ready: true}, credentials: vmCredentialRevision(account), proxy: vmProxyRevision(account), checked: time.Now()})
+		vmKernelHealth.Store(account.ID, vmRuntimeStatus{state: vmruntime.State{Phase: "kernel_ready", Ready: true}, credentials: vmCredentialRevision(account), proxy: vmProxyRevision(account), checked: time.Now()})
 		if summary := VMKernelRuntimeSummary(account); summary.Capacity != concurrency || !summary.Ready {
 			t.Fatalf("ready configuration lost: %+v", summary)
 		}
@@ -72,14 +72,26 @@ func TestVMKernelRuntimeSummaryPreservesConfiguredConcurrency(t *testing.T) {
 
 func TestVMKernelRuntimeSummaryKeepsRequestOutcomeOutOfAccountBadge(t *testing.T) {
 	account := &Account{ID: 987654329, Platform: PlatformOpenAI, ExecutionMode: AccountExecutionModeVMKernel, Credentials: map[string]any{"access_token": "test-token"}}
-	t.Cleanup(func() { vmKernelReadiness.Delete(account.ID) })
-	vmKernelReadiness.Store(account.ID, vmRuntimeStatus{state: vmruntime.State{Phase: "error", Ready: false, ActualAccelerator: "tcg", ErrorCode: "kernel_attempt_unknown"}, credentials: vmCredentialRevision(account), proxy: vmProxyRevision(account), checked: time.Now()})
+	t.Cleanup(func() { vmKernelHealth.Delete(account.ID) })
+	vmKernelHealth.Store(account.ID, vmRuntimeStatus{state: vmruntime.State{Phase: "error", Ready: false, ActualAccelerator: "docker", ErrorCode: "kernel_attempt_unknown"}, credentials: vmCredentialRevision(account), proxy: vmProxyRevision(account), checked: time.Now()})
 	summary := VMKernelRuntimeSummary(account)
-	if summary.Ready || summary.Phase != "pending" || summary.ErrorCode != "" || summary.ActualAccelerator != "tcg" {
+	if summary.Ready || summary.Phase != "pending" || summary.ErrorCode != "" || summary.ActualAccelerator != "docker" {
 		t.Fatalf("request failure became account runtime error: %+v", summary)
 	}
-	vmKernelReadiness.Store(account.ID, vmRuntimeStatus{state: vmruntime.State{Phase: "error", Ready: false, ErrorCode: "kvm_not_enabled"}, checked: time.Now()})
-	if summary = VMKernelRuntimeSummary(account); summary.Ready || summary.ErrorCode != "kvm_not_enabled" {
+	vmKernelHealth.Store(account.ID, vmRuntimeStatus{state: vmruntime.State{Phase: "error", Ready: false, ErrorCode: "container_start_timeout"}, checked: time.Now()})
+	if summary = VMKernelRuntimeSummary(account); summary.Ready || summary.ErrorCode != "container_start_timeout" {
 		t.Fatalf("local runtime failure lost: %+v", summary)
+	}
+}
+
+func TestVMKernelHealthIndependentOfAdmissionRevisions(t *testing.T) {
+	a := &Account{ID: 987654330, ExecutionMode: AccountExecutionModeVMKernel, Credentials: map[string]any{"access_token": "changed"}}
+	t.Cleanup(func() { vmKernelReadiness.Delete(a.ID); vmKernelHealth.Delete(a.ID) })
+	vmKernelHealth.Store(a.ID, vmRuntimeStatus{state: vmruntime.State{Healthy: true, Phase: "kernel_ready"}, checked: time.Now()})
+	if VMKernelRuntimeReady(a) {
+		t.Fatal("missing admission state accepted")
+	}
+	if summary := VMKernelRuntimeSummary(a); !summary.Ready || summary.ErrorCode != "" {
+		t.Fatalf("health tied to admission: %+v", summary)
 	}
 }

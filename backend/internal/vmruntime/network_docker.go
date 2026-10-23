@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-func (d *DockerDriver) NetworkPools() (string, string) { return d.NetworkCIDR, d.GuestNetworkCIDR }
+func (d *DockerDriver) NetworkPool() string { return d.NetworkCIDR }
 
 // Enumerate the daemon's networks rather than assuming the default address pool
 // is unused. Errors are not absence and must stop resource allocation.

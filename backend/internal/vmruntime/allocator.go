@@ -36,12 +36,12 @@ func networkAddress(base netip.Addr, offset uint32) string {
 	binary.BigEndian.PutUint32(b[:], binary.BigEndian.Uint32(b[:])+offset)
 	return netip.AddrFrom4(b).String()
 }
-func leaseAt(instance string, bridge, guest netip.Prefix, slot uint32) NetworkLease {
+func leaseAt(instance string, bridge netip.Prefix, slot uint32) NetworkLease {
 	offset := slot << uint(32-networkLeaseBits)
 	host := netip.MustParseAddr(networkAddress(bridge.Addr(), offset))
-	vm := netip.MustParseAddr(networkAddress(guest.Addr(), offset))
-	return NetworkLease{NetworkName: "sub2-vm-net-" + instance, Subnet: netip.PrefixFrom(host, networkLeaseBits).String(), Gateway: networkAddress(host, 1), Address: networkAddress(host, 2), GuestSubnet: netip.PrefixFrom(vm, networkLeaseBits).String(), GuestGateway: networkAddress(vm, 2), GuestDNS: networkAddress(vm, 3), GuestAddress: networkAddress(vm, 4)}
+	return NetworkLease{NetworkName: "sub2-docker-net-" + instance, Subnet: netip.PrefixFrom(host, networkLeaseBits).String(), Gateway: networkAddress(host, 1), Address: networkAddress(host, 2)}
 }
+
 func (h *Helper) readNetworkLedger() (*networkLedger, error) {
 	path := filepath.Join(h.root, "network-leases.json")
 	if e := rejectSymlink(path); e != nil {
@@ -62,10 +62,13 @@ func (h *Helper) readNetworkLedger() (*networkLedger, error) {
 	for instance, reservation := range ledger.Reservations {
 		lease := reservation.Lease
 		parsed, parseErr := uuid.Parse(instance)
-		if parseErr != nil || parsed.String() != instance || reservation.AccountID <= 0 || lease.NetworkName != "sub2-vm-net-"+instance || lease.Released {
+		if parseErr != nil || parsed.String() != instance || reservation.AccountID <= 0 || lease.NetworkName != "sub2-docker-net-"+instance || lease.Released {
 			return nil, fault("network_lease_invalid")
 		}
-		for _, raw := range []string{lease.Subnet, lease.GuestSubnet} {
+		for _, raw := range []string{lease.Subnet} {
+			if raw == "" {
+				continue
+			}
 			p, e := networkPool(raw)
 			if e != nil || p.Bits() != networkLeaseBits {
 				return nil, fault("network_lease_invalid")
@@ -78,8 +81,8 @@ func (h *Helper) readNetworkLedger() (*networkLedger, error) {
 			used = append(used, p)
 		}
 		host := netip.MustParsePrefix(lease.Subnet)
-		guest := netip.MustParsePrefix(lease.GuestSubnet)
-		if leaseAt(instance, host, guest, 0) != lease {
+		expected := leaseAt(instance, host, 0)
+		if expected != lease {
 			return nil, fault("network_lease_invalid")
 		}
 	}
@@ -106,30 +109,18 @@ func (h *Helper) reserveNetwork(ctx context.Context, s *State) error {
 	if s.Network != nil {
 		return fault("network_lease_missing")
 	}
-	bridgeRaw, guestRaw := "10.240.0.0/16", "10.241.0.0/16"
-	if provider, ok := h.driver.(interface{ NetworkPools() (string, string) }); ok {
-		b, g := provider.NetworkPools()
-		if b != "" {
-			bridgeRaw = b
-		}
-		if g != "" {
-			guestRaw = g
-		}
+	bridgeRaw := "10.240.0.0/16"
+	if provider, ok := h.driver.(interface{ NetworkPool() string }); ok && provider.NetworkPool() != "" {
+		bridgeRaw = provider.NetworkPool()
 	}
 	bridge, e := networkPool(bridgeRaw)
 	if e != nil {
 		return e
 	}
-	guest, e := networkPool(guestRaw)
-	if e != nil {
-		return e
-	}
-	if bridge.Bits() != guest.Bits() || bridge.Overlaps(guest) {
-		return fault("network_pool_conflict")
-	}
+
 	blocked := []netip.Prefix{}
 	for _, reservation := range ledger.Reservations {
-		blocked = append(blocked, netip.MustParsePrefix(reservation.Lease.Subnet), netip.MustParsePrefix(reservation.Lease.GuestSubnet))
+		blocked = append(blocked, netip.MustParsePrefix(reservation.Lease.Subnet))
 	}
 	if provider, ok := h.driver.(interface {
 		NetworkConflicts(context.Context) ([]string, error)
@@ -148,13 +139,13 @@ func (h *Helper) reserveNetwork(ctx context.Context, s *State) error {
 			}
 		}
 	}
+
 	for slot := uint32(0); slot < uint32(1)<<uint(networkLeaseBits-bridge.Bits()); slot++ {
-		lease := leaseAt(s.InstanceID, bridge, guest, slot)
+		lease := leaseAt(s.InstanceID, bridge, slot)
 		b := netip.MustParsePrefix(lease.Subnet)
-		g := netip.MustParsePrefix(lease.GuestSubnet)
 		available := true
 		for _, old := range blocked {
-			if b.Overlaps(old) || g.Overlaps(old) {
+			if b.Overlaps(old) {
 				available = false
 				break
 			}

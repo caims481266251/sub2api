@@ -1,0 +1,5 @@
+*
+!container/
+!container/**
+container/__pycache__/
+container/*.pyc

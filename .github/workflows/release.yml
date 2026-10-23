@@ -225,7 +225,7 @@ jobs:
           path: reauth-output/*.tar.gz
           if-no-files-found: error
 
-  build-vm-tools:
+  build-docker-kernel-tools:
     needs: prepare
     runs-on: ubuntu-latest
     strategy:
@@ -239,17 +239,17 @@ jobs:
         with:
           go-version-file: backend/go.mod
           cache: false
-      - name: Package VM host tools
-        run: bash deploy/vm-kernel/package-tools.sh '${{ matrix.arch }}' vm-tools-output
+      - name: Package Docker kernel host tools
+        run: bash deploy/docker-kernel/package-tools.sh '${{ matrix.arch }}' docker-kernel-tools-output
       - uses: actions/upload-artifact@v7
         with:
-          name: vm-tools-${{ matrix.arch }}
-          path: vm-tools-output/*
+          name: docker-kernel-tools-${{ matrix.arch }}
+          path: docker-kernel-tools-output/*
           if-no-files-found: error
           retention-days: 1
 
   release:
-    needs: [prepare, build-binaries, build-reauth-runtime, build-vm-tools]
+    needs: [prepare, build-binaries, build-reauth-runtime, build-docker-kernel-tools]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -350,14 +350,14 @@ jobs:
         run: gh release upload "$RELEASE_TAG" reauth-output/*.tar.gz --repo "$GITHUB_REPOSITORY"
       - uses: actions/download-artifact@v8
         with:
-          pattern: vm-tools-*
-          path: vm-tools-output
+          pattern: docker-kernel-tools-*
+          path: docker-kernel-tools-output
           merge-multiple: true
-      - name: Publish VM host tools
+      - name: Publish Docker kernel host tools
         if: ${{ env.DRY_RUN != 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "$RELEASE_TAG" vm-tools-output/* --repo "$GITHUB_REPOSITORY"
+        run: gh release upload "$RELEASE_TAG" docker-kernel-tools-output/* --repo "$GITHUB_REPOSITORY"
       - name: Upload dry-run checksums and metadata
         if: ${{ env.DRY_RUN == 'true' }}
         uses: actions/upload-artifact@v7
