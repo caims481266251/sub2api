@@ -53,6 +53,25 @@ class AgentTest(unittest.TestCase):
         self.assertEqual(json.loads(Path(self.config['templates']).read_text())['default']['image'],self.manifest['image'])
         self.assertIn(str(self.stage/'vm-runtime-helper'),Path(self.config['helper_unit']).read_text())
         self.assertEqual(json.loads((self.agent.root/'active.json').read_text())['version'],'2.15.4')
+    def test_engine_specific_image_id_is_bound_to_archive_content(self):
+        config={'config':{'Env':['PATH=/usr/bin']},'rootfs':{'diff_ids':['sha256:'+'3'*64]}}
+        with tarfile.open(self.stage/'kernel-image.tar','w') as t:
+            for name,value in [('manifest.json',[{'Config':'config.json','RepoTags':['sub2api-docker-kernel:release-2.15.4-amd64']}]),('config.json',config)]:
+                data=json.dumps(value).encode();info=tarfile.TarInfo(name);info.size=len(data);t.addfile(info,io.BytesIO(data))
+        self.manifest['files']['kernel-image.tar']=m.digest(self.stage/'kernel-image.tar')
+        (self.stage/'runtime-release.json').write_text(json.dumps(self.manifest))
+        payload=self.root/'payload';payload.mkdir();(payload/'kernel').write_text('private fixture')
+        Path(self.config['templates']).write_text(json.dumps({'default':{'payload_dir':str(payload),'artifacts':{str(payload/'kernel'):m.digest(payload/'kernel')}}}))
+        actual={'Id':'sha256:'+'4'*64,'Architecture':'amd64','Os':'linux','Config':config['config'],'RootFS':{'Layers':config['rootfs']['diff_ids']}}
+        def command(*args):
+            if args[:3]==('docker','image','inspect'):return json.dumps([actual])
+            if args[-1]=='--version':return '2.15.4'
+            return ''
+        with patch.object(m,'run',side_effect=command):
+            self.assertEqual(self.agent.prepare('2.15.4')['image'],actual['Id'])
+            actual['RootFS']['Layers']=['unexpected layer']
+            with self.assertRaisesRegex(ValueError,'loaded_image_content_mismatch'):self.agent.prepare('2.15.4')
+
     def test_interrupted_activation_recovers(self):
         m.atomic_json(self.agent.root/'activation.json',{'unit':'restored unit','templates':'{}'})
         with patch.object(m,'run',return_value=''):self.agent.recover()
