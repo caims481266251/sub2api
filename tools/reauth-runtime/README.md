@@ -14,7 +14,7 @@ VERSION=0.0.0-test ARCH=amd64 bash tools/reauth-runtime/build.sh
 
 ```bash
 mkdir -p /tmp/sub2api-totp-staging/releases/test
-tar -xzf reauth-output/sub2api-reauth_0.0.0-test_linux_amd64.tar.gz \
+tar -xzf reauth-output/sub2api-reauth-0.0.0-test-linux-amd64.tar.gz \
   -C /tmp/sub2api-totp-staging/releases/test
 ln -s releases/test /tmp/sub2api-totp-staging/current
 

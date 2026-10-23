@@ -65,8 +65,9 @@ type transportFunc func(*http.Request) (*http.Response, error)
 func (f transportFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestPrepareVerifiesDigestBeforeExecutingAndReusesCache(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("Linux runtime")
+	// The fixture is a POSIX shell script, so download/source verification also runs on macOS.
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell fixture")
 	}
 	for _, valid := range []bool{false, true} {
 		t.Run(map[bool]string{true: "valid", false: "tampered"}[valid], func(t *testing.T) {
@@ -82,10 +83,11 @@ func TestPrepareVerifiesDigestBeforeExecutingAndReusesCache(t *testing.T) {
 			m := New(root, "1.2.3", "http://127.0.0.1:4040", strings.Repeat("x", 64))
 			m.client = &http.Client{Transport: transportFunc(func(req *http.Request) (*http.Response, error) {
 				requests++
+				require.Contains(t, req.URL.Path, "/caims481266251/sub2api/releases/")
 				require.NotContains(t, req.URL.String(), m.token)
 				body := data
 				if strings.Contains(req.URL.Path, "/releases/tags/") {
-					body, _ = json.Marshal(map[string]any{"assets": []map[string]string{{"name": "sub2api-reauth_1.2.3_linux_" + runtime.GOARCH + ".tar.gz", "digest": "sha256:" + digest}}})
+					body, _ = json.Marshal(map[string]any{"assets": []map[string]string{{"name": "sub2api-reauth-1.2.3-linux-" + runtime.GOARCH + ".tar.gz", "digest": "sha256:" + digest}}})
 				}
 				return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(body)), Header: http.Header{}}, nil
 			})}

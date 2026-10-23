@@ -109,7 +109,7 @@ jobs:
           export STAGING_ROOT="$RUNNER_TEMP/totp-staging"
           export DATA_DIR="$STAGING_ROOT/data"
           mkdir -p "$DATA_DIR" "$STAGING_ROOT/releases/test"
-          tar -xzf reauth-input/sub2api-reauth_0.0.0-test_linux_amd64.tar.gz -C "$STAGING_ROOT/releases/test"
+          tar -xzf reauth-input/sub2api-reauth-0.0.0-test-linux-amd64.tar.gz -C "$STAGING_ROOT/releases/test"
           ln -s releases/test "$STAGING_ROOT/current"
           "$RUNNER_TEMP/sub2api-staging" > "$STAGING_ROOT/api.log" 2>&1 &
           api_pid=$!

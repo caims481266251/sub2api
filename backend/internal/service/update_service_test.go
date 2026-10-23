@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -70,7 +71,7 @@ func TestUpdateServicePerformUpdateNoUpdateReturnsSentinel(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, errors.Is(err, ErrNoUpdateAvailable))
 	require.ErrorIs(t, err, ErrNoUpdateAvailable)
-	require.Equal(t, "ranxi2001/sub2api", githubClient.latestRepo)
+	require.Equal(t, "caims481266251/sub2api", githubClient.latestRepo)
 }
 
 func newRollbackTestService(current string, releases []*GitHubRelease) *UpdateService {
@@ -188,4 +189,39 @@ func TestUpdateServiceRollbackToVersionAcceptsVPrefix(t *testing.T) {
 	require.Error(t, err)
 	require.NotErrorIs(t, err, ErrRollbackVersionNotAllowed)
 	require.Contains(t, err.Error(), "no compatible release found")
+}
+
+func TestUpdateServicePublishedVMUpgrade(t *testing.T) {
+	for _, current := range []string{"2.10.17", "2.15.0", "2.15.0-vm.1"} {
+		client := &updateServiceGitHubClientStub{release: &GitHubRelease{TagName: "v2.15.1"}}
+		svc := NewUpdateService(&updateServiceCacheStub{}, client, current, "release")
+		info, err := svc.CheckUpdate(context.Background(), true)
+		require.NoError(t, err)
+		require.True(t, info.HasUpdate, current)
+		require.Equal(t, "caims481266251/sub2api", client.latestRepo)
+	}
+}
+
+func TestUpdateServicePrereleaseOrdering(t *testing.T) {
+	require.Less(t, compareVersions("2.15.0-vm.1", "2.15.0"), 0)
+	require.Less(t, compareVersions("2.15.0-vm.2", "2.15.0-vm.10"), 0)
+	require.Equal(t, 0, compareVersions("v2.15.1", "2.15.1+build"))
+	require.Greater(t, compareVersions("2.15.1", "2.15.0-vm.1"), 0)
+}
+
+func TestUpdateServiceRejectsForeignCache(t *testing.T) {
+	for _, repo := range []string{"", "ranxi2001/sub2api"} {
+		data, err := json.Marshal(map[string]any{"repo": repo, "latest": "99.0.0", "timestamp": time.Now().Unix()})
+		require.NoError(t, err)
+		cache := &updateServiceCacheStub{data: string(data)}
+		client := &updateServiceGitHubClientStub{release: &GitHubRelease{TagName: "v2.15.1"}}
+		svc := NewUpdateService(cache, client, "2.15.0", "release")
+		info, err := svc.CheckUpdate(context.Background(), false)
+		require.NoError(t, err)
+		require.Equal(t, "2.15.1", info.LatestVersion)
+		require.False(t, info.Cached)
+		info, err = svc.CheckUpdate(context.Background(), false)
+		require.NoError(t, err)
+		require.True(t, info.Cached)
+	}
 }

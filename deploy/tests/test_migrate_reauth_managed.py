@@ -85,7 +85,7 @@ class MigrationTests(unittest.TestCase):
         architecture = {"x86_64": "amd64", "aarch64": "arm64"}.get(os.uname().machine)
         if not architecture:
             self.skipTest("Linux architecture fixture")
-        metadata = json.dumps({"assets": [{"name": "sub2api-reauth_2.11.1_linux_" + architecture + ".tar.gz", "digest": digest}]}).encode()
+        metadata = json.dumps({"assets": [{"name": "sub2api-reauth-2.11.1-linux-" + architecture + ".tar.gz", "digest": digest}]}).encode()
         worker_env = {b"OPENAI_TOTP_JOURNAL_DIR": os.fsencode(source), b"OPENAI_REAUTH_CONCURRENCY": b"4"}
         if protocol:
             worker_env[b"TURB_ROOT"] = b"/synthetic/custom"

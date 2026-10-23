@@ -9,5 +9,5 @@ trap 'rm -rf "$runtime_output"' EXIT
 docker buildx build --platform "linux/$ARCH" -f tools/reauth-runtime/Dockerfile \
   --output "type=local,dest=$runtime_output" .
 mkdir -p reauth-output
-tar --dereference -czf "reauth-output/sub2api-reauth_${VERSION}_linux_${ARCH}.tar.gz" -C "$runtime_output" .
-sha256sum "reauth-output/sub2api-reauth_${VERSION}_linux_${ARCH}.tar.gz"
+tar --dereference -czf "reauth-output/sub2api-reauth-${VERSION}-linux-${ARCH}.tar.gz" -C "$runtime_output" .
+sha256sum "reauth-output/sub2api-reauth-${VERSION}-linux-${ARCH}.tar.gz"

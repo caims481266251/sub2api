@@ -3,6 +3,8 @@
 package service
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -19,6 +21,7 @@ import (
 
 type updateInstallClient struct {
 	updateServiceGitHubClientStub
+	downloadURL  string
 	failDownload bool
 	latestErr    error
 	latestCalls  int
@@ -38,11 +41,29 @@ func (c *updateInstallClient) FetchRecentReleases(ctx context.Context, repo stri
 	return c.updateServiceGitHubClientStub.FetchRecentReleases(ctx, repo, limit)
 }
 
-func (c *updateInstallClient) DownloadFile(_ context.Context, _, dest string, _ int64) error {
+func (c *updateInstallClient) DownloadFile(_ context.Context, url, dest string, _ int64) error {
+	c.downloadURL = url
 	if c.failDownload {
 		return errors.New("download unavailable")
 	}
-	return os.WriteFile(dest, []byte("downloaded release"), 0600)
+	f, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	gz := gzip.NewWriter(f)
+	tw := tar.NewWriter(gz)
+	body := []byte("downloaded release")
+	if err := tw.WriteHeader(&tar.Header{Name: "sub2api", Mode: 0755, Size: int64(len(body))}); err != nil {
+		return err
+	}
+	if _, err := tw.Write(body); err != nil {
+		return err
+	}
+	if err := tw.Close(); err != nil {
+		return err
+	}
+	return gz.Close()
 }
 
 func TestUpdateServicePendingRestartPrecedesReleaseLookup(t *testing.T) {
@@ -115,8 +136,8 @@ func runUpdateInstallScenario(t *testing.T, scenario string) {
 	client.release = &GitHubRelease{
 		TagName: "v2.0.0",
 		Assets: []GitHubAsset{{
-			Name:               svc.getArchiveName(),
-			BrowserDownloadURL: "https://github.com/example/releases/" + svc.getArchiveName(),
+			Name:               "sub2api_2.0.0_" + svc.getArchiveName() + ".tar.gz",
+			BrowserDownloadURL: "https://github.com/example/releases/sub2api_2.0.0_" + svc.getArchiveName() + ".tar.gz",
 		}},
 	}
 	update := func() error { return svc.PerformUpdate(context.Background()) }
@@ -162,4 +183,19 @@ func updateInstallFileHashes(t *testing.T, executable string) map[string][sha256
 		hashes[filepath.Base(path)] = digest
 	}
 	return hashes
+}
+
+func TestUpdateServiceIgnoresHelperAssets(t *testing.T) {
+	client := &updateInstallClient{failDownload: true}
+	svc := NewUpdateService(&updateServiceCacheStub{}, client, "1.0.0", "release")
+	platform := svc.getArchiveName()
+	mainURL := "https://github.com/example/releases/sub2api_2.0.0_" + platform + ".tar.gz"
+	assets := []Asset{
+		{Name: "sub2api_2.0.0_" + platform + ".tar.gz", DownloadURL: mainURL},
+		{Name: "sub2api-reauth_2.0.0_" + platform + ".tar.gz", DownloadURL: "https://github.com/example/reauth.tar.gz"},
+		{Name: "sub2api-vm_2.0.0_" + platform + ".tar.gz", DownloadURL: "https://github.com/example/vm.tar.gz"},
+	}
+	require.ErrorContains(t, svc.applyReleaseAssets(context.Background(), assets), "download unavailable")
+	require.Equal(t, mainURL, client.downloadURL)
+	require.ErrorContains(t, svc.applyReleaseAssets(context.Background(), assets[1:]), "no compatible release")
 }
