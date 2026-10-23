@@ -1,0 +1,12 @@
+#!/usr/bin/python3
+import subprocess
+import time
+deadline = time.monotonic() + 90
+while True:
+    result = subprocess.run(["/usr/local/lib/sub2-kvm/guest-command", "apply"],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if result.returncode == 0:
+        break
+    if time.monotonic() > deadline:
+        raise SystemExit("guest_apply_unconfirmed")
+    time.sleep(1)

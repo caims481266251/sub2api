@@ -412,6 +412,13 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 		}
 	}
 
+	if account.IsVMKernel() {
+		if normalizeAccountTestMode(mode) != AccountTestModeDefault || testOpts.ImageDataURL != "" || testOpts.AudioDataURL != "" {
+			return s.sendErrorAndEnd(c, "VM kernel supports the default text test only")
+		}
+		return s.testVMKernelConnection(c, account, modelID, prompt)
+	}
+
 	// Synthetic UI load-test accounts exercise the real SSE parsing and modal
 	// interactions, but intentionally do not send their placeholder credentials
 	// to an upstream provider.

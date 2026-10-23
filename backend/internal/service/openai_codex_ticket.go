@@ -879,6 +879,9 @@ func extraTruthy(value any) bool {
 }
 
 func openAICodexSkipHarvest(account *Account) bool {
+	if account.IsVMKernel() {
+		return true
+	}
 	if account == nil || account.Extra == nil {
 		return false
 	}
@@ -1399,6 +1402,9 @@ func IsMaskedProxyURL(raw string) bool {
 // Credential shadows do not own tickets. Keep their existing forwarding policy
 // instead of imposing a gate for a key the harvester never populates.
 func isOpenAICodexTicketAccount(account *Account, upstreamModels ...string) bool {
+	if account.IsVMKernel() {
+		return false
+	}
 	if account.IsSIWCEnabled() {
 		return false
 	}

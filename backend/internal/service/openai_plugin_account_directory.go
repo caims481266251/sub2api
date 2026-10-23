@@ -28,7 +28,8 @@ import (
 // a paused account keeps Status=="active", so the repository's active-only query
 // still returns it. (Administratively disabled / expired accounts are already
 // excluded by the repository query.) Shadow accounts are excluded here: they hold
-// no credentials of their own and are not independently schedulable.
+// no credentials of their own and are not independently schedulable. VM accounts
+// are excluded because plugins cannot execute through their guest boundary.
 func (s *OpenAIGatewayService) ListPluginAccounts(ctx context.Context, scope PluginAccountScope, platform, accountType string) ([]PluginAccountInfo, error) {
 	if s == nil || s.accountRepo == nil || scope.Empty() {
 		return nil, nil
@@ -47,7 +48,7 @@ func (s *OpenAIGatewayService) ListPluginAccounts(ctx context.Context, scope Plu
 		}
 		for i := range accounts {
 			account := accounts[i]
-			if account.IsShadow() {
+			if account.IsShadow() || account.IsVMKernel() {
 				continue
 			}
 			// Defense-in-depth: the contract exposes only active accounts (paused
@@ -139,7 +140,7 @@ func (s *OpenAIGatewayService) ResolvePluginOutboundIdentity(ctx context.Context
 	if err != nil {
 		return nil, err
 	}
-	if account == nil || account.IsShadow() {
+	if account == nil || account.IsShadow() || account.IsVMKernel() {
 		return nil, nil
 	}
 	// Scope is the authoritative permission boundary: refuse any account the

@@ -39,6 +39,8 @@ env:
 
 jobs:
   prepare:
+    # VM prereleases package the server and privileged helper together.
+    if: ${{ !contains(github.ref_name, '-vm.') }}
     runs-on: ubuntu-latest
     outputs:
       sha: ${{ steps.plan.outputs.sha }}

@@ -1,0 +1,114 @@
+{
+  "repository": "https://github.com/dofastted/vm2api",
+  "tag": "v1.3.206",
+  "commit": "894a78daba0361ecf825e5ec4a0707108cdbae9b",
+  "source_sha256": {
+    "guest/install-guest.sh": "38126beba1d045229db8bb35a63ff3f5c450d677c45cf25ee9e7cdb1051cf3d2",
+    "guest/kin-guest-setup": "d439882b0cfc8c7f61b711ead2692e3cba0b312cc4605b642f3711fd4bcb9f8e",
+    "guest/kin-guest-setup.service": "0e5d1800e8142b48d44b22bf75fc82a493a21abd44530ed08c77394514ed9b59",
+    "guest/kin-kernel-relay.py": "2a2ddf8f26369d27ae7506738fb53acc530f3ed6fbbc9aeacba1363e9407f4ec",
+    "guest/kin-kernel-relay.service": "5e690841a7999835464e86737a741682d932f8a3f2aa58dd0a2e678f5f7d9dd8",
+    "guest/kin-kernel-start": "d1b061942f9e1305925feb7eba6a4e3ca6e67316fd053715a908801a4e883bab",
+    "guest/kin-kernel.service": "991a1a71d0137ce848e19fd455a6a9fe99931468ef2ddb2559937a6b1f6f2561",
+    "guest/user-data": "197515568944980b2fa3ba50f0b3bc35b6e7d12fd98963058cae30164bc75de7",
+    "kin-guest-exec": "83b2c6e735c277193b07ebbda9c3bfc2bae66b96cc8816bed674f9cd2dd13f3b",
+    "kin-kvm-entry": "92285fa4a6cf24743639fde6850c651b6597cfa3d2eecdc05ca8cfec99b7a49c"
+  },
+  "source_sha256_semantics": "Hashes of unmodified docker/kin-kvm files at the pinned upstream commit, not checksums of this patched package.",
+  "local_patches": {
+    "kin-kvm-entry": [
+      "Preserve existing overlay and identity; reject implicit destructive recreation.",
+      "Map exact qemu64 compatibility alias to max for TCG and host for KVM; preserve other explicit CPU models.",
+      "Validate explicit claude/codex guest engine and propagate it in the seed environment.",
+      "Mount helper run and credential shares read-only in guest.",
+      "Optional operator service group can traverse run and connect relay socket without reading private configuration.",
+      "Restore root ownership before chmod on restart without granting CAP_FOWNER.",
+      "Configure allocated guest slirp subnet, gateway, address and reserved DNS explicitly, with loopback-only forwarding to the guest address; retain legacy defaults without a lease.",
+      "Generate static NoCloud network configuration without enabling guest DNS and include guest addressing in the per-boot seed environment."
+    ],
+    "kin-guest-exec": [
+      "Preserve original SSH exit status instead of negated shell status."
+    ],
+    "guest/kin-guest-setup": [
+      "Validate the selected guest engine and propagate it to the kernel service environment.",
+      "Store root-owned service environment outside the disposable kernel RuntimeDirectory to preserve engine selection across restart and stop/start.",
+      "Mount access-only credential projection and configure proxy-only guest resolver.",
+      "Apply allocated guest addressing by fixed MAC on each boot, including existing overlays, and verify actual address and default route before starting the kernel."
+    ],
+    "guest/kin-kernel-start": [
+      "Keep Claude as the default; explicitly launch Codex with its configuration positional argument and remove inherited proxy environment variables."
+    ],
+    "guest/kin-kernel.service": [
+      "Require the independent root-owned EnvironmentFile; missing configuration fails instead of silently selecting the default engine.",
+      "Disable automatic kernel restart; lifecycle generation owns recovery."
+    ],
+    "entry": [
+      "Add restricted helper bridge with explicit accelerator, proxy-only egress, and process-bound guest revision receipts.",
+      "Restore root ownership before chmod on restart without granting CAP_FOWNER.",
+      "Project helper-owned per-account guest /28 addressing separately from Docker bridge addresses; reject malformed or overlapping leases and preserve legacy network absence.",
+      "Use the helper-persisted client device UUID, migrate compatible installation files without changing identity, and reject conflicts rather than regenerate on restart."
+    ],
+    "probe": [
+      "Add restricted helper bridge with explicit accelerator, proxy-only egress, and process-bound guest revision receipts."
+    ],
+    "apply": [
+      "Add restricted helper bridge with explicit accelerator, proxy-only egress, and process-bound guest revision receipts.",
+      "Allow up to 480 seconds for confirmed first-boot projection under explicit TCG."
+    ],
+    "observe": [
+      "Add restricted helper bridge with explicit accelerator, proxy-only egress, and process-bound guest revision receipts."
+    ],
+    "common.py": [
+      "Add restricted helper bridge with explicit accelerator, proxy-only egress, and process-bound guest revision receipts."
+    ],
+    "firewall": [
+      "Add restricted helper bridge with explicit accelerator, proxy-only egress, and process-bound guest revision receipts."
+    ],
+    "guest/sub2-vm-control": [
+      "Add restricted helper bridge with explicit accelerator, proxy-only egress, and process-bound guest revision receipts.",
+      "Recognize the fixed Claude glibc loader only with its fixed kernel binary and gateway-worker argument.",
+      "Bind ready receipts to observed guest address, gateway and interface; observe is read-only and rechecks the network after local health.",
+      "Check helper-persisted device identity against the actual kernel configuration and bind it to the process receipt without model calls.",
+      "Validate effective proxy resolver projection during apply and observe rather than relying only on the configured revision.",
+      "Read full iproute2 address output to retain MAC fields, then validate IPv4 separately; -4 output omits link-layer identity."
+    ],
+    "guest/sub2-vm-network": [
+      "Add restricted helper bridge with explicit accelerator, proxy-only egress, and process-bound guest revision receipts.",
+      "Only Claude projects credential links; verify 9p-owned directory instead of unsupported guest chown."
+    ],
+    "guest/install-guest.sh": [
+      "Install fixed root guest control and network setup helpers."
+    ],
+    "guest/kin-guest-setup.service": [
+      "Order per-boot setup after cloud-init so hosts projection is not overwritten."
+    ],
+    "guest/user-data": [
+      "Disable cloud-init management of /etc/hosts to preserve the restricted proxy resolver projection."
+    ]
+  },
+  "build_inputs": {
+    "guest_image": "ghcr.io/dofastted/kin-kvm-ubuntu@sha256:2c12ba55e5df2c677972d235d88be5200e9dcb778fb27af7eeed48f7b93fdde7",
+    "toolchain_base": "debian@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad",
+    "qemu": "1:10.0.13+ds-0+deb13u1",
+    "ovmf": "2025.02-8+deb13u1",
+    "reproducibility_limit": "APT repositories and remaining dependencies are not snapshot-pinned; the build is not bit-for-bit reproducible and can fail when pinned versions leave the repository."
+  },
+  "local_patch_sha256": {
+    "kin-kvm-entry": "fab4a8d263c4a6c8a5dd4e193c24528d38fb65a7180260755199898e9c223478",
+    "kin-guest-exec": "c8203ea1179400b23ad7383b1ba614b2ff68bd2a70d9452787dfcb1e30e5a0fd",
+    "guest/kin-guest-setup": "e50a7164f52e5bc0aa761f9b66a0a5bc5c2e3cc858b3ed96c0b85e4e517f8982",
+    "guest/kin-kernel-start": "a8b7ddd1394b90351ef4015c92e33d4d36a76b672bf62690fdbdb930aa9136e1",
+    "guest/kin-kernel.service": "198ab656241df70b7c223661c763accc55d9d8d88bacf32efbcbc92a81a9d306",
+    "entry": "7a39498801c329ebc2fd97c861697d1960d8233a5c2f23267bc46a0029a8e415",
+    "probe": "377e285b3e8b5c04836ab729b9afcfa1356341e04c457b9f3f9cccf3e8fef891",
+    "apply": "e9a30af02b306ecf1165292eb6060da8fb601fc4bf05fc333f1abf395f1f1199",
+    "observe": "cc6d2f5dfd61386206f2959988162faa298c7bebc42682904a89692ef311d2df",
+    "common.py": "bccd9a48f3dbbf6fcf9beee378eb97794997a1754592b71f62599e4867fa89e4",
+    "firewall": "ac7b3b72e4150e01eaa1baa9d9c71cef47851aead650bbdba0497c0caef9ea8f",
+    "guest/sub2-vm-control": "0045fb2edd060038a7a0cb334bc784978cf0bf369777f56cb04f3baebfaecd20",
+    "guest/sub2-vm-network": "32d1816bccd2731f7ddfba465fbd6ed45e7abd07b0fa0076567dadc2b32608ff",
+    "guest/install-guest.sh": "cebd90b7a09e53aa4cefe0c9907c7b1c87925f1161f587054805d267430f0a84",
+    "guest/kin-guest-setup.service": "513f54ed2771fdb2f20b739bc3eebb2a8a2672859d970f234efea9bb5afd12b0",
+    "guest/user-data": "0917f6815a60b3e63396328022e6bb1fe9ba88ec2f3e54d9069ffd5c9f8b2463"
+  }
+}

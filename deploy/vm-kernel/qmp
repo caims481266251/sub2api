@@ -1,0 +1,21 @@
+#!/usr/bin/python3
+import json
+import socket
+import sys
+command = sys.argv[1] if len(sys.argv) == 2 else ""
+if command not in ("query-kvm", "system_powerdown", "quit"):
+    raise SystemExit("unsupported_qmp_command")
+with socket.socket(socket.AF_UNIX) as sock:
+    sock.settimeout(5)
+    sock.connect("/slot/kvm/qmp.sock")
+    stream = sock.makefile("rwb", buffering=0)
+    json.loads(stream.readline())
+    for op in ("qmp_capabilities", command):
+        stream.write(json.dumps({"execute": op}).encode() + b"\n")
+        while True:
+            response = json.loads(stream.readline())
+            if "return" in response or "error" in response:
+                break
+        if "error" in response:
+            raise SystemExit("qmp_command_failed")
+    print(json.dumps(response["return"]))

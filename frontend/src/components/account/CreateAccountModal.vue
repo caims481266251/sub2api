@@ -67,6 +67,15 @@
         <p class="input-hint">{{ t('admin.accounts.notesHint') }}</p>
       </div>
 
+      <div>
+        <label class="input-label">{{ t('admin.accounts.executionMode') }}</label>
+        <select v-model="form.execution_mode" data-testid="account-execution-mode" class="input mt-2">
+          <option value="normal">{{ t('admin.accounts.executionModeNormal') }}</option>
+          <option value="vm_kernel" :disabled="!['anthropic', 'openai'].includes(form.platform)">{{ t('admin.accounts.executionModeVM') }}</option>
+        </select>
+        <p v-if="form.execution_mode === 'vm_kernel'" class="mt-2 text-sm text-gray-500">{{ t('admin.accounts.executionModeVMHint') }}</p>
+      </div>
+
       <!-- Platform Selection - Segmented Control Style -->
       <div>
         <label class="input-label">{{ t('admin.accounts.platform') }}</label>
@@ -3184,7 +3193,7 @@
       <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <div>
           <label class="input-label">{{ t('admin.accounts.concurrency') }}</label>
-          <input v-model.number="form.concurrency" type="number" min="1" class="input"
+          <input v-model.number="form.concurrency" data-testid="account-concurrency" type="number" min="1" class="input"
             @input="form.concurrency = Math.max(1, form.concurrency || 1)" />
         </div>
         <div>
@@ -4448,7 +4457,7 @@ const isOpenAITwoFA = computed(() => form.platform === 'openai' && accountCatego
 // 「降智后自动开启 BPS」：OpenAI OAuth / 2FA 添加时可选，账号建好后按这里的设置给每个新账号建一条质量运维规则。
 const autoBPS = useAccountAutoBPS()
 const globalBpsEnabled = computed(() => appStore.cachedPublicSettings?.excel_bps_enabled !== false)
-const autoBPSAvailable = computed(() => globalBpsEnabled.value && form.platform === 'openai' && accountCategory.value === 'oauth-based' && !isOpenAIBPSOAuth.value)
+const autoBPSAvailable = computed(() => globalBpsEnabled.value && form.execution_mode !== 'vm_kernel' && form.platform === 'openai' && accountCategory.value === 'oauth-based' && !isOpenAIBPSOAuth.value)
 const submitting = ref(false)
 const accountCategory = ref<'oauth-based' | 'apikey' | 'bedrock' | 'service_account'>('oauth-based') // UI selection for account category
 const addMethod = ref<AddMethod>('oauth') // For oauth-based: 'oauth' or 'setup-token'
@@ -5084,6 +5093,7 @@ const tempUnschedPresets = computed(() => [
 ])
 
 const form = reactive({
+  execution_mode: 'normal' as 'normal' | 'vm_kernel',
   name: '',
   notes: '',
   platform: 'anthropic' as AccountPlatform,
@@ -5097,6 +5107,7 @@ const form = reactive({
   group_ids: [] as number[],
   expires_at: null as number | null
 })
+
 
 // Helper to check if current type needs OAuth flow
 const isOAuthFlow = computed(() => {
@@ -5581,6 +5592,7 @@ const openMixedChannelDialog = (opts: {
 }
 
 const withAntigravityConfirmFlag = (payload: CreateAccountRequest): CreateAccountRequest => {
+  payload = { ...payload, execution_mode: form.execution_mode }
   if (needsMixedChannelCheck(payload.platform) && antigravityMixedChannelConfirmed.value) {
     return {
       ...payload,
@@ -5684,6 +5696,7 @@ const resetForm = () => {
   bpsOAuthModels.value = [...DEFAULT_EXCEL_BPS_MODELS]
   autoBPS.reset()
   twoFABusy.value = false
+  form.execution_mode = 'normal'
   form.name = ''
   openAIRequestTimezone.value = 'Asia/Singapore'
   form.notes = ''
@@ -6044,6 +6057,13 @@ const handleVertexServiceAccountDrop = async (event: DragEvent) => {
 }
 
 const handleSubmit = async () => {
+  if (form.execution_mode === 'vm_kernel') {
+    if (!form.proxy_id) { appStore.showError(t('admin.accounts.vmProxyRequired')); return }
+  }
+  if (form.execution_mode === 'vm_kernel' && (!['anthropic', 'openai'].includes(form.platform) || accountCategory.value !== 'oauth-based' || addMethod.value !== 'oauth' || isOpenAIBPSOAuth.value)) {
+    appStore.showError(t('admin.accounts.executionModeVMHint'))
+    return
+  }
   if (isOpenAIBPSOAuth.value && !bpsOAuthModels.value.some(model => model.trim())) {
     appStore.showError(t('admin.accounts.oauth.openai.excelModelsRequired'))
     return
@@ -6519,6 +6539,7 @@ const handleGrokValidateRT = async (refreshTokenInput: string) => {
         }
 
         await adminAPI.accounts.create({
+          execution_mode: form.execution_mode,
           name: accountName,
           notes: form.notes,
           platform: 'grok',
@@ -6696,6 +6717,7 @@ const handleGrokAuthorizePassword = async (emailPasswordInput: string) => {
         }
 
         await adminAPI.accounts.create({
+          execution_mode: form.execution_mode,
           name: accountName,
           notes: form.notes,
           platform: 'grok',
@@ -6815,6 +6837,7 @@ const handleOpenAIExchange = async (authCode: string) => {
 
     if (shouldCreateOpenAI) {
       const account = await adminAPI.accounts.create({
+          execution_mode: form.execution_mode,
         name: form.name,
         notes: form.notes,
         platform: 'openai',
@@ -6906,6 +6929,7 @@ const importTwoFACredential = async (credential: Record<string, unknown>, email:
   const credentialExtras = buildOpenAICodexImportCredentialExtras()
   if (credentialExtras === null) throw new Error('invalid_account_settings')
   const result = await adminAPI.accounts.importCodexSession({
+      execution_mode: form.execution_mode,
     initialize_openai_two_fa: true,
     content: JSON.stringify(credential),
     name: form.name.trim() ? `${form.name.trim()} (${email})` : email,
@@ -6971,6 +6995,7 @@ const handleOpenAIImportCodexSession = async (content: string) => {
   try {
     const extra = buildOpenAICodexImportExtra()
     const result = await adminAPI.accounts.importCodexSession({
+      execution_mode: form.execution_mode,
       content: trimmed,
       name: form.name,
       notes: form.notes || null,
@@ -7035,6 +7060,7 @@ const handleOpenAIImportCodexSession = async (content: string) => {
 }
 
 const handleOpenAIImportCodexPAT = async (accessToken: string) => {
+  if (form.execution_mode === 'vm_kernel') { appStore.showError(t('admin.accounts.executionModeVMHint')); return }
   const oauthClient = openaiOAuth
   const trimmed = accessToken.trim()
   if (!trimmed) {
@@ -7150,6 +7176,7 @@ const handleOpenAIBatchRT = async (refreshTokenInput: string, clientId?: string)
 
         if (shouldCreateOpenAI) {
           const account = await adminAPI.accounts.create({
+          execution_mode: form.execution_mode,
             name: accountName,
             notes: form.notes,
             platform: 'openai',
@@ -7625,6 +7652,7 @@ const handleCookieAuth = async (sessionKey: string) => {
         }
 
         await adminAPI.accounts.create({
+          execution_mode: form.execution_mode,
           name: accountName,
           notes: form.notes,
           platform: form.platform,

@@ -995,6 +995,16 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				})
 			}
 
+			if err != nil && result != nil && result.VMKernelUsageAuthoritative {
+				if !gatewayForwardErrorAlreadyCommunicated(c, writerSizeBeforeForward, err) {
+					h.ensureForwardErrorResponse(c, streamStarted)
+				}
+				submitForwardUsage(result)
+				upstreamServedSession = true
+				reqLog.Warn("gateway.vm_partial_usage", zap.Int64("account_id", account.ID), zap.Error(err))
+				return
+			}
+
 			if err != nil {
 				// Beta policy block: return 400 immediately, no failover
 				var betaBlockedErr *service.BetaBlockedError
@@ -2156,7 +2166,7 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 	sessionHash := h.gatewayService.GenerateSessionHash(parsedReq)
 
 	// 选择支持该模型的账号
-	account, err := h.gatewayService.SelectAccountForModel(c.Request.Context(), apiKey.GroupID, sessionHash, parsedReq.Model)
+	account, err := h.gatewayService.SelectAccountForModel(service.WithVMKernelExcluded(c.Request.Context()), apiKey.GroupID, sessionHash, parsedReq.Model)
 	if err != nil {
 		reqLog.Warn("gateway.count_tokens_select_account_failed", zap.Error(err))
 		cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, parsedReq.Model, parsedReq.Model, service.PlatformAnthropic)

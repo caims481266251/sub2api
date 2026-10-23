@@ -22,6 +22,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/server"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/Wei-Shaw/sub2api/internal/setup"
 	"github.com/Wei-Shaw/sub2api/internal/web"
 
@@ -166,6 +167,11 @@ func runMainServer() {
 	if cfg.RunMode == config.RunModeSimple {
 		log.Println("⚠️  WARNING: Running in SIMPLE mode - billing and quota checks are DISABLED")
 	}
+	releaseVMCoordinator, err := service.AcquireVMKernelStartupGuard(cfg)
+	if err != nil {
+		log.Fatalf("Failed to initialize VM coordinator: %v", err)
+	}
+	defer releaseVMCoordinator()
 
 	buildInfo := handler.BuildInfo{
 		Version:   Version,
@@ -225,6 +231,7 @@ func runMainServer() {
 	if err := app.Server.Close(); err != nil {
 		log.Printf("Closing server connections: %v", err)
 	}
+	service.StopVMKernelServices()
 	log.Println("Server exited")
 	mihomo.CloseAll()
 }

@@ -58,7 +58,7 @@ func TestSchedulerTicketFullAccountBatchRedis(t *testing.T) {
 	require.Contains(t, loaded[101].Extra, "codex_turn_ticket:gpt-6-astra")
 
 	// A corrupt full snapshot cannot silently turn into an empty ticket set.
-	mr.Set(schedulerAccountKey("101"), `{"ID":999}`)
+	mr.Set(schedulerAccountKey("101"), `{"ID":999,"ExecutionMode":"normal"}`)
 	_, err = cache.GetAccounts(ctx, []int64{101})
 	require.ErrorContains(t, err, "ID mismatch")
 	mr.Set(schedulerAccountKey("101"), `{invalid`)

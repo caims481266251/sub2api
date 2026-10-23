@@ -236,6 +236,7 @@ type OpenAIUsage struct {
 
 // OpenAIForwardResult represents the result of forwarding
 type OpenAIForwardResult struct {
+	VMKernelUsageAuthoritative bool
 	// RegionalMetered prevents the legacy asynchronous path from double charging.
 	RegionalMetered bool
 	RequestID       string
@@ -458,6 +459,7 @@ var ErrNoAvailableCompactAccounts = errors.New("no available accounts support /r
 
 // OpenAIGatewayService handles OpenAI API gateway operations
 type OpenAIGatewayService struct {
+	vmKernel                *VMKernelService
 	requestTimezoneEgress   openAIRequestTimezoneEgress
 	requestTimezoneProber   ProxyExitInfoProber
 	stopAstraSetup          func()
@@ -617,6 +619,7 @@ func NewOpenAIGatewayService(
 		SetCodexIdentityEnforcementEnabled(!cfg.Gateway.DisableCodexIdentityEnforcement)
 	}
 	svc := &OpenAIGatewayService{
+		vmKernel:            NewVMKernelService(cfg, accountRepo, PlatformOpenAI, nil, openAITokenProvider),
 		accountRepo:         accountRepo,
 		proxyRepo:           proxyRepo,
 		usageLogRepo:        usageLogRepo,
@@ -793,6 +796,9 @@ func (s *OpenAIGatewayService) billingDeps() *billingDeps {
 // CloseOpenAIWSPool 关闭 OpenAI WebSocket 连接池的后台 worker 和空闲连接。
 // 应在应用优雅关闭时调用。
 func (s *OpenAIGatewayService) CloseOpenAIWSPool() {
+	if s != nil && s.vmKernel != nil {
+		s.vmKernel.Stop()
+	}
 	if s != nil && s.regionalMetering != nil && s.regionalMetering.Stop != nil {
 		s.regionalMetering.Stop()
 	}

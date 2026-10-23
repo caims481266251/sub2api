@@ -338,6 +338,22 @@ function mountModal(account = buildAccount(), renderGroupSelector = false) {
 }
 
 describe('EditAccountModal', () => {
+  it('preserves editable VM account concurrency through save', async () => {
+    const account = { ...buildOpenAIOAuthParentAccount(), execution_mode: 'vm_kernel', concurrency: 12, proxy_id: 7 }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+    await flushPromises()
+    const input = wrapper.get<HTMLInputElement>('[data-testid="account-concurrency"]')
+    expect(input.element.disabled).toBe(false)
+    expect(input.element.value).toBe('12')
+    await input.setValue(24)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock).toHaveBeenCalledWith(account.id, expect.objectContaining({ concurrency: 24 }))
+    wrapper.unmount()
+  })
+
   it('round-trips OAuth alias scope and lets an operator restore a whitelist', async () => {
     const account = { ...buildAccount(), type: 'oauth', credentials: { model_mapping_mode: 'aliases', model_mapping: { 'gpt-5.4': 'gpt-5.6-sol' } } }
     const wrapper = mountModal(account); await flushPromises()

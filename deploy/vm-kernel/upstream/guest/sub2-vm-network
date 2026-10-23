@@ -1,0 +1,99 @@
+#!/usr/bin/python3
+"""Guest proxy-only resolver setup, with access-only credential projection."""
+import ipaddress
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+from urllib.parse import urlparse
+
+def project_claude_credentials(engine, claude=Path('/home/kincli/.claude'), uid=10001):
+    if engine == 'codex':
+        return
+    if engine != 'claude':
+        raise SystemExit('guest_engine_invalid')
+    # The unprivileged 9p server creates these as its own UID. Guest root
+    # cannot chown through security_model=none; verify ownership instead.
+    claude.mkdir(exist_ok=True)
+    if claude.is_symlink() or claude.stat().st_uid != uid:
+        raise SystemExit('credential_directory_owner_invalid')
+    for name in ('credentials.json', '.credentials.json'):
+        link = claude / name
+        if link.exists() or link.is_symlink():
+            if not link.is_symlink() or os.readlink(link) != '/run/sub2-credentials/credential.json':
+                raise SystemExit('credential_path_conflict')
+        else:
+            link.symlink_to('/run/sub2-credentials/credential.json')
+
+
+def project_proxy_hosts(proxy, hosts=Path('/etc/hosts'), check=False):
+    host = urlparse(proxy['url']).hostname
+    ips = proxy.get('ips', [])
+    if not host or any(ch.isspace() for ch in host) or not ips:
+        raise ValueError('proxy_projection_invalid')
+    ips = [str(ipaddress.IPv4Address(ip)) for ip in ips]
+    original = hosts.read_text().splitlines()
+    expected = {ip + ' ' + host + ' # sub2-proxy' for ip in ips}
+    actual = {line.strip() for line in original if '# sub2-proxy' in line}
+    if check:
+        if actual != expected:
+            raise ValueError('proxy_hosts_unconfirmed')
+        return
+    lines = [line for line in original if '# sub2-proxy' not in line]
+    lines += sorted(expected)
+    hosts.write_text('\n'.join(lines) + '\n')
+
+
+def proxy_environment(proxy):
+    value = proxy['url'].replace('\\', '\\\\').replace('"', '\\"')
+    if '\n' in value or '\r' in value:
+        raise ValueError('proxy_url_invalid')
+    return 'HTTP_PROXY="'+value+'"\nHTTPS_PROXY="'+value+'"\nALL_PROXY="'+value+'"\nNO_PROXY=localhost,127.0.0.1\n'
+
+
+def check_network(proxy, resolv, environment, expected):
+    project_proxy_hosts(proxy, check=True)
+    if resolv.is_symlink() or any(line.split('#', 1)[0].strip().startswith('nameserver') for line in resolv.read_text().splitlines()):
+        raise ValueError('guest_dns_unconfirmed')
+    if Path('/proc/sys/net/ipv6/conf/all/disable_ipv6').read_text().strip() != '1':
+        raise ValueError('guest_ipv6_unconfirmed')
+    if environment.read_text() != expected:
+        raise ValueError('proxy_environment_unconfirmed')
+
+
+def main():
+    if sys.argv[1:] not in ([], ['--check']):
+        raise ValueError('network_operation_invalid')
+    check = sys.argv[1:] == ['--check']
+    proxy = json.loads(Path('/run/sub2-credentials/proxy.json').read_text())
+    resolv = Path('/etc/resolv.conf')
+    config = Path('/run/kin-guest-config')
+    environment = config / 'proxy.env'
+    expected = proxy_environment(proxy)
+    if check:
+        check_network(proxy, resolv, environment, expected)
+        return
+    project_claude_credentials(os.environ.get('KIN_GUEST_ENGINE', ''))
+    try:
+        check_network(proxy, resolv, environment, expected)
+        return # Already applied: no writes, service changes or sysctl calls.
+    except (OSError, ValueError):
+        pass
+    project_proxy_hosts(proxy)
+    subprocess.run(['systemctl', 'disable', '--now', 'systemd-resolved'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if resolv.is_symlink():
+        resolv.unlink()
+    resolv.write_text('# Direct guest DNS disabled\n')
+    subprocess.run(['sysctl', '-w', 'net.ipv6.conf.all.disable_ipv6=1'], check=True, stdout=subprocess.DEVNULL)
+    config.mkdir(mode=0o700, exist_ok=True)
+    environment.write_text(expected)
+    environment.chmod(0o600)
+    check_network(proxy, resolv, environment, expected)
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except Exception:
+        raise SystemExit('guest_network_unconfirmed')

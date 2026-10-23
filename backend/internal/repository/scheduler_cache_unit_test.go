@@ -108,6 +108,7 @@ func TestSchedulerCacheSnapshotAccountIDReusePreservesPayloadAndMembers(t *testi
 	require.NoError(t, err)
 	require.Equal(t, []int64{701, 702, 701}, accountIDs, "应保留可编码账号的原顺序和重复项")
 
+	validOne.ExecutionMode = service.AccountExecutionModeNormal
 	wantFull, err := json.Marshal(validOne)
 	require.NoError(t, err)
 	wantMeta, err := json.Marshal(buildSchedulerMetadataAccount(validOne))
@@ -288,6 +289,7 @@ func TestMarshalSchedulerCacheAccountKeepsEncodingJSONWireFormat(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			full, meta, err := marshalSchedulerCacheAccount(tc.account)
 			require.NoError(t, err)
+			tc.account.ExecutionMode = service.AccountExecutionModeNormal
 			wantFull, err := json.Marshal(tc.account)
 			require.NoError(t, err)
 			wantMeta, err := json.Marshal(buildSchedulerMetadataAccount(tc.account))
@@ -1263,4 +1265,34 @@ func TestBuildSchedulerMetadataAccount_KeepsExcelBPSModelSelection(t *testing.T)
 			require.Equal(t, tc.sol, restored.IsExcelBPSEnabledForModel("gpt-6-sol"))
 		})
 	}
+}
+
+func TestSchedulerVMMetadataKeepsOnlyRevisionFences(t *testing.T) {
+	proxyID := int64(901234)
+	account := service.Account{ID: 901234, ExecutionMode: service.AccountExecutionModeVMKernel, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth,
+		Credentials: map[string]any{"access_token": "fixture-secret", "model_mapping": map[string]any{"gpt-5.4": "gpt-6-luna"}}, ProxyID: &proxyID,
+		Proxy: &service.Proxy{ID: proxyID, Protocol: "http", Host: "fixture.invalid", Port: 8080, Password: "fixture-proxy-secret"}}
+	full, metadata, err := marshalSchedulerCacheAccount(account)
+	require.NoError(t, err)
+	restoredFull, err := decodeCachedAccount(full)
+	require.NoError(t, err)
+	require.Nil(t, restoredFull.VMKernelSchedulerRevision)
+	restored, err := decodeCachedAccount(metadata)
+	require.NoError(t, err)
+	require.NotNil(t, restored)
+	require.Equal(t, service.VMKernelSchedulerProjection(&account), restored.VMKernelSchedulerRevision)
+	require.NotContains(t, string(metadata), "fixture-secret")
+	require.NotContains(t, string(metadata), "fixture-proxy-secret")
+	require.Nil(t, restored.Proxy)
+	require.Empty(t, restored.GetCredential("access_token"))
+	// Re-projecting an already filtered snapshot must preserve the original
+	// authority digest rather than hashing the reduced credential map.
+	require.Equal(t, restored.VMKernelSchedulerRevision, buildSchedulerMetadataAccount(*restored).VMKernelSchedulerRevision)
+	legacy := buildSchedulerMetadataAccount(account)
+	legacy.VMKernelSchedulerRevision = nil
+	payload, err := json.Marshal(legacy)
+	require.NoError(t, err)
+	old, err := decodeCachedAccount(payload)
+	require.NoError(t, err)
+	require.Nil(t, old)
 }

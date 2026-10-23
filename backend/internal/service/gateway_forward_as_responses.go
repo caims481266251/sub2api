@@ -35,6 +35,9 @@ func (s *GatewayService) ForwardAsResponses(
 	body []byte,
 	parsed *ParsedRequest,
 ) (*ForwardResult, error) {
+	if account.IsVMKernel() {
+		return s.forwardVMKernelMessages(ctx, c, account, body, "responses", parsed)
+	}
 	startTime := time.Now()
 
 	normalizedBody, normalized, err := normalizeOpenAIResponsesLegacyIngressWithConfig(s.cfg, body)

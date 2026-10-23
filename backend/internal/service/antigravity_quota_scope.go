@@ -35,6 +35,9 @@ func (a *Account) IsSchedulableForModel(requestedModel string) bool {
 }
 
 func (a *Account) IsSchedulableForModelWithContext(ctx context.Context, requestedModel string) bool {
+	if a.IsVMKernel() && vmKernelExcludedFromContext(ctx) {
+		return false
+	}
 	if a == nil {
 		return false
 	}

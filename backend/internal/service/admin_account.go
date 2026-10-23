@@ -259,6 +259,10 @@ func (s *adminServiceImpl) DuplicateAccount(ctx context.Context, id int64, actor
 	if err != nil {
 		return nil, err
 	}
+	if source.IsVMKernel() && (s.cfg == nil || !s.cfg.VMKernel.Enabled) {
+		return nil, infraerrors.BadRequest("VM_KERNEL_DISABLED", "VM kernel execution is not enabled on this deployment")
+	}
+
 	if source.IsCredentialShadow() {
 		return nil, infraerrors.BadRequest(
 			"ACCOUNT_DUPLICATE_SHADOW_UNSUPPORTED",
@@ -316,6 +320,7 @@ func (s *adminServiceImpl) DuplicateAccount(ctx context.Context, id int64, actor
 		Name:                  duplicateAccountName(source.Name),
 		Notes:                 cloneAccountValuePointer(source.Notes),
 		Platform:              source.Platform,
+		ExecutionMode:         source.ExecutionMode,
 		Type:                  source.Type,
 		Credentials:           credentials,
 		Extra:                 extra,
@@ -429,6 +434,18 @@ func normalizeOpenAILongContextBillingUpdateExtra(account *Account, input *Updat
 // Grok media eligibility helpers live in account_grok_media_eligibility.go.
 
 func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]any) (*Account, error) {
+	mode, err := NormalizeAccountExecutionMode(input.ExecutionMode)
+	if err != nil {
+		return nil, err
+	}
+	if mode == AccountExecutionModeVMKernel {
+		if input.ProxyID == nil || *input.ProxyID <= 0 {
+			return nil, infraerrors.BadRequest("VM_KERNEL_PROXY_REQUIRED", "VM kernel accounts require a configured proxy")
+		}
+	}
+	if err := ValidateVMKernelAccount(&Account{ExecutionMode: mode, Platform: input.Platform, Type: input.Type, Credentials: input.Credentials, Extra: accountExtra}); err != nil {
+		return nil, err
+	}
 	if err := ValidateOpenAIRequestTimezoneExtra(input.Platform, accountExtra); err != nil {
 		return nil, err
 	}
@@ -452,6 +469,7 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 		InitialAdmissionPlan: input.InitialAdmissionPlan,
 		Name:                 input.Name,
 		Notes:                normalizeAccountNotes(input.Notes),
+		ExecutionMode:        mode,
 		Platform:             input.Platform,
 		Type:                 input.Type,
 		Credentials:          input.Credentials,
@@ -510,6 +528,12 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 }
 
 func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccountInput) (*Account, error) {
+	if input == nil {
+		return nil, ErrAccountNilInput
+	}
+	if input.ExecutionMode == AccountExecutionModeVMKernel && (s.cfg == nil || !s.cfg.VMKernel.Enabled) {
+		return nil, infraerrors.BadRequest("VM_KERNEL_DISABLED", "VM kernel execution is not enabled on this deployment")
+	}
 	if err := ValidateAccountCostMultiplierExtra(input.Extra); err != nil {
 		return nil, err
 	}
@@ -648,6 +672,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	}
 	account, err := s.accountRepo.GetByID(ctx, id)
 	if err != nil {
+		return nil, err
+	}
+	if err := ValidateAccountExecutionModeUpdate(account, input.ExecutionMode); err != nil {
 		return nil, err
 	}
 	if account.Platform == PlatformTypeSafe && input.Type != "" && input.Type != AccountTypeAPIKey {
@@ -950,6 +977,14 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if err := s.validateExcelBPS403GroupSettings(ctx, account); err != nil {
 		return nil, err
 	}
+	if account.IsVMKernel() {
+		if account.ProxyID == nil || *account.ProxyID <= 0 {
+			return nil, infraerrors.BadRequest("VM_KERNEL_PROXY_REQUIRED", "VM kernel accounts require a configured proxy")
+		}
+	}
+	if err := ValidateVMKernelAccount(account); err != nil {
+		return nil, err
+	}
 	billingSettingsAppliedAtomically := false
 	updater := s.accountBillingRepo
 	if updater == nil {
@@ -1153,7 +1188,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 
 	// 预取所有目标账号，供凭据守卫/代理守卫/混合渠道检查共用，避免多次 DB 查询。
 	var cachedTargets []*Account
-	if len(input.Credentials) > 0 || input.ProxyID != nil || needMixedChannelCheck || openAISettings.any() || input.ProbeEnabled != nil || input.RateMultiplier != nil {
+	if len(input.Credentials) > 0 || len(input.Extra) > 0 || input.ProxyID != nil || needMixedChannelCheck || openAISettings.any() || input.ProbeEnabled != nil || input.RateMultiplier != nil {
 		loaded, err := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
 		if err != nil {
 			return nil, err
@@ -1175,6 +1210,29 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	}
 	_, moveChanged := input.Extra[ExcelBPSAutoMoveOn403Key]
 	_, targetChanged := input.Extra[ExcelBPS403TargetGroupIDKey]
+	// Bulk edits must not enable a special execution route on VM accounts.
+	for _, target := range cachedTargets {
+		if target == nil || !target.IsVMKernel() {
+			continue
+		}
+		if input.ProxyID != nil && *input.ProxyID <= 0 {
+			return nil, infraerrors.BadRequest("VM_KERNEL_PROXY_REQUIRED", "VM kernel accounts require a configured proxy")
+		}
+		merged := *target
+		merged.Credentials = maps.Clone(target.Credentials)
+		if merged.Credentials == nil {
+			merged.Credentials = map[string]any{}
+		}
+		maps.Copy(merged.Credentials, input.Credentials)
+		merged.Extra = maps.Clone(target.Extra)
+		if merged.Extra == nil {
+			merged.Extra = map[string]any{}
+		}
+		maps.Copy(merged.Extra, input.Extra)
+		if err := ValidateVMKernelAccount(&merged); err != nil {
+			return nil, err
+		}
+	}
 	_, bpsChanged := input.Extra["openai_excel_bps"]
 	pendingByAccount := make(map[int64]bool)
 	_, planChanged := input.Credentials["plan_type"]
@@ -1482,6 +1540,10 @@ func (s *adminServiceImpl) resolveBulkUpdateTargetIDs(ctx context.Context, filte
 }
 
 func (s *adminServiceImpl) DeleteAccount(ctx context.Context, id int64) error {
+	account, err := s.accountRepo.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
 	// 级联删除 spark 影子账号（先删影子，再删母账号）
 	shadows, err := s.accountRepo.ListShadowsByParent(ctx, id)
 	if err != nil {
@@ -1495,6 +1557,9 @@ func (s *adminServiceImpl) DeleteAccount(ctx context.Context, id int64) error {
 	if err := s.accountRepo.Delete(ctx, id); err != nil {
 		return err
 	}
+	// The database revokes business access first. Runtime inventory reconciliation
+	// retries resource cleanup even while the helper is temporarily unavailable.
+	MarkVMKernelAccountDeleting(account)
 	return nil
 }
 
@@ -1573,6 +1638,9 @@ func (s *adminServiceImpl) CreateShadow(ctx context.Context, parentID int64, opt
 	parent, err := s.accountRepo.GetByID(ctx, parentID)
 	if err != nil {
 		return nil, fmt.Errorf("get parent account: %w", err)
+	}
+	if parent.IsVMKernel() {
+		return nil, infraerrors.BadRequest("VM_KERNEL_SHADOW_UNSUPPORTED", "VM kernel accounts cannot create shadow accounts")
 	}
 	if !parent.IsOpenAIOAuth() {
 		return nil, infraerrors.New(http.StatusBadRequest, "SPARK_SHADOW_INVALID_PARENT",

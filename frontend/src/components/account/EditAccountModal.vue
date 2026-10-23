@@ -11,6 +11,8 @@
       @submit.prevent="handleSubmit"
       class="space-y-5"
     >
+      <VMKernelStatusBadge v-if="account?.execution_mode === 'vm_kernel'" :status="account.vm_kernel" />
+      <p v-if="account?.execution_mode === 'vm_kernel'" class="text-sm text-blue-700 dark:text-blue-300">{{ t('admin.accounts.executionModeVM') }} — {{ t('admin.accounts.executionModeVMHint') }}</p>
       <div>
         <label class="input-label">{{ t('common.name') }}</label>
         <input v-model="form.name" type="text" required class="input" data-tour="edit-account-form-name" />
@@ -1834,7 +1836,7 @@
       <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <div>
           <label class="input-label">{{ t('admin.accounts.concurrency') }}</label>
-          <input v-model.number="form.concurrency" type="number" min="1" class="input"
+          <input v-model.number="form.concurrency" data-testid="account-concurrency" type="number" min="1" class="input"
             @input="form.concurrency = Math.max(1, form.concurrency || 1)" />
         </div>
         <div>
@@ -3463,6 +3465,7 @@
 </template>
 
 <script setup lang="ts">
+import VMKernelStatusBadge from '@/components/account/VMKernelStatusBadge.vue'
 import OpenAIRequestTimezoneField from '@/components/account/OpenAIRequestTimezoneField.vue'
 import SIWCAccountSettings from './SIWCAccountSettings.vue'
 import ExcelBPSCredentialStatus from './ExcelBPSCredentialStatus.vue'
@@ -3643,7 +3646,7 @@ const isSparkShadow = computed(() => props.account?.parent_account_id != null)
 const autoBPS = useAccountAutoBPS()
 const autoBPSSupported = computed(() => {
   const account = props.account
-  if (account?.platform !== 'openai' || account.type !== 'oauth' || isSparkShadow.value) return false
+  if (account?.platform !== 'openai' || account.type !== 'oauth' || account.execution_mode === 'vm_kernel' || isSparkShadow.value) return false
   const credentials = (account.credentials ?? {}) as Record<string, unknown>
   const modes = [credentials.auth_mode, credentials.openai_auth_mode].map(mode => String(mode ?? '').trim().toLowerCase())
   return !modes.some(mode => mode === 'agentidentity' || mode === 'personalaccesstoken' || mode === 'personal_access_token')

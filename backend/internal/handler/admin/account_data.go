@@ -58,6 +58,7 @@ type DataProxy struct {
 // 影子的独立调度配置(priority/并发/分组/status 管理员可单独调)亦不在本备份范围,属已知局限
 // (外审第6轮裁决:保持排除 + 前端警告,而非升级格式做完整往返)。
 type DataAccount struct {
+	ExecutionMode       string         `json:"execution_mode,omitempty"`
 	Name                string         `json:"name"`
 	Notes               *string        `json:"notes,omitempty"`
 	Platform            string         `json:"platform"`
@@ -207,6 +208,7 @@ func (h *AccountHandler) ExportData(c *gin.Context) {
 		dataAccounts = append(dataAccounts, DataAccount{
 			Name:                acc.Name,
 			Notes:               acc.Notes,
+			ExecutionMode:       acc.EffectiveExecutionMode(),
 			Platform:            acc.Platform,
 			Type:                acc.Type,
 			Credentials:         acc.Credentials,
@@ -459,6 +461,7 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 		accountInput := &service.CreateAccountInput{
 			Name:                 item.Name,
 			Notes:                item.Notes,
+			ExecutionMode:        item.ExecutionMode,
 			Platform:             item.Platform,
 			Type:                 item.Type,
 			Credentials:          item.Credentials,

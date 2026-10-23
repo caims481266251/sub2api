@@ -1,0 +1,10 @@
+#!/usr/bin/python3
+import json
+import subprocess
+subprocess.run(["/usr/local/lib/sub2-kvm/firewall", "--check"], check=True, stdout=subprocess.DEVNULL)
+kvm = json.loads(subprocess.check_output(["/usr/local/lib/sub2-kvm/qmp", "query-kvm"]))
+if kvm.get("enabled") is not True or kvm.get("present") is not True:
+    raise SystemExit("kvm_not_enabled")
+guest = json.loads(subprocess.check_output(["/usr/local/lib/sub2-kvm/guest-command", "observe"]))
+guest["kvm_enabled"] = True
+print(json.dumps(guest))

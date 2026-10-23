@@ -33,6 +33,9 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	body []byte,
 	parsed *ParsedRequest,
 ) (*ForwardResult, error) {
+	if account.IsVMKernel() {
+		return s.forwardVMKernelMessages(ctx, c, account, body, "chat", parsed)
+	}
 	startTime := time.Now()
 
 	// 1. Parse Chat Completions request

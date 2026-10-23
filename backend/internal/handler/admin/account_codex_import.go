@@ -22,6 +22,7 @@ import (
 const codexImportClockSkewSeconds int64 = 120
 
 type CodexSessionImportRequest struct {
+	ExecutionMode           *string        `json:"execution_mode"`
 	InitializeOpenAITwoFA   bool           `json:"initialize_openai_two_fa"`
 	Content                 string         `json:"content"`
 	Contents                []string       `json:"contents"`
@@ -123,6 +124,13 @@ func (h *AccountHandler) ImportCodexSession(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
+	}
+	if req.ExecutionMode != nil {
+		_, err := service.NormalizeAccountExecutionMode(*req.ExecutionMode)
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
 	}
 	if err := service.ValidateOpenAILongContextBillingExtra(service.PlatformOpenAI, req.Extra); err != nil {
 		response.ErrorFrom(c, err)
@@ -292,6 +300,7 @@ func (h *AccountHandler) importCodexSessions(ctx context.Context, req CodexSessi
 			mergedCredentials := mergeCodexImportCredentials(existing.Credentials, credentials, item)
 			mergedExtra := mergeCodexImportMap(existing.Extra, extra)
 			updateInput := &service.UpdateAccountInput{
+				ExecutionMode:      req.ExecutionMode,
 				Credentials:        mergedCredentials,
 				Extra:              mergedExtra,
 				Concurrency:        req.Concurrency,
@@ -343,7 +352,12 @@ func (h *AccountHandler) importCodexSessions(ctx context.Context, req CodexSessi
 			continue
 		}
 
+		mode := ""
+		if req.ExecutionMode != nil {
+			mode = *req.ExecutionMode
+		}
 		account, createErr := h.adminService.CreateAccount(ctx, &service.CreateAccountInput{
+			ExecutionMode:         mode,
 			InitialOpenAITwoFA:    req.InitializeOpenAITwoFA && !item.IsAgentIdentity,
 			Name:                  accountName,
 			Notes:                 req.Notes,

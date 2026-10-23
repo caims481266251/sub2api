@@ -68,7 +68,8 @@ const DefaultUpstreamResponseReadMaxBytes int64 = 128 * 1024 * 1024
 const DefaultModelsListReadMaxBytes int64 = 8 * 1024 * 1024
 
 type Config struct {
-	Runtime                 RuntimeConfig `mapstructure:"runtime"`
+	VMKernel                VMKernelConfig `mapstructure:"vm_kernel"`
+	Runtime                 RuntimeConfig  `mapstructure:"runtime"`
 	astraRoutingLoader      atomic.Pointer[astraRoutingLoader]
 	Server                  ServerConfig                  `mapstructure:"server"`
 	Log                     LogConfig                     `mapstructure:"log"`
@@ -2268,6 +2269,12 @@ func configureConfigSource(setConfigFile, addConfigPath func(string)) {
 }
 
 func setDefaults() {
+	viper.SetDefault("vm_kernel.enabled", false)
+	viper.SetDefault("vm_kernel.helper_socket", "")
+	viper.SetDefault("vm_kernel.template", "default")
+	viper.SetDefault("vm_kernel.cpu", 2)
+	viper.SetDefault("vm_kernel.memory_mib", 2048)
+	viper.SetDefault("vm_kernel.disk_gib", 20)
 	viper.SetDefault("gateway.upstream_routing.enabled", false)
 	viper.SetDefault("runtime.role", RuntimeRoleFull)
 	viper.SetDefault("runtime.regional_scheduler_file", "")
@@ -2988,6 +2995,9 @@ func setEnvReachableDefaults() {
 }
 
 func (c *Config) Validate() error {
+	if err := c.validateVMKernel(); err != nil {
+		return err
+	}
 	if _, err := upstreamroute.New(c.Gateway.UpstreamRouting); err != nil {
 		return fmt.Errorf("gateway.upstream_routing: %w", err)
 	}

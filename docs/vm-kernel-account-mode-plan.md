@@ -2,13 +2,17 @@
 
 日期：2026-10-22。基础版本：纯上游 sub2-api v2.15.0，提交 8b36fe7d647c28e8189147c6bfce52a41b6e26db。参考：vm2api v1.3.206，提交 894a78daba0361ecf825e5ec4a0707108cdbae9b。
 
-状态：仅方案与源码审查，尚未实现、下载或运行内核。本版取代此前文档中的扩展性建设任务；分支信息见 [分支基线说明](vm-kernel-branch-baseline.md)。
+状态：账户模式、运行支撑、HTTP/WS 接点已落地；前序 GPT 固定 payload 的显式 TCG 验收已有记录，硬件 KVM 与真实 Claude 仍未验收。当前证据与限制见 [实施状态](vm-kernel-implementation-status.md)。本版取代此前文档中的扩展性建设任务；分支信息见 [分支基线说明](vm-kernel-branch-baseline.md)。
 
-范围更新：按用户最新要求，**Responses WebSocket 和下表列明的四条跨协议转换链均为本次迭代必交付项**。本文撤销旧版“WS / Chat Completions / 跨协议延后”的限制；仍遵守“先整理分支、先不用写代码”。方案列为必交付不等于功能已经实现或通过真实内核验证。
+2026-10-22 调整：已按用户要求执行 [本地 vm2api 实验](vm2api-local-kvm-experiment.md)，后续实施顺序和运行时复用方式以 [运行时调整计划](vm-kernel-runtime-adjustment-plan.md) 为准。本文件的账号、调度、计费、WS 与跨协议范围继续有效；硬件 KVM 交付仍须实测，显式 TCG 作为建议新增的开发验证路径，不能冒充 KVM 验收。下文原自建启动器与离线模板细节须随新计划收敛。
+
+范围更新：按用户最新要求，**Responses WebSocket 和下表列明的四条跨协议转换链均为本次迭代必交付项**。本文撤销旧版“WS / Chat Completions / 跨协议延后”的限制；后续用户授权已允许编写代码。方案列为必交付不等于功能已经实现或通过真实内核验证。
 
 **本期目标：在 sub2api 已选定账号之后，增加“该账号专属运行环境 → 真实内核 → 上游”的执行方式，并把结果送回现有请求处理和计费流程。账号管理、授权刷新、调度算法、配额、定价、扣费和账单仍由 sub2api 负责。**
 
-**首版按用户最新指定固定为 KVM 真虚拟机：独立 Linux guest 内核、SMBIOS / MAC / 磁盘序列号，宿主必须提供可实际使用的 /dev/kvm。Docker 只封装 QEMU runner；普通 Docker slot、TCG 模拟和宿主直接运行推理内核均不属于首版 VM 能力。**
+**运行目标为独立 Linux guest 内核和持久 SMBIOS / MAC / 磁盘序列号，Docker 只封装 QEMU runner。默认硬件 KVM 必须具有实际可用的 /dev/kvm；开发验证允许显式配置 TCG，并如实展示实际加速方式。TCG 结果不能证明硬件 KVM 性能或验收，宿主直接运行推理内核不能代替 guest 执行。**
+
+当前业务边界修订以 [业务复用修订说明](vm-kernel-business-reuse-20261022.md) 为准：取消固定单并发，恢复原 2FA/准入/质量流程，增加受控 HTTP/WS 跨连接完成历史；原方案中严格 KVM 目标与显式 TCG 开发验证须分别报告。
 
 ## 1. 深审结论与修正
 
@@ -62,13 +66,13 @@ KVM 专项审查另发现：上游设备预检只检查可访问/可映射，不
 | 请求形态 | HTTP 非流式、HTTP SSE、Responses WS；文本、thinking/reasoning、标准工具调用/结果；跨协议采用原有可表达语义 | 原行为 |
 | 明确不支持的请求 | Responses compact/Lite、count_tokens、图片/音频/视频生成、内建搜索及其他专门执行路径；新增 Anthropic 原生 WS 或 Realtime 音频协议 | 原行为；可由原能力账号处理 |
 | 续聊 | HTTP 保留完整上下文和原 sticky；WS 支持绑定会话的连续 response.create、previous_response_id 与工具往返 | 原语义 |
-| continuation 边界 | OAuth HTTP previous_response_id 保持原入口规则；WS 按第 4.5 节校验会话所有权/代际。guest/服务重启后的透明恢复与 Claude thread.previous_message_id 不在本期 | 不改变普通账号既有能力 |
+| continuation 边界 | VM HTTP/WS previous_response_id 共用有界完成历史，校验原归属、账号及实例代际；同归属可跨连接续接。guest/服务重启后的透明恢复与 Claude thread.previous_message_id 不在本期 | 不改变普通账号既有能力 |
 | 特殊账号链路 | 不组合插件、SIWC、Prism、BPS、Copilot、harvest/ticket 出站、影子/聚合账号或自定义中转 | 原行为 |
 | 运行环境 | 单机 Linux amd64 + 可用 /dev/kvm，单活本机协调器；固定 Ubuntu 24.04 amd64 guest，一账号一 QEMU/KVM VM；外层 Docker runner | 不依赖 Docker 或内核组件 |
 | 区域部署 | VM 不支持 regionalMetering / 远程 regional 请求执行组合，启动启用检查、账号校验与发包检查均拒绝 | 原 regional 模式保持 |
 | 隔离目标 | 推理在独立 guest 内执行；SMBIOS/MAC/磁盘序列号真实注入并持久化，界面标为 KVM | 原行为 |
 
-这里有两层内核：KVM guest 自己的 Linux OS 内核，以及 guest 内 kin-kernel / kin-codex-kernel 推理二进制，两者都需要运行证据。固定规格与镜像写在部署配置，首版不提供 Docker/KVM 切换表单。远程节点、其他 guest 发行版、ARM/TCG、在线扩容、自动升级和跨实例会话恢复均延后。
+这里有两层内核：KVM guest 自己的 Linux OS 内核，以及 guest 内 kin-kernel / kin-codex-kernel 推理二进制，两者都需要运行证据。固定规格与镜像写在部署配置，首版不提供 Docker/KVM 切换表单。远程节点、其他 guest 发行版、在线扩容、自动升级和跨实例会话恢复仍不提供；原生 ARM64 runner + x86_64 guest 的显式 TCG 是已引入的开发验证路径。
 
 必交付协议映射如下。客户端协议由入口确定，执行平台由既有路由与账号选择确定；跨协议不改变账号所属平台，不创建第二个账号。
 
@@ -166,19 +170,19 @@ WS 是本次必须交付的公开客户端能力，三段传输分别固定：
 **逐轮生命周期。** 复用 OpenAIWSIngressHooks、唯一 ingress reader、受限写帧和等待取消工具；仅提取必要公共 helper，不复制整个 WS handler/状态机。每轮顺序为：
 
 1. 唯一 reader 取得 response.create 后，先执行 BeforePayloadParse 获取当前权限，再检查帧、客户端模型及 continuation 所有权；保留客户端原始 payload 供既有日志/计费 hash 使用。
-2. 在大小预算内展开连接内快照，形成将要执行的完整请求，再校验工具引用和请求能力。不能在尚未补入前序 tool call 时对增量 tool output 做完整上下文校验，也不能只审查增量而漏掉实际提交的历史。
+2. 在大小预算内展开连接内或共享快照，形成将要执行的完整请求，再校验工具引用和请求能力。不能在尚未补入前序 tool call 时对增量 tool output 做完整上下文校验，也不能只审查增量而漏掉实际提交的历史。
 3. 对有效完整请求执行适用的 BeforeRequest 策略检查和模型映射，再运行 BeforeTurn；首轮沿用已经获得的许可，后续轮重新核验 API Key/用户/分组、模型、余额/配额、RPM/并发并冻结 PricingAt。若现有 hook 混合“原始 payload 记录”和“有效 payload 审查”，只提取这两项窄 helper 分别传参，不改变原 hash 口径。等待后重读账号状态及 instance/generation/guest_boot_id，确认凭据和出口 applied revision。
 4. 产生当前 turn 的 attempt ID，只提交一次 guest 请求；内核 SSE 解析为标准 Responses JSON 事件后逐帧输出，不把 `data:` 文本或内核私有事件塞入 WS。
 5. 等待协议终止、内核 EOF/尾部 metadata、或受限取消收尾，生成不可变结果快照；调用 AfterTurn 恰好一次。已获取许可后的所有失败/异常退出也受同一收尾 guard 管理，adapter 不另行释放 Handler 的许可或另行扣费。
 6. 下轮重新准入。连接 idle 期间只保留原连接 lease；已结束 turn 不永久占用账号/用户执行槽。
 
-**本期 continuation 选择：连接内有界快照展开完整上下文。** 复用现有 replay/tool collector 和 strict-state helper，在原 WS 会话层补齐完整快照；不依赖普通 outbound WS anchor 保存 provider 状态，不新增持久会话库。
+**当前 continuation 选择：连接内历史和进程级共享有界快照展开完整上下文。** 复用现有 replay/tool collector 和 strict-state helper，在原 WS 会话层补齐完整快照；不依赖普通 outbound WS anchor 保存 provider 状态，不新增持久会话库。
 
 - 连接绑定 API Key/用户/分组、account_id、instance_uuid、generation/guest_boot_id 和有效模型映射。内核 session_id 来自原会话标识并按该绑定隔离，不能用随机 attempt ID 替代。
 - 只有完成状态和必需用量核验通过、完整输出已收集的 turn 才保存 `response_id → 规范化 input + 完整 output + 归属/策略版本`。失败、取消、断流和未知结果不建可续接快照；工具调用、reasoning 等输出项要完整保存，不能只拼文本。
 - 收到当前连接已知 previous_response_id 时，先校验归属、模型/工具/instructions 等兼容条件，再按原 replay helper 合并“前序 input + 前序 output + 本轮增量”。完成展开后才移除 body 与 envelope.session 中的 previous_response_id，防止重复携带历史。完整上下文请求与增量请求由显式字段/原校验规则区分，不靠字符串相似度猜测。
-- 快照只服务当前连接和绑定账号；首版默认最多 32 个完成快照，累计序列化历史最多 16 MiB，同时受现有 WS 帧大小、模型上下文和连接 idle 限制。边界可在 K1 按真实客户端样本冻结，但数量、字节和生命周期必须全部有界。超限淘汰旧完整快照并使相应 ID 失效；不截断单个快照后继续推理。当前上下文本身超限则明确报错、要求客户端压缩或新建会话。
-- 未知、过期、另一连接/账号的 response ID 返回明确 previous_response_not_found / 上下文不可恢复错误，并要求完整历史；不发起推理、不搜索其他账号、不悄悄当首轮。guest/内核重启、generation 变化、mode/绑定变化或凭据/代理应用需要重启时，排空并结束连接，要求重连；本期不承诺跨连接/重启透明恢复。
+- 连接内默认最多 32 个完成快照；共享快照按分组、用户、账号与 response ID 隔离，最多 512 项/64 MiB、TTL 不超过一小时，且绑定实例 generation。单连接累计序列化历史最多 16 MiB，同时受现有 WS 帧大小、模型上下文和连接 idle 限制。边界可在 K1 按真实客户端样本冻结，但数量、字节和生命周期必须全部有界。超限淘汰旧完整快照并使相应 ID 失效；不截断单个快照后继续推理。当前上下文本身超限则明确报错、要求客户端压缩或新建会话。
+- 未知、过期、另一归属/账号的 response ID 返回明确 previous_response_not_found / 上下文不可恢复错误，并要求完整历史；不发起推理、不搜索其他账号、不悄悄当首轮。guest/内核重启、generation 变化、mode/绑定变化或凭据/代理应用需要重启时，排空并结束连接，要求重连；同归属跨连接可在共享快照有效期内续接；不承诺跨 guest/服务重启透明恢复。
 - thinking 签名、encrypted reasoning、工具状态按现有可迁移性规则核验；未知的私有状态不能跨账号重放。K1 必须验证实际客户端的完整上下文工具往返和 reasoning 续聊；不能删掉这些项换取“多轮成功”。
 - 这是公开 WS 增量输入的完整实现方式，不声称原生 provider previous_response_id 命中。`generate=false` 原生预热、response.append 等超出上述事件合同的请求必须在提交前明确拒绝，不能删除字段后变成付费生成；若目标客户端必经该能力，列为 K1 兼容阻断，解决前不能宣称该客户端可用。
 
@@ -400,16 +404,16 @@ proxy_id 变化后停止该实例新请求，排空并应用网络/config 版本
 
 业务可调度仍要求原账号准入 AND runtime ready。原 Schedulable/InitialAdmissionPlan 语义不变；新 VM 的 runtime 条件起初为 false。reconcile 只推进运行状态，不能无条件 Schedulable=true 或重新启用管理员停用账号。
 
-在原 AccountTestService.TestAccountConnection 增加 VM 分支，共用 kernel client/adapter。仅服务端内部初始准入 probe 可以访问已准备但尚未通过业务准入的 guest；不走公共 selector，不临时启用账号。只豁免“等待初始准入”原因，不豁免删除、管理员停用、过期或模型/权限限制，且实际占用内核容量。
+已在原 AccountTestService.TestAccountConnection 增加 VM 默认文本测试分支，共用 kernel client/adapter。当前实现不豁免管理员停用或初始准入：VM 创建复用原 2FA 初始化及相关初始准入计划。管理 probe 复核最新账号、代理、模型与容量，不修改管理员调度状态；Pelican/candy/quality 文本请求复用原评估流程并经 guest 执行；依赖 host ticket/harvest 的特定 Codex state probe 仍明确拒绝。
 
-无既有 InitialAdmissionPlan 时，复用原账号测试服务执行一次有限 VM 就绪验证，仅推进 runtime 状态；有计划时继续原计划，不创建第二套测试系统。probe 不挂用户 API Key 账单，沿用原测试结果与记录；上游实际调用成本如实记录。普通账号测试不变。
+runtime 自动 prepare 后，对每个新 binding 执行一次有限小文本 guest probe，仅推进 runtime readiness，不修改数据库 Schedulable。管理 probe 不挂用户 API Key 账单；真实上游消耗与账户凭据合同仍待固定 payload 验收。普通账号原测试行为不变。
 
 ## 7. 数据与兼容合同
 
 只增加两类持久数据，不预建 nodes、templates、jobs、events、VM 账单表：
 
-- accounts.execution_mode：normal / vm_kernel；数据库及旧创建 API 默认 normal。更新缺字段保持原值，未知值拒绝；与 platform、type、既有 account_mode 独立。
-- 一份账号附属 runtime 记录（拟名 vm_account_runtimes）：唯一 account_id、instance_uuid、runtime_kind=kvm、runner container_id/QEMU 观测、本机 scope、generation、guest_boot_id、desired_state/phase、稳定硬件身份与磁盘/base引用、固定载荷版本、期望/guest已应用凭据与出口版本、观测时间及脱敏错误。内部 token 留实例秘密文件，不放公开 DTO。
+- accounts.execution_mode（迁移 296）：normal / vm_kernel；数据库及旧创建 API 默认 normal。更新缺字段保持原值，未知值拒绝；与 platform、type、既有 account_mode 独立。
+- helper 私有持久 manifest 与 tombstone：保存 account_id、instance_uuid、runner/QEMU 观测、generation、guest_boot_id、phase、稳定硬件身份与磁盘/base引用、固定载荷版本、期望/guest已应用凭据与出口版本；不新建 runtime SQL 表。内部 token 留实例秘密文件，不放公开 DTO；公开摘要只有 phase/ready/error_code/capacity。
 
 phase 至少区分 pending/preparing、kernel_ready（可进行受限 probe）、ready、draining、error/removed；busy 是容量观察，不能覆盖健康/管理员禁用状态。账号删除期间的清理记录必须可继续被 reconcile 找到，清理完成前不能丢失实例身份。
 
@@ -429,7 +433,7 @@ phase 至少区分 pending/preparing、kernel_ready（可进行受限 probe）�
 | K6 | Responses WS guest 执行 | 原 WS service 接点和逐轮 hooks、单 reader/写帧、连接内 replay、绑定/代际、取消/drain、每轮权威 partial 记账；连续文本和工具往返、异常/权限变化验证通过 |
 | K7 | 全矩阵验收、文档与发布检查 | 第 9 节原生 HTTP、四条转换、WS 多轮及故障项全部通过；原普通功能保持，调用与收费证据关联，功能默认关闭且可回滚 |
 
-K1 先行。K2/K3 在合同冻结后可以分工，K4 接入以二者就绪为前提。K5/K6 共用 K2 和 K4 的能力/结果合同，可并行实施，但先统一事件、终止与 usage_presence 接口，不能各自再造一份内核客户端。K7 是本次完成门槛，K4 完成不能标记整期交付。不要先铺完表单、数据库和调度后才发现闭源载荷不能满足凭据或 guest 内运行合同。
+K1 是开放真实 VM 能力前的验收门槛，当前尚未完成；已实现的 K2–K6 不代表 K1 获得证明。K2/K3 在合同冻结后可以分工，K4 接入以二者就绪为前提。K5/K6 共用 K2 和 K4 的能力/结果合同，可并行实施，但先统一事件、终止与 usage_presence 接口，不能各自再造一份内核客户端。K7 是本次完成门槛，K4 完成不能标记整期交付。不要先铺完表单、数据库和调度后才发现闭源载荷不能满足凭据或 guest 内运行合同。
 
 不把前端完成、mock HTTP 成功、容器 running、WS 101 或 health 200 当作 VM 完成。实施可按平台/协议逐项验证，但第 3 节任一必交付链未通过都要标记未完成；不以延期 WS/转换、外层 runner 内进程、TCG 或普通 HTTP 代替验收。
 
@@ -535,3 +539,9 @@ vm2api 的公开调用端证据：
 - [固定 payload](https://github.com/dofastted/vm2api/blob/v1.3.206/deploy/payload.json)、[LICENSE](https://github.com/dofastted/vm2api/blob/v1.3.206/LICENSE)
 
 本纯上游分支没有原本地 ticket_borrow 模块；不移植本地定制代码，也不把其 continuation 兼容作为本功能前置。普通模式完整保留上游 ticket/harvest、插件、WS 与转换能力；VM 本次新增第 3 节明确的 WS 和转换链，并按上述 KVM 执行/状态/计费边界验收。
+
+## 12. 实施决策补记（2026-10-22）
+
+以 [实施状态](vm-kernel-implementation-status.md) 为当前代码事实和验证结果的索引。首版已选择 helper durable manifests，而非 SQL runtime 表；mode 使用迁移 296。单活本机协调器使用私有 flock，helper 自身也持有状态根锁。VM 代理必填、并发跟随账号配置，已进入原 selector/readiness 与最后发包复核。自动 prepare 与每 binding 小文本 guest probe 不启用管理员停用账号。停用/删除需排空后 stop；数据库删除成功后立即撤销新请求权限，再由后台排空清理，manifest tombstone 和磁盘数据保留。
+
+HTTP/WS 保存共享有界完成历史，校验同归属、同账号、同 generation 后展开 continuation，取消沿原 attempt 处理，执行结果未知不自动重放；已完成快照可在新连接受控恢复；未完成请求及 guest/服务重启后不透明恢复。质量测试、初始准入和 2FA 初始化复用原流程；需要推理的测试请求走 guest。正常账号继续原路径。当前全套/race 最终验证与真实 Linux KVM/payload 验收仍有未完成项，详见实施状态；不得将 UDS fixture 的通过写成真实内核已可用。

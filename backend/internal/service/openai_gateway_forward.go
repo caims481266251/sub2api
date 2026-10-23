@@ -129,6 +129,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		return nil, markOpenAIInitialAdmissionError(admissionErr)
 	}
 	account = latest
+	if account.IsVMKernel() {
+		return s.forwardVMKernelResponses(ctx, c, account, body, "responses", "")
+	}
 	ctx = withOpenAITransportRoute(ctx, "http", "native", "", "")
 	beginUpstreamResponseModelObservation(c)
 	ClearActualOpenAIUpstreamEndpoint(c)
@@ -216,29 +219,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	if normalized {
 		body = normalizedBody
 	}
-	legacyIngressBody, legacyIngressChanged, legacyIngressErr := normalizeOpenAIResponsesLegacyIngressWithConfig(s.cfg, body)
-	if legacyIngressErr != nil {
-		return nil, legacyIngressErr
-	}
-	if legacyIngressChanged {
-		body = legacyIngressBody
-	}
-	// 在分流到 passthrough / Codex transform / 原生 ChatCompletions 之前统一修正
-	// 显式为 null 的工具 Schema type，否则 upstream 的 400 会被归一成可重试的 502，
-	// 同一份坏定义在账号池里反复重放。
-	if sanitizedToolBody, toolSchemaSanitized, toolSchemaErr := sanitizeOpenAIResponsesToolSchemasForPlatform(body, account.Platform); toolSchemaErr != nil {
-		return nil, toolSchemaErr
-	} else if toolSchemaSanitized {
-		body = sanitizedToolBody
-	}
-	if account.IsOpenAIOAuthLike() {
-		reasoningBody, reasoningChanged, reasoningErr := normalizeOpenAIResponsesReasoningMode(body, account.GetMappedModel(gjson.GetBytes(body, "model").String()))
-		if reasoningErr != nil {
-			return nil, fmt.Errorf("normalize OpenAI Responses reasoning.mode: %w", reasoningErr)
-		}
-		if reasoningChanged {
-			body = reasoningBody
-		}
+	body, err = normalizeOpenAIResponsesBusinessBody(s.cfg, account, body, account.GetMappedModel(gjson.GetBytes(body, "model").String()))
+	if err != nil {
+		return nil, err
 	}
 	responsesLite := account.IsOpenAI() && isOpenAIResponsesLiteHeader(c.GetHeader(responsesLiteHeader))
 	if responsesLite {

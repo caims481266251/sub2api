@@ -90,6 +90,11 @@ func Type(v string) predicate.Account {
 	return predicate.Account(sql.FieldEQ(FieldType, v))
 }
 
+// ExecutionMode applies equality check predicate on the "execution_mode" field. It's identical to ExecutionModeEQ.
+func ExecutionMode(v string) predicate.Account {
+	return predicate.Account(sql.FieldEQ(FieldExecutionMode, v))
+}
+
 // ProxyID applies equality check predicate on the "proxy_id" field. It's identical to ProxyIDEQ.
 func ProxyID(v int64) predicate.Account {
 	return predicate.Account(sql.FieldEQ(FieldProxyID, v))
@@ -598,6 +603,71 @@ func TypeEqualFold(v string) predicate.Account {
 // TypeContainsFold applies the ContainsFold predicate on the "type" field.
 func TypeContainsFold(v string) predicate.Account {
 	return predicate.Account(sql.FieldContainsFold(FieldType, v))
+}
+
+// ExecutionModeEQ applies the EQ predicate on the "execution_mode" field.
+func ExecutionModeEQ(v string) predicate.Account {
+	return predicate.Account(sql.FieldEQ(FieldExecutionMode, v))
+}
+
+// ExecutionModeNEQ applies the NEQ predicate on the "execution_mode" field.
+func ExecutionModeNEQ(v string) predicate.Account {
+	return predicate.Account(sql.FieldNEQ(FieldExecutionMode, v))
+}
+
+// ExecutionModeIn applies the In predicate on the "execution_mode" field.
+func ExecutionModeIn(vs ...string) predicate.Account {
+	return predicate.Account(sql.FieldIn(FieldExecutionMode, vs...))
+}
+
+// ExecutionModeNotIn applies the NotIn predicate on the "execution_mode" field.
+func ExecutionModeNotIn(vs ...string) predicate.Account {
+	return predicate.Account(sql.FieldNotIn(FieldExecutionMode, vs...))
+}
+
+// ExecutionModeGT applies the GT predicate on the "execution_mode" field.
+func ExecutionModeGT(v string) predicate.Account {
+	return predicate.Account(sql.FieldGT(FieldExecutionMode, v))
+}
+
+// ExecutionModeGTE applies the GTE predicate on the "execution_mode" field.
+func ExecutionModeGTE(v string) predicate.Account {
+	return predicate.Account(sql.FieldGTE(FieldExecutionMode, v))
+}
+
+// ExecutionModeLT applies the LT predicate on the "execution_mode" field.
+func ExecutionModeLT(v string) predicate.Account {
+	return predicate.Account(sql.FieldLT(FieldExecutionMode, v))
+}
+
+// ExecutionModeLTE applies the LTE predicate on the "execution_mode" field.
+func ExecutionModeLTE(v string) predicate.Account {
+	return predicate.Account(sql.FieldLTE(FieldExecutionMode, v))
+}
+
+// ExecutionModeContains applies the Contains predicate on the "execution_mode" field.
+func ExecutionModeContains(v string) predicate.Account {
+	return predicate.Account(sql.FieldContains(FieldExecutionMode, v))
+}
+
+// ExecutionModeHasPrefix applies the HasPrefix predicate on the "execution_mode" field.
+func ExecutionModeHasPrefix(v string) predicate.Account {
+	return predicate.Account(sql.FieldHasPrefix(FieldExecutionMode, v))
+}
+
+// ExecutionModeHasSuffix applies the HasSuffix predicate on the "execution_mode" field.
+func ExecutionModeHasSuffix(v string) predicate.Account {
+	return predicate.Account(sql.FieldHasSuffix(FieldExecutionMode, v))
+}
+
+// ExecutionModeEqualFold applies the EqualFold predicate on the "execution_mode" field.
+func ExecutionModeEqualFold(v string) predicate.Account {
+	return predicate.Account(sql.FieldEqualFold(FieldExecutionMode, v))
+}
+
+// ExecutionModeContainsFold applies the ContainsFold predicate on the "execution_mode" field.
+func ExecutionModeContainsFold(v string) predicate.Account {
+	return predicate.Account(sql.FieldContainsFold(FieldExecutionMode, v))
 }
 
 // ProxyIDEQ applies the EQ predicate on the "proxy_id" field.

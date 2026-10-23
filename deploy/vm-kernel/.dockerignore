@@ -1,0 +1,13 @@
+*
+!Dockerfile
+!runner
+!probe
+!firewall
+!qmp
+!guest-command
+!apply
+!observe
+!guest/**
+!artifacts/base.qcow2
+!artifacts/template.json
+!artifacts/payload/**

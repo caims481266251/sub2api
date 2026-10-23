@@ -497,10 +497,49 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
 
   afterEach(() => vi.useRealTimers())
 
-  it('offers 2FA initial login with optional name and imports through Session deduplication', async () => {
+  it('defaults new accounts to normal execution', async () => {
+    const wrapper = await submitApiKeyAccount('openai')
+    expect(createAccountMock.mock.calls[0]?.[0]?.execution_mode).toBe('normal')
+    wrapper.unmount()
+  })
+
+  it('preserves VM execution mode and configured concurrency through standard Codex session import', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+    await wrapper.get('[data-testid="account-concurrency"]').setValue(17)
+    await wrapper.get('[data-testid="account-execution-mode"]').setValue('vm_kernel')
+    expect(wrapper.get<HTMLInputElement>('[data-testid="account-concurrency"]').element.disabled).toBe(false)
+    expect(wrapper.get<HTMLInputElement>('[data-testid="account-concurrency"]').element.value).toBe('17')
+    await wrapper.get('[data-testid="account-concurrency"]').setValue(23)
+    wrapper.getComponent({ name: 'ProxySelector' }).vm.$emit('update:modelValue', 7)
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('VM account')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await wrapper.get('[data-testid="import-codex-session"]').trigger('click')
+    await flushPromises()
+    expect(importCodexSessionMock).toHaveBeenCalledWith(expect.objectContaining({ execution_mode: 'vm_kernel', concurrency: 23, proxy_id: 7 }))
+    wrapper.unmount()
+  })
+
+  it('rejects API key creation in VM mode before sending a request', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+    await selectButtonByText(wrapper, 'API Key')
+    await wrapper.get('[data-testid="account-execution-mode"]').setValue('vm_kernel')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('VM API key')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('test-api-key')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(createAccountMock).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it.each(['normal', 'vm_kernel'])('offers 2FA initial login and credential operations in %s mode', async (executionMode) => {
     const wrapper = mountModal()
     await selectButtonByText(wrapper, 'OpenAI')
     await wrapper.get('[data-testid="openai-two-fa"]').trigger('click')
+    await wrapper.get('[data-testid="account-execution-mode"]').setValue(executionMode)
+    const proxyID = executionMode === 'vm_kernel' ? 7 : null
+    wrapper.getComponent({ name: 'ProxySelector' }).vm.$emit('update:modelValue', proxyID)
     expect(wrapper.get('[data-tour="account-form-name"]').attributes('required')).toBeUndefined()
     await wrapper.get('form#create-account-form').trigger('submit.prevent')
     const importer = wrapper.getComponent(OpenAITwoFAImport)
@@ -510,7 +549,7 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     await expect(importer.props('importCredential')(credential, login.email, login)).resolves.toBe('created')
     expect(importCodexSessionMock).toHaveBeenCalledWith(expect.objectContaining({
       content: JSON.stringify(credential), name: 'user@example.com', update_existing: false, skip_existing: true,
-      concurrency: 10, group_ids: [], proxy_id: null,
+      execution_mode: executionMode, initialize_openai_two_fa: true, concurrency: 10, group_ids: [], proxy_id: proxyID,
     }))
     expect(wrapper.emitted('created')).toHaveLength(1)
     expect(wrapper.emitted('close')).toBeUndefined()

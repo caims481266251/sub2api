@@ -45,6 +45,7 @@ func TestListPluginAccounts_ScopeAndSchedulable(t *testing.T) {
 			ParentAccountID: &parentID},
 		// apikey type — out of (openai, oauth) scope, excluded
 		{ID: 5, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true},
+		{ID: 6, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, ExecutionMode: AccountExecutionModeVMKernel},
 	}
 	svc := &OpenAIGatewayService{accountRepo: &pluginDirRepoStub{byPlatform: map[string][]Account{PlatformOpenAI: openai}}}
 	scope := newPluginAccountScope(pluginAccountScopeEntry{Platform: PlatformOpenAI, AccountType: AccountTypeOAuth})
@@ -97,7 +98,7 @@ func TestAccountReadableSnapshot_DenylistTripwire(t *testing.T) {
 	// Fields intentionally exposed as readable metadata (incl. Extra and Proxy —
 	// the proxy password is already handed out via ResolveOutboundIdentity's URL).
 	safeToExpose := map[string]struct{}{
-		"ID": {}, "Name": {}, "Notes": {}, "Platform": {}, "Type": {}, "Extra": {},
+		"ID": {}, "Name": {}, "Notes": {}, "Platform": {}, "Type": {}, "ExecutionMode": {}, "Extra": {},
 		"Proxy": {}, "ProxyID": {}, "ProxyFallbackOriginID": {}, "ProxyFallbackOriginName": {},
 		"Concurrency": {}, "Priority": {}, "RateMultiplier": {}, "LoadFactor": {},
 		"GroupRateMultiplier": {},
@@ -187,4 +188,21 @@ func TestListPluginAccounts_EmptyScopeReturnsNothing(t *testing.T) {
 	infos, err := svc.ListPluginAccounts(context.Background(), PluginAccountScope{}, "", "")
 	require.NoError(t, err)
 	assert.Empty(t, infos, "an empty scope must never enumerate accounts")
+}
+
+type pluginVMIdentityRepo struct {
+	AccountRepository
+	account *Account
+}
+
+func (r pluginVMIdentityRepo) GetByID(context.Context, int64) (*Account, error) {
+	return r.account, nil
+}
+func TestResolvePluginOutboundIdentityRejectsVMKernel(t *testing.T) {
+	account := &Account{ID: 9, Platform: PlatformOpenAI, Type: AccountTypeOAuth, ExecutionMode: AccountExecutionModeVMKernel, Status: StatusActive, Schedulable: true, Credentials: map[string]any{"access_token": "fixture-token"}}
+	svc := &OpenAIGatewayService{accountRepo: pluginVMIdentityRepo{account: account}}
+	scope := newPluginAccountScope(pluginAccountScopeEntry{Platform: PlatformOpenAI, AccountType: AccountTypeOAuth})
+	identity, err := svc.ResolvePluginOutboundIdentity(context.Background(), scope, account.ID)
+	require.NoError(t, err)
+	require.Nil(t, identity, "VM credentials must not enable plugin host execution")
 }

@@ -2755,6 +2755,9 @@ func accountSupportsOpenAICapabilities(account *Account, requiredCapability Open
 }
 
 func accountSupportsOpenAICapabilitiesForRequest(ctx context.Context, account *Account, requestedModel string, requiredCapability OpenAIEndpointCapability, requiredImageCapability OpenAIImagesCapability) bool {
+	if account.IsVMKernel() && vmKernelExcludedFromContext(ctx) {
+		return false
+	}
 	if openAIImageRequestRejection(ctx, account, requestedModel) != "" {
 		return false
 	}
@@ -2779,6 +2782,9 @@ func cloneExcludedAccountIDs(excludedIDs map[int64]struct{}) map[int64]struct{} 
 }
 
 func (s *OpenAIGatewayService) isOpenAIAccountTransportCompatible(account *Account, requiredTransport OpenAIUpstreamTransport, requestedModels ...string) bool {
+	if account.IsVMKernel() {
+		return requiredTransport == OpenAIUpstreamTransportAny || requiredTransport == OpenAIUpstreamTransportHTTPSSE || requiredTransport == OpenAIUpstreamTransportResponsesWebsocketV2 || requiredTransport == OpenAIUpstreamTransportResponsesWebsocketV2Ingress
+	}
 	if requiredTransport == OpenAIUpstreamTransportAny || requiredTransport == OpenAIUpstreamTransportHTTPSSE {
 		return true
 	}

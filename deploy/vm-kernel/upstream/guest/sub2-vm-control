@@ -1,0 +1,177 @@
+#!/usr/bin/python3
+"""Root-only applied receipt tied to actual process, boot and projection bytes."""
+import hashlib
+import http.client
+import ipaddress
+import json
+import re
+import os
+from pathlib import Path
+import socket
+import subprocess
+import sys
+import uuid
+
+
+def reject_refresh(value):
+    if isinstance(value, dict):
+        if any(k.replace('_', '').lower() == 'refreshtoken' for k in value):
+            raise ValueError('refresh_credential_forbidden')
+        for child in value.values(): reject_refresh(child)
+    elif isinstance(value, list):
+        for child in value: reject_refresh(child)
+
+
+def process_identity():
+    data = subprocess.check_output(['systemctl', 'show', 'kin-kernel.service', '-p', 'MainPID', '-p', 'ActiveState'], text=True)
+    values = dict(line.split('=', 1) for line in data.splitlines())
+    pid = int(values['MainPID'])
+    if pid <= 0 or values['ActiveState'] != 'active': raise ValueError('kernel_not_running')
+    stat = Path('/proc', str(pid), 'stat').read_text().rsplit(')', 1)[1].split()
+    return {'pid': pid, 'start_ticks': stat[19], 'executable': os.readlink('/proc/' + str(pid) + '/exe')}
+
+
+def client_device_observation(state):
+    identity = state.get('client_identity')
+    if identity is None:
+        return None
+    if not isinstance(identity, dict):
+        raise ValueError('client_identity_invalid')
+    raw = identity.get('device_id', '')
+    if not isinstance(raw, str):
+        raise ValueError('client_identity_invalid')
+    expected = str(uuid.UUID(raw))
+    if raw != expected:
+        raise ValueError('client_identity_invalid')
+    filename = 'codex-kernel.json' if state['spec']['platform'] == 'codex' else 'kernel.json'
+    actual = json.loads(Path('/run/kin', filename).read_text()).get('device_id')
+    if actual != expected:
+        raise ValueError('client_identity_unconfirmed')
+    return expected
+
+
+def guest_network_spec(state):
+    lease = state.get('network')
+    if lease is None:
+        return None
+    if not isinstance(lease, dict):
+        raise ValueError('guest_network_invalid')
+    network = ipaddress.IPv4Network(lease['guest_subnet'], strict=True)
+    pools = (ipaddress.IPv4Network(value) for value in ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'))
+    if network.prefixlen != 28 or not any(network.subnet_of(pool) for pool in pools):
+        raise ValueError('guest_network_invalid')
+    expected = {'guest_subnet': str(network), 'guest_gateway': str(network.network_address + 2),
+                'guest_dns': str(network.network_address + 3), 'guest_address': str(network.network_address + 4)}
+    if any(lease.get(key, value if key == 'guest_dns' else None) != value for key, value in expected.items()):
+        raise ValueError('guest_network_invalid')
+    if network.overlaps(ipaddress.IPv4Network(lease['subnet'], strict=True)):
+        raise ValueError('guest_network_overlaps_bridge')
+    mac = state['identity']['mac'].lower()
+    if not re.fullmatch(r'[0-9a-f]{2}(?::[0-9a-f]{2}){5}', mac):
+        raise ValueError('guest_mac_invalid')
+    return dict(expected, mac=mac)
+
+
+def guest_network_observation(state):
+    expected = guest_network_spec(state)
+    if expected is None:
+        return None  # Legacy leases keep their existing guest addressing.
+    # iproute2 suppresses link-layer fields (including MAC) with `-4`.
+    # Read both families to identify the NIC, then select IPv4 below.
+    addresses = json.loads(subprocess.check_output(['ip', '-j', 'address', 'show'], timeout=5))
+    interfaces = [item for item in addresses if item.get('address', '').lower() == expected['mac']]
+    if len(interfaces) != 1:
+        raise ValueError('guest_interface_unconfirmed')
+    interface = interfaces[0]
+    actual = [(item.get('local'), item.get('prefixlen')) for item in interface.get('addr_info', [])
+              if item.get('family') == 'inet' and item.get('scope') == 'global']
+    if actual != [(expected['guest_address'], 28)]:
+        raise ValueError('guest_address_unconfirmed')
+    routes = json.loads(subprocess.check_output(['ip', '-j', '-4', 'route', 'show', 'default'], timeout=5))
+    if len(routes) != 1 or routes[0].get('gateway') != expected['guest_gateway'] or routes[0].get('dev') != interface['ifname']:
+        raise ValueError('guest_route_unconfirmed')
+    return dict(expected, interface=interface['ifname'])
+
+
+class UnixHTTP(http.client.HTTPConnection):
+    def connect(self):
+        self.sock = socket.socket(socket.AF_UNIX); self.sock.settimeout(2)
+        self.sock.connect('/run/kin-guest/kernel.sock')
+
+
+def main():
+    operation = sys.argv[1] if len(sys.argv) == 2 else ''
+    if operation not in ('apply', 'observe'): raise ValueError('operation_invalid')
+    state = json.loads(Path('/run/kin/instance.json').read_text())
+    revision = json.loads(Path('/run/sub2-credentials/revision.json').read_text())
+    credential = Path('/run/sub2-credentials/credential.json').read_bytes()
+    reject_refresh(json.loads(credential))
+    digest = hashlib.sha256(credential).hexdigest()
+    proxy = json.loads(Path('/run/sub2-credentials/proxy.json').read_text())
+    if digest != revision['digest'] or revision['revision'] != state['desired_credential_revision'] or proxy['revision'] != state['spec']['proxy_revision']:
+        raise ValueError('projection_mismatch')
+    # A receipt must attest the effective resolver projection, not just the
+    # proxy.json revision. cloud-init or a previous boot may replace hosts.
+    network = ['/usr/local/sbin/sub2-vm-network']
+    if operation == 'observe':
+        network.append('--check')
+    environment = dict(os.environ, KIN_GUEST_ENGINE=state['spec']['platform'])
+    subprocess.run(network, check=True, env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    device_id = client_device_observation(state)
+    guest_network = guest_network_observation(state)
+    expected = {'generation': state['generation'], 'guest_boot_id': Path('/proc/sys/kernel/random/boot_id').read_text().strip(),
+                'credential_revision': revision['revision'], 'proxy_revision': proxy['revision'], 'credential_digest': digest}
+    if device_id is not None:
+        expected['device_id'] = device_id
+    if guest_network is not None:
+        expected['guest_network'] = guest_network
+    root = Path('/run/sub2-vm-control'); root.mkdir(mode=0o700, exist_ok=True)
+    os.chmod(root, 0o700)
+    receipt = root / 'applied.json'; pending = root / 'pending.json'
+    def read(path):
+        try: return json.loads(path.read_text())
+        except (OSError, ValueError): return None
+    def write(path, value):
+        temporary = path.with_suffix('.tmp'); temporary.write_text(json.dumps(value)); temporary.chmod(0o600); temporary.replace(path)
+    applied = read(receipt)
+    if operation == 'apply' and (applied or {}).get('projection') != expected:
+        if (read(pending) or {}).get('projection') != expected:
+            try: previous = process_identity()
+            except Exception: previous = None
+            write(pending, {'projection': expected, 'previous_process': previous})
+            subprocess.run(['systemctl', '--no-block', 'restart', 'kin-kernel.service'], check=True)
+            raise ValueError('kernel_restart_pending')
+    process = process_identity()
+    if operation == 'apply' and (applied or {}).get('projection') != expected and (read(pending) or {}).get('previous_process') == process:
+        raise ValueError('kernel_restart_pending')
+    if state['spec']['platform'] == 'codex' and Path(process['executable']).name != 'kin-codex-kernel':
+        raise ValueError('wrong_kernel_process')
+    if state['spec']['platform'] == 'claude' and Path(process['executable']).name not in ('kin-kernel', 'kin-kernel.bin'):
+        # The pinned Claude launcher execs its bundled glibc loader. Validate
+        # its fixed kernel argument as well; never accept a loader alone.
+        expected_loader = Path('/opt/kin/glibc239/ld-linux-x86-64.so.2').resolve()
+        arguments = Path('/proc', str(process['pid']), 'cmdline').read_bytes().split(b'\0')
+        allowed_bins = {b'/opt/kin/kin-kernel.bin', b'/opt/kin-payload/opt/kin/kin-kernel.bin'}
+        if Path(process['executable']).resolve() != expected_loader or not any(arg in allowed_bins for arg in arguments) or b'--gateway-worker' not in arguments:
+            raise ValueError('wrong_kernel_process')
+    conn = UnixHTTP('kernel', timeout=2)
+    token = Path('/run/kin/internal.token').read_text().strip()
+    conn.request('GET', '/internal/health', headers={'x-kin-internal-token': token, 'x-internal-token': token})
+    response = conn.getresponse(); health = json.loads(response.read(1048576)); conn.close()
+    ready = response.status == 200 and health.get('healthy', health.get('ok', False)) is True
+    if not ready or process_identity() != process: raise ValueError('kernel_not_ready')
+    if guest_network_observation(state) != guest_network:
+        raise ValueError('guest_network_changed')
+    if client_device_observation(state) != device_id:
+        raise ValueError('client_identity_changed')
+    current = {'projection': expected, 'process': process}
+    if operation == 'apply':
+        if applied and applied.get('projection') == expected and applied != current: raise ValueError('unfenced_kernel_restart')
+        write(receipt, current)
+    elif applied != current: raise ValueError('application_unconfirmed')
+    print(json.dumps({k: expected[k] for k in ('generation', 'guest_boot_id', 'credential_revision', 'proxy_revision')} | {'kernel_ready': True}))
+
+
+if __name__ == '__main__':
+    try: main()
+    except Exception: raise SystemExit('guest_control_unconfirmed')

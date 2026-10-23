@@ -94,6 +94,9 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		return nil, admissionErr
 	}
 	account = latest
+	if account.IsVMKernel() {
+		return s.forwardVMKernelResponses(ctx, c, account, body, "chat", defaultMappedModel)
+	}
 	rememberOpenCodeInboundBody(c, body)
 	beginUpstreamResponseModelObservation(c)
 	ClearActualOpenAIUpstreamEndpoint(c)

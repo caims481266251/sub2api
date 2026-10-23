@@ -169,6 +169,7 @@ func createAccountRecord(ctx context.Context, client *dbent.Client, account *ser
 	builder := client.Account.Create().
 		SetName(account.Name).
 		SetNillableNotes(account.Notes).
+		SetExecutionMode(account.EffectiveExecutionMode()).
 		SetPlatform(account.Platform).
 		SetType(account.Type).
 		SetCredentials(normalizeJSONMap(account.Credentials)).
@@ -4090,6 +4091,7 @@ func accountEntityToService(m *dbent.Account) *service.Account {
 		ID:                      m.ID,
 		Name:                    m.Name,
 		Notes:                   m.Notes,
+		ExecutionMode:           m.ExecutionMode,
 		Platform:                m.Platform,
 		Type:                    m.Type,
 		Credentials:             copyJSONMap(m.Credentials),

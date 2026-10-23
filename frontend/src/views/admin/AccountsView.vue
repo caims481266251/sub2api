@@ -226,6 +226,7 @@
             <span class="font-mono text-xs text-gray-500 dark:text-gray-400">#{{ value }}</span>
           </template>
           <template #cell-name="{ row, value }">
+            <VMKernelStatusBadge v-if="row.execution_mode === 'vm_kernel'" :status="row.vm_kernel" class="mb-1" />
             <div class="flex flex-col">
               <HelpTooltip
                 v-if="accountHomepageUrl(row)"
@@ -500,6 +501,7 @@
 </template>
 
 <script setup lang="ts">
+import VMKernelStatusBadge from '@/components/account/VMKernelStatusBadge.vue'
 import { isValidAccountCostMultiplier } from '@/utils/accountCost'
 import { ref, reactive, computed, onMounted, onUnmounted, toRaw, watch } from 'vue'
 import { useIntervalFn } from '@vueuse/core'

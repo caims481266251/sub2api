@@ -30,7 +30,7 @@ func timerContractRepository(t *testing.T, matcher sqlmock.QueryMatcher) (*accou
 func timerContractAccountRows(status string, schedulable bool) *sqlmock.Rows {
 	now := time.Now()
 	return sqlmock.NewRows(dbaccount.Columns).AddRow(
-		int64(7), now, now, nil, "after", nil, service.PlatformAnthropic, service.AccountTypeAPIKey,
+		int64(7), now, now, nil, "after", nil, service.PlatformAnthropic, service.AccountTypeAPIKey, service.AccountExecutionModeNormal,
 		[]byte(`{}`), []byte(`{}`), nil, nil, 1, nil, 1, 1.0, 1.0,
 		status, nil, nil, nil, false, schedulable, nil, nil, nil, nil, nil, nil, nil, nil, nil, service.QuotaDimensionGlobal,
 	)

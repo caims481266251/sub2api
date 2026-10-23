@@ -302,7 +302,14 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 			accountReleaseFunc()
 		}
 
-		if err != nil {
+		vmPartial := err != nil && result != nil && result.VMKernelUsageAuthoritative
+		if vmPartial {
+			if !gatewayForwardErrorAlreadyCommunicated(c, writerSizeBeforeForward, err) {
+				h.ensureForwardErrorResponse(c, streamStarted)
+			}
+			reqLog.Warn("gateway.vm_partial_usage", zap.Int64("account_id", account.ID), zap.Error(err))
+		}
+		if err != nil && !vmPartial {
 			var failoverErr *service.UpstreamFailoverError
 			if errors.As(err, &failoverErr) {
 				// Can't failover if streaming content already sent

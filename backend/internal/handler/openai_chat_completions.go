@@ -350,6 +350,15 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 				}
 			})
 		}
+		if err != nil && result != nil && result.VMKernelUsageAuthoritative {
+			if !openAIForwardErrorAlreadyCommunicated(c, writerSizeBeforeForward, err) {
+				h.ensureForwardErrorResponse(c, streamStarted)
+			}
+			submitChatUsage(result)
+			reqLog.Warn("openai.vm_partial_usage", zap.Int64("account_id", account.ID), zap.Error(err))
+			return
+		}
+
 		if err != nil {
 			if service.IsOpenAITurnAdmissionError(err) {
 				h.handleTurnAdmissionError(c, err, streamStarted)

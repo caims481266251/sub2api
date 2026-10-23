@@ -30,6 +30,8 @@ const (
 	FieldPlatform = "platform"
 	// FieldType holds the string denoting the type field in the database.
 	FieldType = "type"
+	// FieldExecutionMode holds the string denoting the execution_mode field in the database.
+	FieldExecutionMode = "execution_mode"
 	// FieldCredentials holds the string denoting the credentials field in the database.
 	FieldCredentials = "credentials"
 	// FieldExtra holds the string denoting the extra field in the database.
@@ -140,6 +142,7 @@ var Columns = []string{
 	FieldNotes,
 	FieldPlatform,
 	FieldType,
+	FieldExecutionMode,
 	FieldCredentials,
 	FieldExtra,
 	FieldProxyID,
@@ -203,6 +206,10 @@ var (
 	PlatformValidator func(string) error
 	// TypeValidator is a validator for the "type" field. It is called by the builders before save.
 	TypeValidator func(string) error
+	// DefaultExecutionMode holds the default value on creation for the "execution_mode" field.
+	DefaultExecutionMode string
+	// ExecutionModeValidator is a validator for the "execution_mode" field. It is called by the builders before save.
+	ExecutionModeValidator func(string) error
 	// DefaultCredentials holds the default value on creation for the "credentials" field.
 	DefaultCredentials func() map[string]interface{}
 	// DefaultExtra holds the default value on creation for the "extra" field.
@@ -294,6 +301,11 @@ func ByPlatform(opts ...sql.OrderTermOption) OrderOption {
 // ByType orders the results by the type field.
 func ByType(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldType, opts...).ToFunc()
+}
+
+// ByExecutionMode orders the results by the execution_mode field.
+func ByExecutionMode(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldExecutionMode, opts...).ToFunc()
 }
 
 // ByProxyID orders the results by the proxy_id field.

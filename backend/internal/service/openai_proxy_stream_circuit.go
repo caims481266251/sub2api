@@ -324,6 +324,10 @@ func openAIProxyStreamQuarantineBypassed(ctx context.Context) bool {
 }
 
 func (s *OpenAIGatewayService) isOpenAIProxyStreamQuarantined(ctx context.Context, account *Account) bool {
+	// Host transport circuit state does not describe the guest kernel transport.
+	if account.IsVMKernel() {
+		return false
+	}
 	proxyID, ok := openAIProxyStreamCircuitProxyID(account)
 	if !ok {
 		return false

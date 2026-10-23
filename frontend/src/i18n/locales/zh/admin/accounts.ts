@@ -1,5 +1,18 @@
 export default {
     accounts: {
+executionMode: '执行模式',
+  executionModeNormal: '普通（默认）',
+  executionModeVM: 'VM 内核',
+  executionModeVMHint: '支持 Anthropic / OpenAI 标准 OAuth，OpenAI 可通过 2FA 登录。并发遵循账号配置；实例准备和验证完成后才能接收请求。创建后不能修改执行模式。',
+      vmProxyRequired: 'VM 内核账号必须选择代理。',
+      vmRuntimeReady: '正常',
+      vmRuntimeTCG: 'TCG 软件模拟',
+      vmRuntimeError: '异常',
+      vmRuntimePending: '未就绪',
+      vmRuntimePhase: '运行阶段：{phase}',
+      vmRuntimeCapacity: '账号并发上限：{capacity}',
+      vmRuntimeUnlimited: '不限制',
+
       timer: {
         "open": "定时打开",
         "close": "定时关闭",

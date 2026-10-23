@@ -99,6 +99,20 @@ func (_c *AccountCreate) SetType(v string) *AccountCreate {
 	return _c
 }
 
+// SetExecutionMode sets the "execution_mode" field.
+func (_c *AccountCreate) SetExecutionMode(v string) *AccountCreate {
+	_c.mutation.SetExecutionMode(v)
+	return _c
+}
+
+// SetNillableExecutionMode sets the "execution_mode" field if the given value is not nil.
+func (_c *AccountCreate) SetNillableExecutionMode(v *string) *AccountCreate {
+	if v != nil {
+		_c.SetExecutionMode(*v)
+	}
+	return _c
+}
+
 // SetCredentials sets the "credentials" field.
 func (_c *AccountCreate) SetCredentials(v map[string]interface{}) *AccountCreate {
 	_c.mutation.SetCredentials(v)
@@ -553,6 +567,10 @@ func (_c *AccountCreate) defaults() error {
 		v := account.DefaultUpdatedAt()
 		_c.mutation.SetUpdatedAt(v)
 	}
+	if _, ok := _c.mutation.ExecutionMode(); !ok {
+		v := account.DefaultExecutionMode
+		_c.mutation.SetExecutionMode(v)
+	}
 	if _, ok := _c.mutation.Credentials(); !ok {
 		if account.DefaultCredentials == nil {
 			return fmt.Errorf("ent: uninitialized account.DefaultCredentials (forgotten import ent/runtime?)")
@@ -632,6 +650,14 @@ func (_c *AccountCreate) check() error {
 	if v, ok := _c.mutation.GetType(); ok {
 		if err := account.TypeValidator(v); err != nil {
 			return &ValidationError{Name: "type", err: fmt.Errorf(`ent: validator failed for field "Account.type": %w`, err)}
+		}
+	}
+	if _, ok := _c.mutation.ExecutionMode(); !ok {
+		return &ValidationError{Name: "execution_mode", err: errors.New(`ent: missing required field "Account.execution_mode"`)}
+	}
+	if v, ok := _c.mutation.ExecutionMode(); ok {
+		if err := account.ExecutionModeValidator(v); err != nil {
+			return &ValidationError{Name: "execution_mode", err: fmt.Errorf(`ent: validator failed for field "Account.execution_mode": %w`, err)}
 		}
 	}
 	if _, ok := _c.mutation.Credentials(); !ok {
@@ -733,6 +759,10 @@ func (_c *AccountCreate) createSpec() (*Account, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.GetType(); ok {
 		_spec.SetField(account.FieldType, field.TypeString, value)
 		_node.Type = value
+	}
+	if value, ok := _c.mutation.ExecutionMode(); ok {
+		_spec.SetField(account.FieldExecutionMode, field.TypeString, value)
+		_node.ExecutionMode = value
 	}
 	if value, ok := _c.mutation.Credentials(); ok {
 		_spec.SetField(account.FieldCredentials, field.TypeJSON, value)
@@ -1045,6 +1075,18 @@ func (u *AccountUpsert) SetType(v string) *AccountUpsert {
 // UpdateType sets the "type" field to the value that was provided on create.
 func (u *AccountUpsert) UpdateType() *AccountUpsert {
 	u.SetExcluded(account.FieldType)
+	return u
+}
+
+// SetExecutionMode sets the "execution_mode" field.
+func (u *AccountUpsert) SetExecutionMode(v string) *AccountUpsert {
+	u.Set(account.FieldExecutionMode, v)
+	return u
+}
+
+// UpdateExecutionMode sets the "execution_mode" field to the value that was provided on create.
+func (u *AccountUpsert) UpdateExecutionMode() *AccountUpsert {
+	u.SetExcluded(account.FieldExecutionMode)
 	return u
 }
 
@@ -1614,6 +1656,20 @@ func (u *AccountUpsertOne) SetType(v string) *AccountUpsertOne {
 func (u *AccountUpsertOne) UpdateType() *AccountUpsertOne {
 	return u.Update(func(s *AccountUpsert) {
 		s.UpdateType()
+	})
+}
+
+// SetExecutionMode sets the "execution_mode" field.
+func (u *AccountUpsertOne) SetExecutionMode(v string) *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetExecutionMode(v)
+	})
+}
+
+// UpdateExecutionMode sets the "execution_mode" field to the value that was provided on create.
+func (u *AccountUpsertOne) UpdateExecutionMode() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateExecutionMode()
 	})
 }
 
@@ -2420,6 +2476,20 @@ func (u *AccountUpsertBulk) SetType(v string) *AccountUpsertBulk {
 func (u *AccountUpsertBulk) UpdateType() *AccountUpsertBulk {
 	return u.Update(func(s *AccountUpsert) {
 		s.UpdateType()
+	})
+}
+
+// SetExecutionMode sets the "execution_mode" field.
+func (u *AccountUpsertBulk) SetExecutionMode(v string) *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetExecutionMode(v)
+	})
+}
+
+// UpdateExecutionMode sets the "execution_mode" field to the value that was provided on create.
+func (u *AccountUpsertBulk) UpdateExecutionMode() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateExecutionMode()
 	})
 }
 

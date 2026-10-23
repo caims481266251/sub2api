@@ -3407,3 +3407,21 @@ func TestOpenAIResponsesWebSocketSimpleModeRechecksKeyWindows(t *testing.T) {
 		})
 	}
 }
+
+func TestOpenAIResponsesHTTPContinuationAccountFilterPreservesVMAndNormalRules(t *testing.T) {
+	for _, tc := range []struct {
+		name, previous, platform, kind, mode string
+		skip                                 bool
+	}{
+		{"vm_oauth_history", "resp_owned", service.PlatformOpenAI, service.AccountTypeOAuth, service.AccountExecutionModeVMKernel, false},
+		{"ordinary_oauth_still_unsupported", "resp_owned", service.PlatformOpenAI, service.AccountTypeOAuth, service.AccountExecutionModeNormal, true},
+		{"ordinary_apikey", "resp_owned", service.PlatformOpenAI, service.AccountTypeAPIKey, service.AccountExecutionModeNormal, false},
+		{"no_continuation", "", service.PlatformOpenAI, service.AccountTypeOAuth, service.AccountExecutionModeNormal, false},
+		{"other_platform_unchanged", "resp_owned", service.PlatformAnthropic, service.AccountTypeOAuth, service.AccountExecutionModeNormal, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			account := &service.Account{Platform: tc.platform, Type: tc.kind, ExecutionMode: tc.mode}
+			require.Equal(t, tc.skip, skipOpenAIHTTPContinuationAccount(tc.previous, tc.platform, account))
+		})
+	}
+}

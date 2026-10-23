@@ -154,7 +154,7 @@ func QualityBPSExtra(b *QualityBPSPolicy) map[string]any {
 
 // QualityBPSEligible 与账号编辑页一致：只有普通 ChatGPT OAuth 母账号能开 BPS。
 func QualityBPSEligible(account *Account) bool {
-	return account != nil && account.Platform == PlatformOpenAI && account.Type == AccountTypeOAuth &&
+	return account != nil && !account.IsVMKernel() && account.Platform == PlatformOpenAI && account.Type == AccountTypeOAuth &&
 		!account.IsShadow() && !account.IsOpenAIAgentIdentity() && !account.IsOpenAIPersonalAccessToken() &&
 		!strings.EqualFold(strings.TrimSpace(account.GetCredential("plan_type")), "free")
 }

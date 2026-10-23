@@ -424,6 +424,7 @@ type UpdateGroupInput struct {
 }
 
 type CreateAccountInput struct {
+	ExecutionMode        string
 	InitialOpenAITwoFA   bool               `json:"-"`
 	InitialAdmissionPlan *ScheduledTestPlan `json:"-"`
 	InitialQualityPlan   *ScheduledTestPlan `json:"-"`
@@ -460,6 +461,7 @@ type ShadowOptions struct {
 }
 
 type UpdateAccountInput struct {
+	ExecutionMode       *string
 	Name                string
 	Notes               *string
 	Type                string // Account type: oauth, setup-token, apikey

@@ -1,0 +1,11 @@
+[Unit]
+Description=Account guest TCP to inference Unix socket relay
+Requires=sub2-setup.service
+After=sub2-setup.service
+[Service]
+ExecStart=/usr/local/lib/sub2-guest/relay
+NoNewPrivileges=yes
+Restart=on-failure
+RestartSec=2
+[Install]
+WantedBy=multi-user.target

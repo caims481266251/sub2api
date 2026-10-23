@@ -1046,9 +1046,10 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			zap.Float64("load_skew", scheduleDecision.LoadSkew),
 		)
 		account := selection.Account
-		if previousResponseID != "" && requestPlatform == service.PlatformOpenAI && !account.IsOpenAIApiKey() {
+		if skipOpenAIHTTPContinuationAccount(previousResponseID, requestPlatform, account) {
 			// The public Responses HTTP API supports previous_response_id on API-key
-			// accounts. OAuth/SetupToken upstreams do not, so keep searching instead
+			// accounts and VM accounts with locally owned completed history. Ordinary
+			// OAuth/SetupToken upstreams do not, so keep searching instead
 			// of silently deleting continuation state from a mixed account pool.
 			failedAccountIDs[account.ID] = struct{}{}
 			if selection.ReleaseFunc != nil {
@@ -1183,6 +1184,15 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				}
 			})
 		}
+		if err != nil && result != nil && result.VMKernelUsageAuthoritative {
+			if !openAIForwardErrorAlreadyCommunicated(c, writerSizeBeforeForward, err) {
+				h.ensureForwardErrorResponse(c, streamStarted)
+			}
+			submitResponsesUsage(result)
+			reqLog.Warn("openai.vm_partial_usage", zap.Int64("account_id", account.ID), zap.Error(err))
+			return
+		}
+
 		if err != nil {
 			if service.IsOpenAITurnAdmissionError(err) {
 				h.handleTurnAdmissionError(c, err, streamStarted)
@@ -1813,6 +1823,15 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 				}
 			})
 		}
+		if err != nil && result != nil && result.VMKernelUsageAuthoritative {
+			if !openAIForwardErrorAlreadyCommunicated(c, writerSizeBeforeForward, err) {
+				h.ensureAnthropicErrorResponse(c, streamStarted)
+			}
+			submitMessagesUsage(result)
+			reqLog.Warn("openai.vm_partial_usage", zap.Int64("account_id", account.ID), zap.Error(err))
+			return
+		}
+
 		if err != nil {
 			if result != nil && result.ImageCount > 0 {
 				reqLog.Warn("openai_messages.forward_partial_error_with_image_result",
@@ -3372,6 +3391,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 
 		maxReasoningEffort, reasoningEffortMappings, maxReasoningEffortOverLimit, _ := openAIReasoningEffortPolicyForRequest(c, apiKey)
 		var requestPayloadHash string
+		type vmIngressUsageSnapshot struct{ hash, model string }
+		var vmIngressUsageMu sync.Mutex
+		vmIngressUsage := make(map[int]vmIngressUsageSnapshot)
 		var turnStartsMu sync.Mutex
 		turnStarts := make(map[int]time.Time, 4)
 		recordTurnStart := func(turn int, startedAt time.Time) {
@@ -3421,6 +3443,11 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			ReasoningEffortMappings:     reasoningEffortMappings,
 			TurnStarted:                 recordTurnStart,
 			BeforePayloadParse: func(turn int, raw []byte, effectiveModel string) error {
+				if account.IsVMKernel() {
+					vmIngressUsageMu.Lock()
+					vmIngressUsage[turn] = vmIngressUsageSnapshot{hash: service.HashUsageRequestPayload(raw), model: strings.TrimSpace(effectiveModel)}
+					vmIngressUsageMu.Unlock()
+				}
 				if middleware2.CheckGroupSubagentFrame(c, raw) {
 					return service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, middleware2.GroupSubagentsBlockedMessage, nil)
 				}
@@ -3618,6 +3645,17 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			},
 			AfterTurn: func(turn int, result *service.OpenAIForwardResult, turnErr error) {
 				turnStart := getTurnStart(turn)
+				turnRequestPayloadHash := requestPayloadHash
+				var vmUsage vmIngressUsageSnapshot
+				if account.IsVMKernel() {
+					vmIngressUsageMu.Lock()
+					vmUsage = vmIngressUsage[turn]
+					delete(vmIngressUsage, turn)
+					vmIngressUsageMu.Unlock()
+					if vmUsage.hash != "" {
+						turnRequestPayloadHash = vmUsage.hash
+					}
+				}
 				cyberTurnContext := takeCyberTurnBody(turn)
 				cyberBlockBody := cyberTurnContext.body
 				// 每次 attempt 都清 cyber mark；failover 链结束前保留 recorded guard，
@@ -3633,6 +3671,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					if model := strings.TrimSpace(result.Model); model != "" {
 						turnRequestedModel = model
 					}
+				}
+				if vmUsage.model != "" {
+					turnRequestedModel = vmUsage.model
 				}
 				if result != nil {
 					turnUpstreamModel = strings.TrimSpace(result.UpstreamModel)
@@ -3652,7 +3693,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				if cyberTurnContext.identity.Metadata.Status != "" {
 					cyberIdentityOverride = &cyberTurnContext.identity
 				}
-				h.recordCyberPolicyIfMarkedWithIdentity(c, apiKey, account, subscription, turnRequestedModel, turnErr != nil, cyberBlockBody, turnUsageFields, requestPayloadHash, cyberIdentityOverride)
+				h.recordCyberPolicyIfMarkedWithIdentity(c, apiKey, account, subscription, turnRequestedModel, turnErr != nil, cyberBlockBody, turnUsageFields, turnRequestPayloadHash, cyberIdentityOverride)
 				cyberBlockedThisConn, cyberBlockPendingAfterFailover = advanceOpenAIWSCyberBlockState(
 					cyberBlockedThisConn,
 					cyberBlockPendingAfterFailover,
@@ -3660,7 +3701,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					turnErr,
 				)
 				if turnErr != nil {
-					if result == nil || result.ImageCount <= 0 {
+					if result == nil || (result.ImageCount <= 0 && !result.VMKernelUsageAuthoritative) {
 						return
 					}
 					// cyber 命中时该 turn 的用量已由 recordCyberPolicyIfMarked(forwardErrored=true)
@@ -3711,7 +3752,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 						UpstreamEndpoint:   upstreamEndpoint,
 						UserAgent:          userAgent,
 						IPAddress:          clientIP,
-						RequestPayloadHash: requestPayloadHash,
+						RequestPayloadHash: turnRequestPayloadHash,
 						APIKeyService:      h.apiKeyService,
 						QuotaPlatform:      quotaPlatform,
 						SessionID:          sessionID,
@@ -3729,12 +3770,15 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			},
 		}
 
+		// VM replay uses the same tenant ownership as HTTP continuations. The
+		// transport also checks account and generation before any guest call.
+		service.SetOpenAIHTTPResponseOwner(c, subject.UserID, apiKey.ID)
 		wsFirstMessage := wsAttemptMessage
 		// 切组/会话失配防护：previous_response_id 未在当前分组命中粘连账号（StickyPreviousHit=false），
 		// 说明该会话链不属于本次调度到的账号，原样转发会触发上游会话链鉴权失败（“鉴权失败，请检查 API Key”）。
 		// 故剥离首包里的 previous_response_id，改用首包内 input 重建上下文；带 function_call_output 的
 		// 工具续链无法重建，保持原样。仅作用于首轮首包，后续 turn 的续链由 WS 转发层既有逻辑处理。
-		if previousResponseID != "" && !scheduleDecision.StickyPreviousHit && previousResponseCanMove {
+		if !account.IsVMKernel() && previousResponseID != "" && !scheduleDecision.StickyPreviousHit && previousResponseCanMove {
 			wsFirstMessage = service.RemovePreviousResponseIDFromBody(wsFirstMessage)
 			reqLog.Debug("openai.websocket_previous_response_id_stripped_cross_group",
 				zap.Int64("account_id", account.ID),
@@ -5263,4 +5307,10 @@ func (h *OpenAIGatewayHandler) checkRegionalBillingEligibility(ctx context.Conte
 		return errors.New("coordinated funds unavailable")
 	}
 	return h.billingCacheService.CheckBillingEligibility(ctx, key.User, key, key.Group, subscription, service.QuotaPlatform(ctx, key))
+}
+
+// VM continuations are rebuilt from locally owned history by the VM service;
+// they do not rely on OAuth upstream support for previous_response_id.
+func skipOpenAIHTTPContinuationAccount(previousID, platform string, account *service.Account) bool {
+	return previousID != "" && platform == service.PlatformOpenAI && !account.IsOpenAIApiKey() && !account.IsVMKernel()
 }

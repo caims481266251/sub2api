@@ -257,6 +257,8 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 		ID:                      a.ID,
 		Name:                    a.Name,
 		Notes:                   a.Notes,
+		ExecutionMode:           a.EffectiveExecutionMode(),
+		VMKernel:                service.VMKernelRuntimeSummary(a),
 		Platform:                a.Platform,
 		Type:                    a.Type,
 		Credentials:             redactedCreds,
@@ -481,7 +483,9 @@ func AccountListItemFromAccount(a *Account) *AccountListItem {
 		return nil
 	}
 	return &AccountListItem{
-		ID: a.ID, Name: a.Name, Notes: a.Notes, Platform: a.Platform, Type: a.Type,
+		ExecutionMode: a.ExecutionMode,
+		VMKernel:      a.VMKernel,
+		ID:            a.ID, Name: a.Name, Notes: a.Notes, Platform: a.Platform, Type: a.Type,
 		Credentials: a.Credentials, CredentialsStatus: a.CredentialsStatus, Extra: a.Extra,
 		ExcelBPSCredentialState: a.ExcelBPSCredentialState,
 		OllamaCloudUsage:        a.OllamaCloudUsage, CodexTurnTickets: a.CodexTurnTickets,

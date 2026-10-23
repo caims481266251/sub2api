@@ -302,6 +302,9 @@ func (c *schedulerCache) GetSnapshot(ctx context.Context, bucket service.Schedul
 		if err != nil {
 			return nil, false, err
 		}
+		if account == nil {
+			return nil, false, nil
+		}
 		if err := applySchedulerLastUsed(account, lastUsedValues[i]); err != nil {
 			return nil, false, err
 		}
@@ -581,6 +584,9 @@ func (c *schedulerCache) GetAccount(ctx context.Context, accountID int64) (*serv
 	if err != nil {
 		return nil, err
 	}
+	if account == nil {
+		return nil, nil
+	}
 	if err := applySchedulerLastUsed(account, values[1]); err != nil {
 		return nil, err
 	}
@@ -618,7 +624,10 @@ func (c *schedulerCache) GetAccounts(ctx context.Context, accountIDs []int64) (m
 		if err != nil {
 			return nil, err
 		}
-		if account == nil || account.ID != id {
+		if account == nil {
+			continue
+		}
+		if account.ID != id {
 			return nil, fmt.Errorf("scheduler account snapshot ID mismatch")
 		}
 		if err := applySchedulerLastUsed(account, values[2*i+1]); err != nil {
@@ -817,6 +826,18 @@ func decodeCachedAccount(val any) (*service.Account, error) {
 	if err := json.Unmarshal(payload, &account); err != nil {
 		return nil, err
 	}
+	// Older snapshots cannot establish execution ownership; force authoritative reload.
+	if account.ExecutionMode == "" {
+		return nil, nil
+	}
+	if _, err := service.NormalizeAccountExecutionMode(account.ExecutionMode); err != nil {
+		return nil, err
+	}
+	// Old VM metadata lacks the full credential/proxy fences. Force reload;
+	// never treat a missing digest as permission to bypass runtime readiness.
+	if account.IsVMKernel() && account.GetCredential("access_token") == "" && account.VMKernelSchedulerRevision == nil {
+		return nil, nil
+	}
 	return &account, nil
 }
 
@@ -871,6 +892,11 @@ func (c *schedulerCache) writeAccountIDs(ctx context.Context, accounts []service
 }
 
 func marshalSchedulerCacheAccount(account service.Account) ([]byte, []byte, error) {
+	mode, err := service.NormalizeAccountExecutionMode(account.ExecutionMode)
+	if err != nil {
+		return nil, nil, err
+	}
+	account.ExecutionMode = mode
 	fullPayload, err := json.Marshal(account)
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshal account: %w", err)
@@ -935,34 +961,36 @@ func (c *schedulerCache) mgetChunked(ctx context.Context, keys []string) ([]any,
 
 func buildSchedulerMetadataAccount(account service.Account) service.Account {
 	return service.Account{
-		ID:                      account.ID,
-		Name:                    account.Name,
-		Platform:                account.Platform,
-		Type:                    account.Type,
-		Concurrency:             account.Concurrency,
-		LoadFactor:              account.LoadFactor,
-		Priority:                account.Priority,
-		RateMultiplier:          account.RateMultiplier,
-		GroupRateMultiplier:     account.GroupRateMultiplier,
-		Status:                  account.Status,
-		LastUsedAt:              account.LastUsedAt,
-		ExpiresAt:               account.ExpiresAt,
-		AutoPauseOnExpired:      account.AutoPauseOnExpired,
-		Schedulable:             account.Schedulable,
-		RateLimitedAt:           account.RateLimitedAt,
-		RateLimitResetAt:        account.RateLimitResetAt,
-		OverloadUntil:           account.OverloadUntil,
-		TempUnschedulableUntil:  account.TempUnschedulableUntil,
-		TempUnschedulableReason: account.TempUnschedulableReason,
-		SessionWindowStart:      account.SessionWindowStart,
-		SessionWindowEnd:        account.SessionWindowEnd,
-		SessionWindowStatus:     account.SessionWindowStatus,
-		ParentAccountID:         account.ParentAccountID,
-		QuotaDimension:          account.QuotaDimension,
-		AccountGroups:           filterSchedulerAccountGroups(account.AccountGroups),
-		GroupIDs:                filterSchedulerGroupIDs(account.GroupIDs, account.AccountGroups),
-		Credentials:             filterSchedulerCredentials(account.Credentials),
-		Extra:                   filterSchedulerExtra(account.Extra),
+		VMKernelSchedulerRevision: service.VMKernelSchedulerProjection(&account),
+		ID:                        account.ID,
+		Name:                      account.Name,
+		ExecutionMode:             account.EffectiveExecutionMode(),
+		Platform:                  account.Platform,
+		Type:                      account.Type,
+		Concurrency:               account.Concurrency,
+		LoadFactor:                account.LoadFactor,
+		Priority:                  account.Priority,
+		RateMultiplier:            account.RateMultiplier,
+		GroupRateMultiplier:       account.GroupRateMultiplier,
+		Status:                    account.Status,
+		LastUsedAt:                account.LastUsedAt,
+		ExpiresAt:                 account.ExpiresAt,
+		AutoPauseOnExpired:        account.AutoPauseOnExpired,
+		Schedulable:               account.Schedulable,
+		RateLimitedAt:             account.RateLimitedAt,
+		RateLimitResetAt:          account.RateLimitResetAt,
+		OverloadUntil:             account.OverloadUntil,
+		TempUnschedulableUntil:    account.TempUnschedulableUntil,
+		TempUnschedulableReason:   account.TempUnschedulableReason,
+		SessionWindowStart:        account.SessionWindowStart,
+		SessionWindowEnd:          account.SessionWindowEnd,
+		SessionWindowStatus:       account.SessionWindowStatus,
+		ParentAccountID:           account.ParentAccountID,
+		QuotaDimension:            account.QuotaDimension,
+		AccountGroups:             filterSchedulerAccountGroups(account.AccountGroups),
+		GroupIDs:                  filterSchedulerGroupIDs(account.GroupIDs, account.AccountGroups),
+		Credentials:               filterSchedulerCredentials(account.Credentials),
+		Extra:                     filterSchedulerExtra(account.Extra),
 	}
 }
 

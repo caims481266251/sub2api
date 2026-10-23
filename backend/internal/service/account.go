@@ -22,13 +22,22 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 )
 
+// VMKernelSchedulerRevision is internal cache metadata, never an API request or DTO.
+// It preserves full-account fences without copying secrets to scheduler candidates.
+type VMKernelSchedulerRevision struct {
+	Credential string
+	Proxy      string
+}
+
 type Account struct {
-	InitialAdmissionPlan *ScheduledTestPlan `json:"-"`
+	VMKernelSchedulerRevision *VMKernelSchedulerRevision `json:"vm_kernel_scheduler_revision,omitempty"`
+	InitialAdmissionPlan      *ScheduledTestPlan         `json:"-"`
 	// InitialQualityPlan is internal create-only state, never imported or exported.
 	InitialQualityPlan      *ScheduledTestPlan `json:"-"`
 	ID                      int64
 	Name                    string
 	Notes                   *string
+	ExecutionMode           string
 	Platform                string
 	Type                    string
 	Credentials             map[string]any
@@ -219,7 +228,7 @@ func (a *Account) EffectiveLoadFactor() int {
 }
 
 func (a *Account) IsSchedulable() bool {
-	if !a.IsActive() || !a.Schedulable {
+	if a == nil || !a.IsActive() || !a.Schedulable || !VMKernelRuntimeReady(a) {
 		return false
 	}
 	now := time.Now()
@@ -1111,6 +1120,9 @@ func (a *Account) OpenAICompactSupportKnown() (supported bool, known bool) {
 // requests. Unknown capability remains allowed to avoid breaking older accounts
 // before an explicit probe has been run.
 func (a *Account) AllowsOpenAICompact() bool {
+	if a.IsVMKernel() {
+		return false
+	}
 	if a == nil || !a.IsOpenAI() {
 		return false
 	}
@@ -1956,6 +1968,9 @@ func (a *Account) GetOpenAISessionID() string {
 }
 
 func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapability) bool {
+	if a.IsVMKernel() {
+		return capability == "" || capability == OpenAIEndpointCapabilityChatCompletions || capability == OpenAIEndpointCapabilityResponses
+	}
 	if a == nil {
 		return false
 	}
@@ -2158,6 +2173,9 @@ func (a *Account) openAIEndpointCapabilitySet() (map[string]bool, bool) {
 }
 
 func (a *Account) SupportsOpenAIImageCapability(capability OpenAIImagesCapability) bool {
+	if a.IsVMKernel() {
+		return capability == ""
+	}
 	if capability == "" {
 		return true
 	}

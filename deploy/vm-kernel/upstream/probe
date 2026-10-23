@@ -1,0 +1,50 @@
+#!/usr/bin/python3
+"""Real KVM probe: no guest disk, network, payload, or TCG fallback."""
+import argparse
+import json
+import os
+import socket
+import subprocess
+import tempfile
+import time
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--accel', choices=('kvm', 'tcg'), required=True)
+accel = parser.parse_args().accel
+with tempfile.TemporaryDirectory(prefix="sub2-kvm-probe-") as root:
+    path = root + "/qmp.sock"
+    proc = subprocess.Popen([
+        "qemu-system-x86_64", "-machine", "q35,accel=" + accel, "-cpu", "host" if accel == "kvm" else "max",
+        "-m", "128", "-nodefaults", "-display", "none", "-S",
+        "-qmp", "unix:" + path + ",server=on,wait=off",
+    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        deadline = time.monotonic() + 10
+        while not os.path.exists(path):
+            if proc.poll() is not None or time.monotonic() > deadline:
+                raise SystemExit("kvm_probe_failed")
+            time.sleep(.05)
+        with socket.socket(socket.AF_UNIX) as sock:
+            sock.settimeout(3)
+            sock.connect(path)
+            stream = sock.makefile("rwb", buffering=0)
+            json.loads(stream.readline())
+            for command in ("qmp_capabilities", "query-kvm"):
+                stream.write(json.dumps({"execute": command}).encode() + b"\n")
+                while True:
+                    response = json.loads(stream.readline())
+                    if "return" in response or "error" in response:
+                        break
+                if "error" in response:
+                    raise SystemExit("kvm_probe_failed")
+            result = response["return"]
+            if (result.get("enabled") is True) != (accel == "kvm") or (accel == "kvm" and result.get("present") is not True):
+                raise SystemExit("kvm_not_enabled")
+            print(json.dumps({**result, "actual_accelerator": accel, "kvm_enabled": result.get("enabled") is True, "kvm_present": result.get("present") is True}))
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()

@@ -1,0 +1,25 @@
+#!/bin/sh
+# First existing kernel binary, then gateway-worker against the 9p config.
+set -eu
+case "${KIN_GUEST_ENGINE:-claude}" in
+  claude) ;;
+  codex)
+    [ -x /usr/local/bin/kin-codex-kernel ] || { echo "kin-codex-kernel: binary missing" >&2; exit 1; }
+    [ -r /run/kin/codex-kernel.json ] || { echo "kin-codex-kernel: config missing" >&2; exit 1; }
+    # Match the supervisor's case-insensitive proxy-environment exclusion.
+    for key in $(env | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p'); do
+      case "$(printf '%s' "$key" | tr '[:upper:]' '[:lower:]')" in
+        http_proxy|https_proxy|all_proxy|no_proxy) unset "$key" ;;
+      esac
+    done
+    exec /usr/local/bin/kin-codex-kernel /run/kin/codex-kernel.json
+    ;;
+  *) echo "KIN_GUEST_ENGINE must be claude or codex" >&2; exit 1 ;;
+esac
+for p in /home/kincli/.kin/kin-kernel /usr/local/bin/kin-kernel /opt/kin/kin-kernel; do
+  if [ -x "$p" ]; then
+    exec "$p" --gateway-worker --config /run/kin/kernel.json
+  fi
+done
+echo "kin-kernel: no binary at /home/kincli/.kin/kin-kernel, /usr/local/bin/kin-kernel, or /opt/kin/kin-kernel" >&2
+exit 1

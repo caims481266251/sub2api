@@ -69,6 +69,9 @@ func openAIImageRequestRejection(ctx context.Context, account *Account, requeste
 	if model == "" {
 		return ""
 	}
+	if account.IsVMKernel() {
+		return "vm_kernel_image_unsupported"
+	}
 	if !account.IsModelSupported(model) || account.modelCapabilityRejectedForRequest(ctx, model) {
 		return "image_model_not_supported"
 	}

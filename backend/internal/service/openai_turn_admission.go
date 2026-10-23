@@ -225,12 +225,12 @@ func openAITurnRouteFingerprint(a *Account) [32]byte {
 		routeCredentials[key] = value
 	}
 	b, _ := json.Marshal(struct {
-		Platform, Type string
-		Parent, Proxy  *int64
-		Credentials    map[string]any
-		RouteExtra     map[string]any
-		ProxyURL       string
-	}{a.Platform, a.Type, a.ParentAccountID, a.ProxyID, routeCredentials, routeExtra, proxyURL})
+		Platform, Type, ExecutionMode string
+		Parent, Proxy                 *int64
+		Credentials                   map[string]any
+		RouteExtra                    map[string]any
+		ProxyURL                      string
+	}{a.Platform, a.Type, a.EffectiveExecutionMode(), a.ParentAccountID, a.ProxyID, routeCredentials, routeExtra, proxyURL})
 	return sha256.Sum256(b)
 }
 
@@ -314,7 +314,7 @@ func (s *OpenAIGatewayService) latestOpenAITurnAccountForGroup(
 			return nil, denyOpenAITurn("latest_state_unavailable")
 		}
 	}
-	if latest.Platform != selected.Platform || latest.Type != selected.Type {
+	if latest.Platform != selected.Platform || latest.Type != selected.Type || latest.EffectiveExecutionMode() != selected.EffectiveExecutionMode() {
 		return nil, denyOpenAITurn("account_binding_changed")
 	}
 	if authoritativeRead && !latest.IsSchedulable() {

@@ -1,5 +1,18 @@
 export default {
     accounts: {
+executionMode: 'Execution mode',
+  executionModeNormal: 'Normal (default)',
+  executionModeVM: 'VM kernel',
+  executionModeVMHint: 'Supports standard Anthropic / OpenAI OAuth, including OpenAI 2FA login. Concurrency follows account settings. Requests are admitted after runtime preparation and validation. Execution mode cannot be changed after creation.',
+      vmProxyRequired: 'VM kernel accounts require a configured proxy.',
+      vmRuntimeReady: 'Normal',
+      vmRuntimeTCG: 'TCG software emulation',
+      vmRuntimeError: 'Abnormal',
+      vmRuntimePending: 'Not ready',
+      vmRuntimePhase: 'Phase: {phase}',
+      vmRuntimeCapacity: 'Account concurrency limit: {capacity}',
+      vmRuntimeUnlimited: 'Unlimited',
+
       timer: {
         "open": "Timed on",
         "close": "Timed off",

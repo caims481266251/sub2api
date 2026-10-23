@@ -119,6 +119,20 @@ func (_u *AccountUpdate) SetNillableType(v *string) *AccountUpdate {
 	return _u
 }
 
+// SetExecutionMode sets the "execution_mode" field.
+func (_u *AccountUpdate) SetExecutionMode(v string) *AccountUpdate {
+	_u.mutation.SetExecutionMode(v)
+	return _u
+}
+
+// SetNillableExecutionMode sets the "execution_mode" field if the given value is not nil.
+func (_u *AccountUpdate) SetNillableExecutionMode(v *string) *AccountUpdate {
+	if v != nil {
+		_u.SetExecutionMode(*v)
+	}
+	return _u
+}
+
 // SetCredentials sets the "credentials" field.
 func (_u *AccountUpdate) SetCredentials(v map[string]interface{}) *AccountUpdate {
 	_u.mutation.SetCredentials(v)
@@ -793,6 +807,11 @@ func (_u *AccountUpdate) check() error {
 			return &ValidationError{Name: "type", err: fmt.Errorf(`ent: validator failed for field "Account.type": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.ExecutionMode(); ok {
+		if err := account.ExecutionModeValidator(v); err != nil {
+			return &ValidationError{Name: "execution_mode", err: fmt.Errorf(`ent: validator failed for field "Account.execution_mode": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.Status(); ok {
 		if err := account.StatusValidator(v); err != nil {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "Account.status": %w`, err)}
@@ -846,6 +865,9 @@ func (_u *AccountUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.GetType(); ok {
 		_spec.SetField(account.FieldType, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.ExecutionMode(); ok {
+		_spec.SetField(account.FieldExecutionMode, field.TypeString, value)
 	}
 	if value, ok := _u.mutation.Credentials(); ok {
 		_spec.SetField(account.FieldCredentials, field.TypeJSON, value)
@@ -1282,6 +1304,20 @@ func (_u *AccountUpdateOne) SetType(v string) *AccountUpdateOne {
 func (_u *AccountUpdateOne) SetNillableType(v *string) *AccountUpdateOne {
 	if v != nil {
 		_u.SetType(*v)
+	}
+	return _u
+}
+
+// SetExecutionMode sets the "execution_mode" field.
+func (_u *AccountUpdateOne) SetExecutionMode(v string) *AccountUpdateOne {
+	_u.mutation.SetExecutionMode(v)
+	return _u
+}
+
+// SetNillableExecutionMode sets the "execution_mode" field if the given value is not nil.
+func (_u *AccountUpdateOne) SetNillableExecutionMode(v *string) *AccountUpdateOne {
+	if v != nil {
+		_u.SetExecutionMode(*v)
 	}
 	return _u
 }
@@ -1973,6 +2009,11 @@ func (_u *AccountUpdateOne) check() error {
 			return &ValidationError{Name: "type", err: fmt.Errorf(`ent: validator failed for field "Account.type": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.ExecutionMode(); ok {
+		if err := account.ExecutionModeValidator(v); err != nil {
+			return &ValidationError{Name: "execution_mode", err: fmt.Errorf(`ent: validator failed for field "Account.execution_mode": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.Status(); ok {
 		if err := account.StatusValidator(v); err != nil {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "Account.status": %w`, err)}
@@ -2043,6 +2084,9 @@ func (_u *AccountUpdateOne) sqlSave(ctx context.Context) (_node *Account, err er
 	}
 	if value, ok := _u.mutation.GetType(); ok {
 		_spec.SetField(account.FieldType, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.ExecutionMode(); ok {
+		_spec.SetField(account.FieldExecutionMode, field.TypeString, value)
 	}
 	if value, ok := _u.mutation.Credentials(); ok {
 		_spec.SetField(account.FieldCredentials, field.TypeJSON, value)

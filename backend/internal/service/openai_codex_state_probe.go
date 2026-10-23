@@ -300,6 +300,9 @@ func openAICodexStateVerdictReason(verdict OpenAICodexStateVerdict) string {
 // openAICodexStateProbeUnsupportedReason 返回空串表示该账号可以跑探针。
 // 凭证影子账号可以跑：令牌和 chatgpt-account-id 都会解析到母账号。
 func openAICodexStateProbeUnsupportedReason(account *Account, requestedModel string, ignoreBPS bool) string {
+	if account.IsVMKernel() {
+		return "VM kernel does not support host Codex state probes"
+	}
 	switch {
 	case account == nil:
 		return "账号不存在"

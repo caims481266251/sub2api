@@ -1369,6 +1369,8 @@ export interface ExcelBPSCredentialState {
 }
 
 export interface Account {
+  vm_kernel?: { phase: string; ready: boolean; error_code?: string; capacity: number; actual_accelerator?: 'kvm' | 'tcg' }
+  execution_mode?: 'normal' | 'vm_kernel'
  excel_bps_credential_state?: ExcelBPSCredentialState
   id: number
   name: string
@@ -1708,6 +1710,7 @@ export interface OpenAIResponsesState {
 }
 
 export interface CreateAccountRequest {
+  execution_mode?: 'normal' | 'vm_kernel'
   name: string
   notes?: string | null
   platform: AccountPlatform
@@ -1738,6 +1741,7 @@ export interface AccountGroupBinding {
 }
 
 export interface UpdateAccountRequest {
+  execution_mode?: 'normal' | 'vm_kernel'
   name?: string
   notes?: string | null
   type?: AccountType
@@ -1838,6 +1842,7 @@ export interface AdminDataProxy {
 }
 
 export interface AdminDataAccount {
+  execution_mode?: 'normal' | 'vm_kernel'
   name: string
   notes?: string | null
   platform: AccountPlatform
@@ -1869,6 +1874,7 @@ export interface AdminDataImportResult {
 }
 
 export interface CodexSessionImportRequest {
+  execution_mode?: 'normal' | 'vm_kernel'
   initialize_openai_two_fa?: boolean
   /** Skip matching accounts without replacing their credentials or settings. */
   skip_existing?: boolean

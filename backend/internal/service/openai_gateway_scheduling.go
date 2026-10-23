@@ -271,7 +271,7 @@ func (s *OpenAIGatewayService) SelectAccountForTokenCount(
 	requiredCapability OpenAIEndpointCapability,
 	platform string,
 ) (*Account, error) {
-	ctx = WithOpenAIProfitControlSuppressed(ctx)
+	ctx = WithVMKernelExcluded(WithOpenAIProfitControlSuppressed(ctx))
 	ctx = s.withOpenAIQuotaAutoPauseContext(ctx)
 	return s.selectAccountForModelWithExclusions(
 		ctx,
@@ -336,6 +336,9 @@ func (e openAINoAvailableSelectionError) Unwrap() error {
 // openAICompactSupportTier classifies an OpenAI-compatible account by compact capability.
 // 0 = explicitly unsupported, 1 = unknown / not yet probed, 2 = explicitly supported.
 func openAICompactSupportTier(account *Account) int {
+	if account.IsVMKernel() {
+		return 0
+	}
 	if account == nil {
 		return 0
 	}
