@@ -141,9 +141,26 @@ class Installer:
                 os.replace(stage, target)
         manifest = self.validate(target, version)
         run('docker', 'load', '-i', str(target / 'kernel-image.tar'))
-        actual = json.loads(run('docker', 'image', 'inspect', manifest['image']))[0]
+        # Docker classic reports a config digest while containerd image stores
+        # may report a manifest digest. Bind both to the verified archive before
+        # pinning the local engine's immutable ID; never trust a tag alone.
+        with tarfile.open(target / 'kernel-image.tar') as archive:
+            entries = json.load(archive.extractfile('manifest.json'))
+            if len(entries) != 1 or len(entries[0]['RepoTags']) != 1:
+                raise ValueError('ambiguous_image_archive')
+            image_config = json.load(archive.extractfile(entries[0]['Config']))
+            tag = entries[0]['RepoTags'][0]
+            expected_tag = 'sub2api-docker-kernel:release-%s-%s' % (version, self.arch)
+            if tag != expected_tag:
+                raise ValueError('image_tag_mismatch')
+        actual = json.loads(run('docker', 'image', 'inspect', tag))[0]
         if actual['Architecture'] != self.arch or actual['Os'] != 'linux':
             raise ValueError('image_architecture_mismatch')
+        if actual['RootFS']['Layers'] != image_config['rootfs']['diff_ids'] or actual['Config'] != image_config['config']:
+            raise ValueError('loaded_image_content_mismatch')
+        if not re.fullmatch(r'sha256:[a-f0-9]{64}', actual['Id']):
+            raise ValueError('loaded_image_digest_invalid')
+        manifest = dict(manifest, image=actual['Id'])
         # Prove the packaged helper is executable and has the declared version.
         if run(str(target / 'vm-runtime-helper'), '--version') != version:
             raise ValueError('helper_version_mismatch')
