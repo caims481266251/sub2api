@@ -12,6 +12,12 @@ export default {
   "retry": "继续未完成的记录",
   "stop": "停止后续登录",
   "reset": "导入另一批",
+  "importErrors": {
+    "vmUnavailable": "登录成功，但服务器尚未启用 VM 运行环境，请先完成部署。",
+    "proxyRequired": "登录成功，请为 VM 账号选择代理后重试。",
+    "encryptionRequired": "登录成功，请先启用凭据加密后重试。",
+    "encryptionStorage": "登录成功，无法访问凭据加密密钥，请检查存储权限。"
+},
   "states": {
     "pending": "待处理",
     "login": "登录中…",
@@ -19,7 +25,7 @@ export default {
     "created": "已导入并加入凭证运营",
     "skipped": "已有账号，已加入凭证运营",
     "failed": "登录未完成，可重试；请检查凭据与首次登录服务",
-    "importFailed": "登录成功，导入或凭证运营登记未完成；可重试，请检查加密配置"
+    "importFailed": "登录成功，账号导入或凭证登记未完成，可重试"
   }
 },
   "title": "凭证守护",

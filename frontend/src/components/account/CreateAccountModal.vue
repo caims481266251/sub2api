@@ -71,8 +71,9 @@
         <label class="input-label">{{ t('admin.accounts.executionMode') }}</label>
         <select v-model="form.execution_mode" data-testid="account-execution-mode" class="input mt-2">
           <option value="normal">{{ t('admin.accounts.executionModeNormal') }}</option>
-          <option value="vm_kernel" :disabled="!['anthropic', 'openai'].includes(form.platform)">{{ t('admin.accounts.executionModeVM') }}</option>
+          <option value="vm_kernel" :disabled="!['anthropic', 'openai'].includes(form.platform) || vmKernelEnabled !== true">{{ t('admin.accounts.executionModeVM') }}</option>
         </select>
+        <p v-if="vmKernelEnabled === false && ['anthropic', 'openai'].includes(form.platform)" class="input-hint">{{ t('admin.accounts.vmKernelUnavailable') }}</p>
         <p v-if="form.execution_mode === 'vm_kernel'" class="mt-2 text-sm text-gray-500">{{ t('admin.accounts.executionModeVMHint') }}</p>
       </div>
 
@@ -4800,6 +4801,7 @@ const anthropicStripClaudeCodeIdentityEnabled = ref(false)
 const anthropicAPIKeyAuthScheme = ref<AnthropicAPIKeyAuthScheme>('x_api_key')
 const webSearchEmulationMode = ref('default')
 const webSearchGlobalEnabled = ref(false)
+const vmKernelEnabled = ref<boolean | null>(null)
 
 const toggleOpenAILongContextBilling = () => {
   openAILongContextBillingEnabled.value = !openAILongContextBillingEnabled.value
@@ -4815,6 +4817,7 @@ const {
 // Load global feature states once
 adminAPI.accounts.getManagementCapabilities().then(cfg => {
   webSearchGlobalEnabled.value = cfg?.web_search_enabled === true
+  vmKernelEnabled.value = cfg?.vm_kernel_enabled === true
 }).catch(() => { webSearchGlobalEnabled.value = false })
 
 loadQuotaNotifyGlobal()
@@ -6058,6 +6061,13 @@ const handleVertexServiceAccountDrop = async (event: DragEvent) => {
 
 const handleSubmit = async () => {
   if (form.execution_mode === 'vm_kernel') {
+    try {
+      const capabilities = await adminAPI.accounts.getManagementCapabilities()
+      vmKernelEnabled.value = capabilities.vm_kernel_enabled === true
+    } catch {
+      appStore.showError(t('admin.accounts.vmKernelCheckFailed')); return
+    }
+    if (!vmKernelEnabled.value) { appStore.showError(t('admin.accounts.vmKernelUnavailable')); return }
     if (!form.proxy_id) { appStore.showError(t('admin.accounts.vmProxyRequired')); return }
   }
   if (form.execution_mode === 'vm_kernel' && (!['anthropic', 'openai'].includes(form.platform) || accountCategory.value !== 'oauth-based' || addMethod.value !== 'oauth' || isOpenAIBPSOAuth.value)) {
@@ -6947,7 +6957,7 @@ const importTwoFACredential = async (credential: Record<string, unknown>, email:
     update_existing: false,
     skip_existing: true
   })
-  if (result.failed > 0) throw new Error('import_failed')
+  if (result.failed > 0) throw Object.assign(new Error('import_failed'), { reason: result.errors?.[0]?.reason ?? result.items?.find(item => item.action === 'failed')?.reason })
   if (result.created > 0) {
     await createAutoBPSRules(createdImportAccountIds(result))
   }

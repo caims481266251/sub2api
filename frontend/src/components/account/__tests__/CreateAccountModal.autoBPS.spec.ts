@@ -244,3 +244,12 @@ describe('CreateAccountModal auto BPS switch', () => {
     expect(wrapper.emitted('created')).toHaveLength(1)
   })
 })
+
+
+it('does not offer VM login when the deployment capability is absent', async () => {
+  const wrapper = mountModal()
+  await selectButtonByText(wrapper, 'OpenAI')
+  expect(wrapper.get('[data-testid="account-execution-mode"] option[value="vm_kernel"]').attributes('disabled')).toBeDefined()
+  expect(wrapper.text()).toContain('admin.accounts.vmKernelUnavailable')
+  expect(wrapper.get('[data-testid="account-execution-mode"]').element).toHaveProperty('value', 'normal')
+})

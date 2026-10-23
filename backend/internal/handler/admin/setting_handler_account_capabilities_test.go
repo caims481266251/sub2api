@@ -40,10 +40,30 @@ func TestAccountManagementCapabilitiesConcurrencyUpgrade(t *testing.T) {
 			}
 			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 			require.Equal(t, tc.want, body.Data["concurrency_upgrade_enabled"])
-			require.Len(t, body.Data, 3, "only boolean capabilities are exposed to account managers")
+			require.Equal(t, false, body.Data["vm_kernel_enabled"])
+			require.Len(t, body.Data, 4, "only boolean capabilities are exposed to account managers")
 			for _, value := range body.Data {
 				require.IsType(t, false, value)
 			}
 		})
 	}
+}
+
+func TestAccountManagementCapabilitiesVMEnabled(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.VMKernel.Enabled = true
+	cfg.VMKernel.HelperSocket = "/private/helper.sock"
+	svc := service.NewSettingService(&settingHandlerRepoStub{values: map[string]string{}}, cfg)
+	h := NewSettingHandler(svc, nil, nil, nil, nil, nil, nil)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/management-capabilities", nil)
+	h.GetAccountManagementCapabilities(c)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var body struct {
+		Data map[string]any `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Equal(t, true, body.Data["vm_kernel_enabled"])
+	require.NotContains(t, rec.Body.String(), "/private/")
 }

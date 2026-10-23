@@ -1,5 +1,7 @@
 export default {
     accounts: {
+  vmKernelUnavailable: '服务器尚未启用 VM 运行环境，请先完成部署。',
+  vmKernelCheckFailed: '无法检查 VM 运行环境，请稍后重试。',
 executionMode: '执行模式',
   executionModeNormal: '普通（默认）',
   executionModeVM: 'VM 内核',

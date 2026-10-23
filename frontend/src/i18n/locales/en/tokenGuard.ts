@@ -12,6 +12,12 @@ export default {
   "retry": "Continue unfinished entries",
   "stop": "Stop further logins",
   "reset": "Import another batch",
+  "importErrors": {
+    "vmUnavailable": "Logged in, but VM execution is not enabled on this server. Complete deployment first.",
+    "proxyRequired": "Logged in. Select a proxy for this VM account and retry.",
+    "encryptionRequired": "Logged in. Enable credential encryption and retry.",
+    "encryptionStorage": "Logged in, but the credential encryption key is inaccessible. Check storage permissions."
+},
   "states": {
     "pending": "Pending",
     "login": "Logging in…",
@@ -19,7 +25,7 @@ export default {
     "created": "Imported and enrolled in Credential Operations",
     "skipped": "Existing account enrolled in Credential Operations",
     "failed": "Login incomplete; retry or check credentials and the initial login service",
-    "importFailed": "Logged in; import or Credential Operations enrollment incomplete. Check encryption settings and retry"
+    "importFailed": "Logged in; account import or credential enrollment is incomplete. Retry to continue"
   }
 },
   "title": "Credential Guard",

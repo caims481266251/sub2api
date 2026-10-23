@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -61,12 +62,14 @@ type CodexSessionImportItem struct {
 	Action    string `json:"action"`
 	AccountID int64  `json:"account_id,omitempty"`
 	Message   string `json:"message,omitempty"`
+	Reason    string `json:"reason,omitempty"`
 }
 
 type CodexSessionImportMessage struct {
 	Index   int    `json:"index"`
 	Name    string `json:"name,omitempty"`
 	Message string `json:"message"`
+	Reason  string `json:"reason,omitempty"`
 }
 
 type codexImportEntry struct {
@@ -326,11 +329,13 @@ func (h *AccountHandler) importCodexSessions(ctx context.Context, req CodexSessi
 					Name:    accountName,
 					Action:  "failed",
 					Message: updateErr.Error(),
+					Reason:  infraerrors.Reason(updateErr),
 				})
 				result.Errors = append(result.Errors, CodexSessionImportMessage{
 					Index:   entry.Index,
 					Name:    accountName,
 					Message: updateErr.Error(),
+					Reason:  infraerrors.Reason(updateErr),
 				})
 				continue
 			}
@@ -383,11 +388,13 @@ func (h *AccountHandler) importCodexSessions(ctx context.Context, req CodexSessi
 				Name:    accountName,
 				Action:  "failed",
 				Message: createErr.Error(),
+				Reason:  infraerrors.Reason(createErr),
 			})
 			result.Errors = append(result.Errors, CodexSessionImportMessage{
 				Index:   entry.Index,
 				Name:    accountName,
 				Message: createErr.Error(),
+				Reason:  infraerrors.Reason(createErr),
 			})
 			continue
 		}

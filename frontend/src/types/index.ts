@@ -1916,12 +1916,14 @@ export interface OpenAICodexPATCreateRequest {
 }
 
 export interface CodexSessionImportMessage {
+  reason?: string
   index: number
   name?: string
   message: string
 }
 
 export interface CodexSessionImportItem {
+  reason?: string
   index: number
   name?: string
   action: 'created' | 'updated' | 'skipped' | 'failed'

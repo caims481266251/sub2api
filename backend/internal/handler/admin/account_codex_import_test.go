@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
 
@@ -1165,5 +1166,23 @@ func TestImportCodexSessionsAdmissionSourceOnlyInitializesNewAccounts(t *testing
 		if err != nil || second.Skipped != 1 || len(svc.createdAccounts) != 1 || len(svc.updatedAccounts) != 0 {
 			t.Fatal("duplicate import reinitialized the account")
 		}
+	}
+}
+
+type unavailableVMCodexImportService struct{ *codexImportMemoryAdminService }
+
+func (s *unavailableVMCodexImportService) CreateAccount(context.Context, *service.CreateAccountInput) (*service.Account, error) {
+	return nil, infraerrors.BadRequest("VM_KERNEL_DISABLED", "VM execution is disabled")
+}
+func TestImportCodexSessionsPreservesFailureReason(t *testing.T) {
+	svc := &unavailableVMCodexImportService{newCodexImportMemoryAdminService(nil)}
+	h := NewAccountHandler(svc, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	entries := []codexImportEntry{{Index: 1, Value: buildCodexRefreshImportValue(t, "workspace-1", "user-1", "refresh-new")}}
+	result, err := h.importCodexSessions(context.Background(), CodexSessionImportRequest{}, entries)
+	if err != nil || result.Failed != 1 || result.Created != 0 {
+		t.Fatalf("unexpected import result: %v, %v", result, err)
+	}
+	if result.Errors[0].Reason != "VM_KERNEL_DISABLED" || result.Items[0].Reason != "VM_KERNEL_DISABLED" {
+		t.Fatal("structured failure reason was lost")
 	}
 }

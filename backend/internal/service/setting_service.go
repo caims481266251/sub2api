@@ -485,3 +485,8 @@ func (s *SettingService) getStringOrDefault(settings map[string]string, key, def
 	}
 	return defaultValue
 }
+
+// VMKernelEnabled reports deployment configuration, not per-account readiness.
+func (s *SettingService) VMKernelEnabled() bool {
+	return s != nil && s.cfg != nil && s.cfg.VMKernel.Enabled
+}

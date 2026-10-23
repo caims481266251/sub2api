@@ -554,5 +554,6 @@ func (h *SettingHandler) GetAccountManagementCapabilities(c *gin.Context) {
 		"web_search_enabled":           cfg != nil && cfg.Enabled && len(cfg.Providers) > 0,
 		"account_quota_notify_enabled": settings.AccountQuotaNotifyEnabled,
 		"concurrency_upgrade_enabled":  autoConfigErr == nil && autoConfig.UpgradeEnabled,
+		"vm_kernel_enabled":            h.settingService.VMKernelEnabled(),
 	})
 }

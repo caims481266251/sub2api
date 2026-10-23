@@ -15,7 +15,7 @@
     <ul v-if="rows.length" class="space-y-2" aria-live="polite">
       <li v-for="(row, index) in rows" :key="row.entry.email" class="flex justify-between gap-4 text-sm">
         <span>{{ index + 1 }}. {{ row.entry.email }}</span>
-        <span>{{ t(`tokenGuard.twoFA.states.${row.status}`) }}</span>
+        <span>{{ t(row.failureKey ?? `tokenGuard.twoFA.states.${row.status}`) }}</span>
       </li>
     </ul>
     <div class="flex gap-3">
@@ -48,6 +48,7 @@ type Row = {
   entry: TokenGuardReloginAccount
   status: 'pending' | 'login' | 'importing' | 'created' | 'skipped' | 'failed' | 'importFailed'
   credential?: Record<string, unknown>
+  failureKey?: string
   jobId?: string
 }
 const raw = ref('')
@@ -86,6 +87,7 @@ async function run() {
     for (const row of rows.value) {
       if (stopRequested.value || disposed) break
       if (row.status === 'created' || row.status === 'skipped') continue
+      row.failureKey = undefined
       try {
         if (!row.credential) {
           row.status = 'login'
@@ -122,6 +124,15 @@ async function run() {
           (cause as { response?: { status?: number } })?.response?.status
         if (status === 404) row.jobId = undefined
         row.status = row.credential ? 'importFailed' : 'failed'
+        if (row.credential) {
+          const reason = (cause as { reason?: string })?.reason
+          const known: Record<string, string> = {
+            VM_KERNEL_DISABLED: 'vmUnavailable', VM_KERNEL_PROXY_REQUIRED: 'proxyRequired',
+            OPENAI_REAUTH_ENCRYPTION_KEY_REQUIRED: 'encryptionRequired',
+            CREDENTIAL_ENCRYPTION_STORAGE_FAILED: 'encryptionStorage',
+          }
+          if (reason && known[reason]) row.failureKey = `tokenGuard.twoFA.importErrors.${known[reason]}`
+        }
       }
     }
   } finally {

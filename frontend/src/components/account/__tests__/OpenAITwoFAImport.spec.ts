@@ -113,3 +113,22 @@ it('blocks 2FA login and account creation until encryption initialization succee
   await flushPromises()
   expect(importCredential).toHaveBeenCalledTimes(1)
 })
+
+
+it.each([
+  ['VM_KERNEL_DISABLED', 'vmUnavailable'],
+  ['VM_KERNEL_PROXY_REQUIRED', 'proxyRequired'],
+  ['OPENAI_REAUTH_ENCRYPTION_KEY_REQUIRED', 'encryptionRequired'],
+  ['CREDENTIAL_ENCRYPTION_STORAGE_FAILED', 'encryptionStorage'],
+])('shows a safe import reason for %s and reuses the completed login', async (reason, key) => {
+  const importCredential = vi.fn().mockRejectedValueOnce({ reason, message: 'sensitive upstream response' }).mockResolvedValueOnce('created')
+  const wrapper = mount(OpenAITwoFAImport, { props: { importCredential } })
+  await start(wrapper, 'a@example.com----password----secret')
+  expect(wrapper.text()).toContain(`tokenGuard.twoFA.importErrors.${key}`)
+  expect(wrapper.text()).not.toContain('sensitive upstream response')
+  await wrapper.get('[data-testid="two-fa-start"]').trigger('click')
+  await flushPromises()
+  expect(startTwoFALogin).toHaveBeenCalledTimes(1)
+  expect(wrapper.text()).toContain('tokenGuard.twoFA.states.created')
+  expect(wrapper.text()).not.toContain(`tokenGuard.twoFA.importErrors.${key}`)
+})

@@ -1,5 +1,7 @@
 export default {
     accounts: {
+  vmKernelUnavailable: 'VM execution is not enabled on this server. Complete deployment first.',
+  vmKernelCheckFailed: 'Unable to check VM execution availability. Please retry.',
 executionMode: 'Execution mode',
   executionModeNormal: 'Normal (default)',
   executionModeVM: 'VM kernel',
