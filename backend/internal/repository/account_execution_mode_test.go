@@ -19,7 +19,11 @@ func TestSchedulerExecutionModeCacheBoundary(t *testing.T) {
 		t.Fatal("legacy cache must miss", old, err)
 	}
 	for _, mode := range []string{"", service.AccountExecutionModeVMKernel} {
-		full, meta, err := marshalSchedulerCacheAccount(service.Account{ID: 1, ExecutionMode: mode})
+		proxyID := int64(1)
+		account := service.Account{ID: 1, ExecutionMode: mode, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth,
+			Credentials: map[string]any{"access_token": "fixture-access-token"}, ProxyID: &proxyID,
+			Proxy: &service.Proxy{ID: proxyID, Protocol: "socks5", Host: "fixture.invalid", Port: 1080}}
+		full, meta, err := marshalSchedulerCacheAccount(account)
 		if err != nil {
 			t.Fatal(err)
 		}
