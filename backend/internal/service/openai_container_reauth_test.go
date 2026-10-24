@@ -38,6 +38,9 @@ func TestContainerReauthOnlyProvider401Triggers(t *testing.T) {
 	}{
 		{"explicit unauthorized", "{\"type\":\"error\",\"error\":{\"status\":401,\"message\":\"Unauthorized\"}}", 1},
 		{"revoked", "{\"type\":\"response.failed\",\"response\":{\"error\":{\"status_code\":401,\"code\":\"token_revoked\",\"message\":\"Token revoked\"}}}", 1},
+		{"revoked without status", `{"type":"response.failed","response":{"error":{"code":"token_revoked","message":"revoked"}}}`, 1},
+		{"invalidated without status", `{"type":"error","error":{"code":"token_invalidated","message":"invalidated"}}`, 1},
+		{"explicit forbidden", `{"type":"error","error":{"status":403,"code":"permission_denied"}}`, 0},
 		{"rate limit", "{\"type\":\"error\",\"error\":{\"status\":429,\"code\":\"rate_limit_exceeded\",\"message\":\"Too many requests\"}}", 0},
 		{"transport", "{\"type\":\"error\",\"error\":{\"status\":502,\"message\":\"transport error\"}}", 0},
 		{"internal 401 never produces provider event", "", 0},
@@ -289,6 +292,33 @@ func TestContainerReauthAlwaysUsesAccountProxy(t *testing.T) {
 				require.NotNil(t, claim)
 				require.Equal(t, "socks5h://192.0.2.7:1080", claim.ProxyURL)
 			}
+		})
+	}
+}
+
+// No generic repository is installed: falling through would panic and mutate the
+// manual scheduling switch in production. Both direct probes and gateway paths
+// must stop after the versioned queue, including token_revoked access-state text.
+func TestContainerReauthGeneric401PathsUseVersionedQueue(t *testing.T) {
+	for _, gatewayPath := range []bool{false, true} {
+		t.Run(fmt.Sprint(gatewayPath), func(t *testing.T) {
+			svc, reader, repo, _, _, _ := newReauthTestService("acct-1")
+			reader.account.ExecutionMode = AccountExecutionModeDockerKernel
+			store := &containerReauthTestRepo{reauthTestRepo: repo}
+			svc.repo = store
+			limits := &RateLimitService{containerOAuthReauth: svc}
+			gateway := &OpenAIGatewayService{excelOAuthReauth: svc, rateLimitService: limits}
+			limits.SetAccountRuntimeBlocker(gateway)
+			body := []byte(`{"error":{"code":"token_invalidated","message":"Encountered invalidated oauth token for user, failing request"}}`)
+			var disabled bool
+			if gatewayPath {
+				disabled = gateway.handleOpenAIAccountUpstreamError(t.Context(), reader.account, http.StatusUnauthorized, nil, body)
+			} else {
+				disabled = limits.HandleUpstreamError(t.Context(), reader.account, http.StatusUnauthorized, nil, body)
+			}
+			require.False(t, disabled)
+			require.Equal(t, 1, store.calls)
+			require.False(t, gateway.isOpenAIAccountRuntimeBlocked(reader.account), "no unversioned blocker may survive reauthorization")
 		})
 	}
 }

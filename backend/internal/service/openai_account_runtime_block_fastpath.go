@@ -100,6 +100,16 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 	if account.IsSIWCEnabled() {
 		return false
 	}
+	// Handle container 401s before generic access-state, team, or error policies.
+	// The repository compares the rejected credentials under the account lock;
+	// a late response must not disable a newly authorized account.
+	if s != nil && statusCode == http.StatusUnauthorized {
+		stateCtx, cancel := openAIAccountStateContext(ctx)
+		defer cancel()
+		if s.excelOAuthReauth.handleContainerUnauthorized(stateCtx, account, "") {
+			return false
+		}
+	}
 	// Observe other HTTP responses before request/model-scoped policies return.
 	// The shared handler below skips this reset to keep one observation per response.
 	if s != nil && s.rateLimitService != nil && !isOpenAIIPUnauthorizedResponse(statusCode, responseBody) {

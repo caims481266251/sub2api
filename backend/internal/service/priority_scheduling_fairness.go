@@ -15,10 +15,10 @@ const priorityExplorationShare = 0.10
 // must not promote every empty low-concurrency account just because it may take
 // the next request.
 func priorityCapacityBand(item openAIAccountCandidateScore) int {
-	if !item.loadKnown || item.loadInfo == nil || item.account.Concurrency <= 0 {
+	if !item.loadKnown || item.loadInfo == nil || item.account.SchedulingConcurrency() <= 0 {
 		return 10
 	}
-	load := float64(max(0, item.loadInfo.CurrentConcurrency)) / float64(item.account.Concurrency)
+	load := float64(max(0, item.loadInfo.CurrentConcurrency)) / float64(item.account.SchedulingConcurrency())
 	if item.rpmEnabled && item.rpmLimit > 0 {
 		load = math.Max(load, float64(max(0, item.rpmCurrent))/float64(item.rpmLimit))
 	}
@@ -67,7 +67,7 @@ func prioritySelectionWeight(item openAIAccountCandidateScore, now time.Time) fl
 func prioritySelectionWeightWithQuota(item openAIAccountCandidateScore, headroom float64) float64 {
 	remaining := 1.0
 	if item.loadKnown && item.loadInfo != nil {
-		remaining = math.Max(0.05, float64(max(1, item.account.Concurrency)-max(0, item.loadInfo.CurrentConcurrency))) /
+		remaining = math.Max(0.05, float64(max(1, item.account.SchedulingConcurrency())-max(0, item.loadInfo.CurrentConcurrency))) /
 			(1 + float64(max(0, item.loadInfo.WaitingCount)))
 	}
 	score := math.Mod(item.score, 200)
@@ -118,7 +118,7 @@ func (s *defaultOpenAIAccountScheduler) shouldRebalancePrioritySticky(ctx contex
 		return false
 	}
 	loads := make([]AccountWithConcurrency, 0, len(accounts)+1)
-	loads = append(loads, AccountWithConcurrency{ID: sticky.ID, MaxConcurrency: max(1, sticky.Concurrency)})
+	loads = append(loads, AccountWithConcurrency{ID: sticky.ID, MaxConcurrency: max(1, sticky.SchedulingConcurrency())})
 	eligible := make([]*Account, 0, len(accounts))
 	for i := range accounts {
 		account := &accounts[i]
@@ -148,7 +148,7 @@ func (s *defaultOpenAIAccountScheduler) shouldRebalancePrioritySticky(ctx contex
 			continue
 		}
 		eligible = append(eligible, account)
-		loads = append(loads, AccountWithConcurrency{ID: account.ID, MaxConcurrency: max(1, account.Concurrency)})
+		loads = append(loads, AccountWithConcurrency{ID: account.ID, MaxConcurrency: max(1, account.SchedulingConcurrency())})
 	}
 	if len(eligible) == 0 {
 		return false
@@ -185,12 +185,12 @@ func (s *defaultOpenAIAccountScheduler) shouldRebalancePrioritySticky(ctx contex
 	}
 	history := s.service.cachedPriorityHistory(req, cfg, historyPool)
 	current := loadMap[sticky.ID]
-	utilization := float64(current.CurrentConcurrency) / float64(max(1, sticky.Concurrency))
+	utilization := float64(current.CurrentConcurrency) / float64(max(1, sticky.SchedulingConcurrency()))
 	now := time.Now()
 	weight := prioritySelectionWeight(openAIAccountCandidateScore{account: sticky, loadInfo: current, loadKnown: true, score: 50}, now)
 	for _, account := range eligible {
 		load := loadMap[account.ID]
-		if load == nil || load.WaitingCount > 0 || load.CurrentConcurrency >= account.Concurrency {
+		if load == nil || load.WaitingCount > 0 || load.CurrentConcurrency >= account.SchedulingConcurrency() {
 			continue
 		}
 		candidate := openAIAccountCandidateScore{account: account, loadKnown: true, loadInfo: load}
@@ -201,7 +201,7 @@ func (s *defaultOpenAIAccountScheduler) shouldRebalancePrioritySticky(ctx contex
 		if rpm, ok := accountRPMStateFromContext(ctx, account); ok && rpm.Enabled && rpm.Limit > 0 && rpm.Current >= rpm.Limit {
 			continue
 		}
-		otherUtilization := float64(load.CurrentConcurrency) / float64(max(1, account.Concurrency))
+		otherUtilization := float64(load.CurrentConcurrency) / float64(max(1, account.SchedulingConcurrency()))
 		otherWeight := prioritySelectionWeight(openAIAccountCandidateScore{account: account, loadInfo: load, loadKnown: true, score: 50}, now)
 		if utilization-otherUtilization >= 0.20 && otherWeight > 2*weight {
 			return true

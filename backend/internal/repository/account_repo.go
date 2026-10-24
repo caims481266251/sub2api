@@ -1167,8 +1167,8 @@ func (r *accountRepository) ApplyOpenAIOAuthReauth(
 				ELSE COALESCE(a.extra, '{}'::jsonb) || $2::jsonb
 			END,
 			expires_at = COALESCE($14::timestamptz, a.expires_at),
-			status = CASE WHEN a.execution_mode = 'docker_kernel' AND (a.status <> 'error' OR a.error_message IS DISTINCT FROM $15) THEN a.status ELSE $5 END,
-			error_message = CASE WHEN a.execution_mode = 'docker_kernel' AND a.error_message IS DISTINCT FROM $15 THEN a.error_message ELSE '' END,
+			status = CASE WHEN a.execution_mode = 'docker_kernel' AND (a.status <> 'error' OR NOT (COALESCE(a.error_message = $15, FALSE) OR COALESCE(a.error_message LIKE ANY(ARRAY['Token revoked (401):%', 'Unauthorized (401):%', 'Authentication failed (401):%', 'OAuth 401 (no refresh_token):%']), FALSE))) THEN a.status ELSE $5 END,
+			error_message = CASE WHEN a.execution_mode = 'docker_kernel' AND NOT (COALESCE(a.error_message = $15, FALSE) OR COALESCE(a.error_message LIKE ANY(ARRAY['Token revoked (401):%', 'Unauthorized (401):%', 'Authentication failed (401):%', 'OAuth 401 (no refresh_token):%']), FALSE)) THEN a.error_message ELSE '' END,
 			schedulable = CASE WHEN a.execution_mode = 'docker_kernel' OR a.extra ? 'openai_two_fa_admission' THEN a.schedulable ELSE TRUE END,
 			rate_limited_at = CASE WHEN a.execution_mode = 'docker_kernel' THEN a.rate_limited_at ELSE NULL END,
 			rate_limit_reset_at = CASE WHEN a.execution_mode = 'docker_kernel' THEN a.rate_limit_reset_at ELSE NULL END,

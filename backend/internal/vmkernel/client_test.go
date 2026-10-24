@@ -432,3 +432,42 @@ func TestClientCancelResponseNeverInventsSettlement(t *testing.T) {
 		})
 	}
 }
+
+func TestClientCodexCacheSessionEnvelopeMatchesVM2API(t *testing.T) {
+	var identities, attempts []string
+	b := fakeKernel(t, func(w http.ResponseWriter, r *http.Request) {
+		var env struct {
+			RequestID string            `json:"request_id"`
+			Body      map[string]any    `json:"body"`
+			Headers   map[string]string `json:"headers"`
+			Session   map[string]string `json:"session"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&env); err != nil {
+			t.Fatal(err)
+		}
+		key, _ := env.Body["prompt_cache_key"].(string)
+		if key != "stable-scoped-cache" || env.Session["session_id"] != key || env.Headers["session-id"] != key {
+			t.Errorf("cache identity not propagated consistently: %+v", env)
+		}
+		if env.Headers["x-codex-routing-hint"] != "model=gpt-6-luna;tier=priority" {
+			t.Error("missing model routing hint")
+		}
+		if env.Headers["authorization"] != "" {
+			t.Error("caller credentials leaked")
+		}
+		identities = append(identities, key)
+		attempts = append(attempts, env.RequestID)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"resp_ok","status":"completed","usage":{"input_tokens":100,"output_tokens":1,"input_tokens_details":{"cached_tokens":80}}}`)
+	})
+	for i := 0; i < 2; i++ {
+		ctx := WithHeaders(WithSessionID(context.Background(), "old-connection-id"), http.Header{"Authorization": []string{"private"}})
+		r, err := NewClient().Execute(ctx, b, Request{Protocol: "responses", Body: json.RawMessage(`{"model":"gpt-6-luna","service_tier":"priority","prompt_cache_key":"stable-scoped-cache"}`)}, nil)
+		if err != nil || !r.Completed {
+			t.Fatalf("call failed: %v", err)
+		}
+	}
+	if identities[0] != identities[1] || attempts[0] == attempts[1] {
+		t.Fatal("session must persist while attempt IDs remain distinct")
+	}
+}

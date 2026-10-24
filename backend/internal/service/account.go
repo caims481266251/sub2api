@@ -221,8 +221,8 @@ func (a *Account) EffectiveLoadFactor() int {
 	if a.LoadFactor != nil && *a.LoadFactor > 0 {
 		return *a.LoadFactor
 	}
-	if a.Concurrency > 0 {
-		return a.Concurrency
+	if concurrency := a.SchedulingConcurrency(); concurrency > 0 {
+		return concurrency
 	}
 	return 1
 }

@@ -59,9 +59,8 @@ func (r *openAIOAuthReauthRepository) QueueContainerReauth(ctx context.Context, 
 	if err != nil {
 		return true, err
 	}
-	if !configured {
-		return false, nil
-	}
+	// Missing saved login details still uses the versioned auth pause; never
+	// fall back to SetError, which overwrites the manual scheduling switch.
 	// A failed task for these credentials is terminal for automatic attempts.
 	// Explicit manual reauthorization can always create a new task.
 	var alreadyAttempted bool
@@ -73,12 +72,14 @@ func (r *openAIOAuthReauthRepository) QueueContainerReauth(ctx context.Context, 
 		return true, err
 	}
 	_, err = tx.ExecContext(ctx, `UPDATE accounts SET status=CASE WHEN status='active' THEN 'error' ELSE status END,
- error_message=CASE WHEN status='active' OR error_message=$2 THEN $2 ELSE error_message END,
+ error_message=CASE WHEN status='active' OR error_message=$2
+ OR (status='error' AND error_message LIKE ANY(ARRAY['Token revoked (401):%', 'Unauthorized (401):%', 'Authentication failed (401):%', 'OAuth 401 (no refresh_token):%']))
+ THEN $2 ELSE error_message END,
  updated_at=NOW() WHERE id=$1`, snapshot.ID, service.OpenAIContainerAuthRequired)
 	if err != nil {
 		return true, err
 	}
-	if !alreadyAttempted {
+	if configured && !alreadyAttempted {
 		// The existing unique active-task index also serializes manual triggers.
 		_, err = tx.ExecContext(ctx, `INSERT INTO openai_oauth_reauth_tasks(account_id,status,stage,expected_credentials_hash)
  VALUES($1,'queued','queued',$2) ON CONFLICT DO NOTHING`, snapshot.ID, hash)

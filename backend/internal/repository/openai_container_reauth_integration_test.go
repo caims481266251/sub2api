@@ -233,3 +233,76 @@ func TestContainerReauthApplyPreservesUnrelatedError(t *testing.T) {
 		})
 	}
 }
+
+func TestContainerReauthMissingConfigStillGuardsOld401(t *testing.T) {
+	r, a := newContainerReauthFixture(t)
+	_, err := integrationDB.ExecContext(t.Context(), "DELETE FROM openai_oauth_reauth_configs WHERE account_id=$1", a.ID)
+	require.NoError(t, err)
+	handled, err := r.QueueContainerReauth(t.Context(), a, "", false)
+	require.NoError(t, err)
+	require.True(t, handled, "must not fall back to unversioned SetError")
+	var status, message string
+	var schedulable bool
+	var count int
+	require.NoError(t, integrationDB.QueryRowContext(t.Context(), "SELECT status,error_message,schedulable FROM accounts WHERE id=$1", a.ID).Scan(&status, &message, &schedulable))
+	require.Equal(t, service.StatusError, status)
+	require.Equal(t, service.OpenAIContainerAuthRequired, message)
+	require.True(t, schedulable)
+	require.NoError(t, integrationDB.QueryRowContext(t.Context(), "SELECT count(*) FROM openai_oauth_reauth_tasks WHERE account_id=$1", a.ID).Scan(&count))
+	require.Zero(t, count, "cannot login without saved credentials")
+	_, err = integrationDB.ExecContext(t.Context(), "UPDATE accounts SET status='active',error_message='',credentials=jsonb_set(credentials,'{access_token}',to_jsonb('new-test'::text)) WHERE id=$1", a.ID)
+	require.NoError(t, err)
+	handled, err = r.QueueContainerReauth(t.Context(), a, "", false)
+	require.NoError(t, err)
+	require.True(t, handled)
+	require.NoError(t, integrationDB.QueryRowContext(t.Context(), "SELECT status FROM accounts WHERE id=$1", a.ID).Scan(&status))
+	require.Equal(t, service.StatusActive, status)
+}
+
+func TestContainerReauthCallbackClearsLegacy401PreservesManualSwitch(t *testing.T) {
+	for _, schedulable := range []bool{false, true} {
+		t.Run(fmt.Sprint(schedulable), func(t *testing.T) {
+			r, a := newContainerReauthFixture(t)
+			_, err := r.QueueContainerReauth(t.Context(), a, "", false)
+			require.NoError(t, err)
+			task, err := r.GetLatestTask(t.Context(), a.ID)
+			require.NoError(t, err)
+			_, err = integrationDB.ExecContext(t.Context(), "UPDATE openai_oauth_reauth_tasks SET status='callback_processing',worker_id='test-worker' WHERE id=$1", task.ID)
+			require.NoError(t, err)
+			// Reproduce the online ordering: a generic 401 arrives during login.
+			_, err = integrationDB.ExecContext(t.Context(), "UPDATE accounts SET status='error',error_message='Token revoked (401): invalidated oauth token',schedulable=$2 WHERE id=$1", a.ID, schedulable)
+			require.NoError(t, err)
+			newer := map[string]any{}
+			for k, v := range a.Credentials {
+				newer[k] = v
+			}
+			newer["access_token"] = "new-test"
+			updater := NewAccountRepository(testEntClient(t), integrationDB, nil).(service.OpenAIOAuthReauthCredentialUpdater)
+			applied, err := updater.ApplyOpenAIOAuthReauth(t.Context(), task.ID, "test-worker", a.ID, a.Credentials, newer, nil)
+			require.NoError(t, err)
+			require.True(t, applied)
+			// Fifteen late in-flight old-token failures must leave the new grant alone.
+			var wg sync.WaitGroup
+			errs := make(chan error, 15)
+			for i := 0; i < 15; i++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					_, err := r.QueueContainerReauth(context.Background(), a, "", false)
+					errs <- err
+				}()
+			}
+			wg.Wait()
+			close(errs)
+			for err := range errs {
+				require.NoError(t, err)
+			}
+			var gotStatus, message string
+			var gotSchedulable bool
+			require.NoError(t, integrationDB.QueryRowContext(t.Context(), "SELECT status,error_message,schedulable FROM accounts WHERE id=$1", a.ID).Scan(&gotStatus, &message, &gotSchedulable))
+			require.Equal(t, service.StatusActive, gotStatus)
+			require.Empty(t, message)
+			require.Equal(t, schedulable, gotSchedulable, "authorization must not override a manual scheduling switch")
+		})
+	}
+}

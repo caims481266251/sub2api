@@ -33,6 +33,7 @@ type RateLimitService struct {
 	settingService        *SettingService
 	tokenCacheInvalidator TokenCacheInvalidator
 	runtimeBlocker        AccountRuntimeBlocker
+	containerOAuthReauth  *OpenAIOAuthReauthService
 	openAIIPUnauthorized  openAIIPUnauthorizedStreak
 	// ollamaCloudUsageProbe is the optional Ollama Cloud usage probe scheduler
 	// injected via SetOllamaCloudUsageProbeScheduler. See
@@ -348,6 +349,11 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 // the OpenAI gateway, which resets the streak before its early-return policies.
 func (s *RateLimitService) handleUpstreamErrorAfterStreakReset(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte, requestedModel ...string) (shouldDisable bool) {
 	ctx = s.observeAccountOps(ctx, account, statusCode, headers, responseBody)
+	// Container authentication has one credential-version-checked owner. This
+	// also covers management probes and model discovery, which bypass inference.
+	if statusCode == http.StatusUnauthorized && s.containerOAuthReauth.handleContainerUnauthorized(ctx, account, "") {
+		return false // Do not add the generic, unversioned runtime blocker.
+	}
 	ctx = withTempUnschedulableModel(ctx, requestedModel)
 	// A frozen upstream conversation must not reach custom cooldown rules,
 	// linked-account handling, or the escalating account-wide 403 counter.

@@ -357,6 +357,15 @@ func (h *OpenAIGatewayHandler) admitOpenAIWSTurnForPricing(
 	if !userAcquired {
 		return nil, nil, service.NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "too many concurrent requests, please retry later", nil)
 	}
+	if account != nil && account.Platform == service.PlatformOpenAI && h.gatewayService != nil {
+		accountConcurrency, err = h.gatewayService.ResolveSchedulingConcurrency(ctx, account)
+		if err != nil {
+			if userRelease != nil {
+				userRelease()
+			}
+			return nil, nil, service.NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "account scheduling state unavailable", err)
+		}
+	}
 	accountRelease, accountAcquired, err := h.concurrencyHelper.TryAcquireAccountSlot(ctx, account.ID, accountConcurrency)
 	if err != nil {
 		if userRelease != nil {
@@ -3282,7 +3291,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		}
 
 		account := selection.Account
-		accountMaxConcurrency := account.Concurrency
+		accountMaxConcurrency := account.SchedulingConcurrency()
 		if selection.WaitPlan != nil && selection.WaitPlan.MaxConcurrency > 0 {
 			accountMaxConcurrency = selection.WaitPlan.MaxConcurrency
 		}
@@ -3846,7 +3855,12 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 						return
 					}
 					if currentAccountRelease == nil {
-						accountRelease, acquired, acquireErr := h.concurrencyHelper.TryAcquireAccountSlot(ctx, account.ID, accountMaxConcurrency)
+						retryConcurrency, concurrencyErr := h.gatewayService.ResolveSchedulingConcurrency(ctx, account)
+						if concurrencyErr != nil {
+							closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "account scheduling state unavailable")
+							return
+						}
+						accountRelease, acquired, acquireErr := h.concurrencyHelper.TryAcquireAccountSlot(ctx, account.ID, retryConcurrency)
 						if acquireErr != nil || !acquired {
 							reqLog.Warn("openai.websocket_same_account_retry_slot_unavailable",
 								zap.Int64("account_id", account.ID),

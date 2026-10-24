@@ -85,7 +85,7 @@ func (s *QualityJudgeService) Judge(ctx context.Context, testedAccount int64, cf
 		if ctx.Err() != nil {
 			break
 		}
-		slot, err := s.slots.AcquireAccountSlot(ctx, account.ID, account.Concurrency)
+		slot, err := s.slots.AcquireAccountSlot(ctx, account.ID, account.SchedulingConcurrency())
 		if err != nil {
 			result.Reason = "judge_capacity_unavailable"
 			return result

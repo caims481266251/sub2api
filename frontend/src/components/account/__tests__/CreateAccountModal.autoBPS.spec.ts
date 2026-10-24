@@ -151,6 +151,22 @@ describe('CreateAccountModal auto BPS switch', () => {
     expect(wrapper.find('[data-testid="account-auto-bps"]').exists()).toBe(false)
   })
 
+  it('saves usage threshold and concurrency on create', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Usage rule')
+    expect((wrapper.get('[data-testid="usage-concurrency-enabled"]').element as HTMLInputElement).checked).toBe(false)
+    await wrapper.get('[data-testid="usage-concurrency-enabled"]').setValue(true)
+    await wrapper.get('[data-testid="usage-concurrency-slider"]').setValue('7.5')
+    expect((wrapper.get('[data-testid="usage-concurrency-threshold"]').element as HTMLInputElement).value).toBe('7.5')
+    await wrapper.get('[data-testid="usage-concurrency-limit"]').setValue('6')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+    wrapper.getComponent(OAuthAuthorizationFlowStub).vm.$emit('validate-refresh-token', 'rt-usage')
+    await flushPromises()
+    expect(mocks.createAccount.mock.calls[0][0].extra.openai_usage_concurrency).toEqual({ enabled: true, threshold_percent: 7.5, concurrency: 6 })
+  })
+
   it('creates one rule per account added from refresh tokens', async () => {
     const wrapper = await openOAuthStep()
     wrapper.getComponent(OAuthAuthorizationFlowStub).vm.$emit('validate-refresh-token', ['rt-1', 'rt-2'].join('\n'))

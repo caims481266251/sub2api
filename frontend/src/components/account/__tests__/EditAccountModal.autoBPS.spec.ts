@@ -102,6 +102,16 @@ describe('EditAccountModal Prism OAuth switch', () => {
     mocks.listByAccount.mockResolvedValue([])
   })
 
+  it('loads and disables usage concurrency without overwriting original concurrency', async () => {
+    const wrapper = mountModal(buildOAuthAccount({ concurrency: 15, extra: { fixture_flag: true, openai_usage_concurrency: { enabled: true, threshold_percent: 5, concurrency: 6 } } }))
+    await flushPromises()
+    expect((wrapper.get('[data-testid="usage-concurrency-threshold"]').element as HTMLInputElement).value).toBe('5')
+    expect((wrapper.get('[data-testid="usage-concurrency-limit"]').element as HTMLInputElement).value).toBe('6')
+    await wrapper.get('[data-testid="usage-concurrency-enabled"]').setValue(false)
+    await submit(wrapper)
+    expect(mocks.updateAccount.mock.calls[0][1]).toMatchObject({ concurrency: 15, extra: { fixture_flag: true, openai_usage_concurrency: { enabled: false, threshold_percent: 5, concurrency: 6 } } })
+  })
+
   it('hides BPS and Prism account settings when the global switches are off', () => {
     mocks.publicSettings = { excel_bps_enabled: false, prism_browser_enabled: false }
     const wrapper = mountModal()

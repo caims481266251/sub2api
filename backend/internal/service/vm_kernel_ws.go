@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"time"
@@ -74,6 +73,11 @@ func (h *vmKernelWSHistory) prepare(frame []byte) ([]byte, error) {
 				req["model"] = model
 			}
 		}
+		if _, exists := req["prompt_cache_key"]; !exists {
+			if key := snapshot.semantics["prompt_cache_key"]; len(key) > 0 {
+				req["prompt_cache_key"] = key
+			}
+		}
 		merged := make([]json.RawMessage, 0, len(snapshot.input)+len(snapshot.output)+len(input))
 		merged = append(merged, snapshot.input...)
 		merged = append(merged, snapshot.output...)
@@ -125,7 +129,7 @@ func (h *vmKernelWSHistory) complete(body []byte, response []byte) error {
 	semantics := map[string]json.RawMessage{}
 	var fields map[string]json.RawMessage
 	_ = json.Unmarshal(body, &fields)
-	for _, key := range []string{"model", "instructions", "tools", "tool_choice", "parallel_tool_calls"} {
+	for _, key := range []string{"model", "instructions", "tools", "tool_choice", "parallel_tool_calls", "prompt_cache_key"} {
 		if raw := fields[key]; len(raw) > 0 {
 			semantics[key] = raw
 		}
@@ -152,7 +156,6 @@ func (s *OpenAIGatewayService) proxyVMKernelWebSocket(ctx context.Context, c *gi
 	reader := openAIWSGetIngressReader(c, conn)
 	history := &vmKernelWSHistory{}
 	ctx = vmkernel.WithSessionBinding(ctx, &vmkernel.SessionBinding{})
-	ctx = vmkernel.WithSessionID(ctx, rand.Text())
 	fingerprint := openAITurnRouteFingerprint(account)
 	frame := first
 	lastModel := gjson.GetBytes(first, "model").String()
@@ -355,6 +358,7 @@ func (s *OpenAIGatewayService) proxyVMKernelWebSocket(ctx context.Context, c *gi
 			if len(terminal) == 0 && finished.result != nil {
 				terminal = finished.result.Response
 			}
+			replayBody = vmKernelReplayCacheBody(c, replayBody, model)
 			turnErr = history.complete(replayBody, terminal)
 			if turnErr == nil {
 				_ = s.rememberVMKernelContinuation(ctx, c, account, replayBody, terminal)

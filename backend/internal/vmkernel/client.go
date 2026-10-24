@@ -66,6 +66,27 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 	envelope := map[string]any{"request_id": attemptID, "body": body, "stream": true, "headers": headers}
 	if request.Protocol == "responses" {
 		sessionID, _ := ctx.Value(sessionKey).(string)
+		var cacheKey string
+		_ = json.Unmarshal(body["prompt_cache_key"], &cacheKey)
+		if cacheKey = strings.TrimSpace(cacheKey); cacheKey != "" {
+			sessionID = cacheKey
+		}
+		// vm2api sends the same resolved identity in all three places. Leaving
+		// session empty lets the kernel generate a new upstream session per call.
+		if sessionID != "" {
+			body["prompt_cache_key"], _ = json.Marshal(sessionID)
+			headers["session-id"] = sessionID
+		}
+		var model, tier string
+		_ = json.Unmarshal(body["model"], &model)
+		_ = json.Unmarshal(body["service_tier"], &tier)
+		if model != "" {
+			hint := "model=" + model
+			if tier != "" && tier != "default" && tier != "standard" && tier != "auto" {
+				hint += ";tier=" + tier
+			}
+			headers["x-codex-routing-hint"] = hint
+		}
 		envelope["session"] = map[string]string{"session_id": sessionID}
 		envelope["options"] = map[string]string{"upstream_transport": "http"}
 	} else {

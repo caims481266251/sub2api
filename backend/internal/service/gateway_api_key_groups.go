@@ -50,7 +50,7 @@ func (s *GatewayService) ProbeAPIKeyGroup(ctx context.Context, group *Group, mod
 			s.isUpstreamModelRestrictedByChannel(ctx, group.ID, account, model) {
 			continue
 		}
-		eligible = append(eligible, AccountWithConcurrency{ID: account.ID, MaxConcurrency: account.Concurrency})
+		eligible = append(eligible, AccountWithConcurrency{ID: account.ID, MaxConcurrency: account.SchedulingConcurrency()})
 	}
 	if len(eligible) == 0 {
 		return APIKeyGroupAvailability{}, nil

@@ -1833,6 +1833,8 @@
         :type="account.type"
       />
 
+      <OpenAIUsageConcurrencyField v-if="account?.platform === 'openai'" v-model="usageConcurrency" :base-concurrency="form.concurrency" />
+
       <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <div>
           <label class="input-label">{{ t('admin.accounts.concurrency') }}</label>
@@ -3503,6 +3505,8 @@ import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Select from '@/components/common/Select.vue'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
+import OpenAIUsageConcurrencyField from './OpenAIUsageConcurrencyField.vue'
+import { OPENAI_USAGE_CONCURRENCY_KEY, readOpenAIUsageConcurrency } from '@/utils/openaiUsageConcurrency'
 import UpstreamRequestIdHeaderField from '@/components/account/UpstreamRequestIdHeaderField.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import AccountRpmSettings from '@/components/account/AccountRpmSettings.vue'
@@ -4185,6 +4189,7 @@ const excelBPS403GroupOptions = computed(() => [
     .map(group => ({ value: group.id, label: group.name }))
 ])
 const copilotSDKEnabled = ref(false)
+const usageConcurrency = ref(readOpenAIUsageConcurrency())
 const openAIRequestTimezone = ref('Asia/Singapore')
 const openaiPassthroughEnabled = ref(false)
 // OpenAI Codex namespace 工具摊平兼容开关（仅 OAuth），缺省关闭即原样保留
@@ -4651,6 +4656,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   form.notes = newAccount.notes || ''
   form.proxy_id = newAccount.proxy_id
   form.concurrency = newAccount.concurrency
+  usageConcurrency.value = readOpenAIUsageConcurrency(newAccount.extra)
   form.load_factor = newAccount.load_factor ?? null
   form.priority = newAccount.priority
   costMultiplier.value = readAccountCostMultiplier(newAccount.extra)
@@ -6658,6 +6664,9 @@ const handleSubmit = async () => {
       costExtra.cost_multiplier_auto_sync = costMultiplierAutoSync.value
     } else {
       delete costExtra.cost_multiplier_auto_sync
+    }
+    if (props.account.platform === 'openai') {
+      costExtra[OPENAI_USAGE_CONCURRENCY_KEY] = { ...usageConcurrency.value }
     }
     updatePayload.extra = costExtra
 

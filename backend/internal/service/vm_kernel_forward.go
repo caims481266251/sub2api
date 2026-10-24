@@ -266,6 +266,7 @@ func (s *OpenAIGatewayService) prepareVMKernelResponses(ctx context.Context, c *
 		model = transformed.NormalizedModel
 	}
 	applyCodexClientMetadata(requestMap, account)
+	applyVMKernelPromptCacheKey(c, account, requestMap, vmKernelPromptCacheSeed(c, body, model))
 	applyCodexAccountIdentityClientMetadataMap(requestMap, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c))
 	prepared, err = json.Marshal(requestMap)
 	if err != nil {
@@ -347,7 +348,7 @@ func (s *OpenAIGatewayService) forwardVMKernelResponses(ctx context.Context, c *
 	if callErr == nil && result != nil && result.Completed && ingress == "responses" {
 		// History is auxiliary: losing its cache must never retry or lose billing
 		// for a request that has already completed.
-		_ = s.rememberVMKernelContinuation(ctx, c, account, body, restoreCodexToolNamesFromContext(c, result.Response))
+		_ = s.rememberVMKernelContinuation(ctx, c, account, vmKernelReplayCacheBody(c, body, model), restoreCodexToolNamesFromContext(c, result.Response))
 	}
 	out, err := vmKernelOpenAIResult(result, prepared, original, billing, model, stream)
 	if err != nil {

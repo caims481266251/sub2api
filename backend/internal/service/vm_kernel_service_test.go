@@ -27,6 +27,13 @@ type vmLifecycleRepo struct {
 	get     func() (*Account, error)
 }
 
+func (r *vmLifecycleRepo) ListByPlatform(context.Context, string) ([]Account, error) {
+	if r.account.Status == StatusActive {
+		return []Account{*r.account}, nil
+	}
+	return nil, nil
+}
+
 func (r *vmLifecycleRepo) GetByID(context.Context, int64) (*Account, error) {
 	if r.get != nil {
 		return r.get()
@@ -96,6 +103,16 @@ func vmLifecycleSetup(t *testing.T) (*VMKernelService, *Account, *vmLifecycleFix
 		}
 	})
 	helper := vmForwardUDS(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/inventory" {
+			fixture.mu.Lock()
+			defer fixture.mu.Unlock()
+			states := []vmruntime.State{}
+			if fixture.state != nil {
+				states = append(states, *fixture.state)
+			}
+			json.NewEncoder(w).Encode(map[string]any{"states": states})
+			return
+		}
 		var request vmruntime.Request
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Error(err)
@@ -1153,6 +1170,34 @@ func TestVMKernelBusinessIneligibilityDoesNotStopHealthyContainer(t *testing.T) 
 			}
 			if summary := VMKernelRuntimeSummary(a); summary == nil || !summary.Ready || summary.ErrorCode != "" {
 				t.Fatalf("business failure corrupted local health: %+v", summary)
+			}
+		})
+	}
+}
+
+func TestVMKernelReconcileObservesAllInactiveBusinessStates(t *testing.T) {
+	for _, state := range []string{StatusDisabled, StatusError, "inactive"} {
+		t.Run(state, func(t *testing.T) {
+			s, a, f := vmLifecycleSetup(t)
+			s.prepare(t.Context(), a)
+			a.Status = state
+			a.ErrorMessage = "Token revoked (401): old credentials"
+			a.Schedulable = false
+			vmKernelHealth.Store(a.ID, vmRuntimeStatus{checked: time.Now().Add(-time.Minute)})
+			f.requests = nil
+			s.reconcile(t.Context())
+			s.workers.Wait()
+			if got := fmt.Sprint(f.operations()); got != "[inspect:0]" {
+				t.Fatalf("health-only reconcile performed %s", got)
+			}
+			if got := VMKernelRuntimeSummary(a); got == nil || !got.Ready {
+				t.Fatalf("business state hid healthy container: %+v", got)
+			}
+			if VMKernelRuntimeReady(a) {
+				t.Fatal("inactive account admitted requests")
+			}
+			if a.Schedulable || a.Status != state {
+				t.Fatal("health inspection changed account policy")
 			}
 		})
 	}

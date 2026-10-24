@@ -3191,6 +3191,8 @@
         :type="form.type"
       />
 
+      <OpenAIUsageConcurrencyField v-if="form.platform === 'openai'" v-model="usageConcurrency" :base-concurrency="form.concurrency" />
+
       <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <div>
           <label class="input-label">{{ t('admin.accounts.concurrency') }}</label>
@@ -4204,6 +4206,8 @@ import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Select from '@/components/common/Select.vue'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
+import OpenAIUsageConcurrencyField from './OpenAIUsageConcurrencyField.vue'
+import { OPENAI_USAGE_CONCURRENCY_KEY, readOpenAIUsageConcurrency } from '@/utils/openaiUsageConcurrency'
 import UpstreamRequestIdHeaderField from '@/components/account/UpstreamRequestIdHeaderField.vue'
 import PlatformIcon from '@/components/common/PlatformIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
@@ -4771,6 +4775,7 @@ const applyGrokOAuthUpstreamConfig = (credentials: Record<string, unknown>) => {
 const interceptWarmupRequests = ref(false)
 const autoPauseOnExpired = ref(true)
 const copilotSDKEnabled = ref(false)
+const usageConcurrency = ref(readOpenAIUsageConcurrency())
 const openAIRequestTimezone = ref('Asia/Singapore')
 const openaiPassthroughEnabled = ref(false)
 // OpenAI Codex namespace 工具摊平兼容开关（仅 OAuth），缺省关闭即原样保留
@@ -5707,6 +5712,7 @@ const resetForm = () => {
   form.type = 'oauth'
   form.credentials = {}
   form.proxy_id = null
+  usageConcurrency.value = readOpenAIUsageConcurrency()
   form.concurrency = 10
   form.load_factor = null
   form.priority = 1
@@ -5837,6 +5843,7 @@ const buildOpenAIExtra = (base?: Record<string, unknown>): Record<string, unknow
   }
 
   const extra: Record<string, unknown> = { ...(base || {}) }
+  extra[OPENAI_USAGE_CONCURRENCY_KEY] = { ...usageConcurrency.value }
   extra.openai_request_timezone = openAIRequestTimezone.value
   if (isOpenAIBPSOAuth.value) {
     extra.openai_excel_bps = true

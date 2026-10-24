@@ -81,6 +81,11 @@ func vmKernelProviderErrorStatus(payload []byte) int {
 	if status != http.StatusBadGateway {
 		return status
 	}
+	// Some kernels forward token_revoked/token_invalidated without a numeric
+	// status. Recognize structured credential errors, never arbitrary message text.
+	if openAIStreamCredentialAuthFailure(payload) {
+		return http.StatusUnauthorized
+	}
 	if status = openAIWSPayloadTransientStatus(payload); status != 0 {
 		return status
 	}

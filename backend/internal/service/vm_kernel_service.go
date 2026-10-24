@@ -330,9 +330,11 @@ func (s *VMKernelService) reconcile(ctx context.Context) {
 			vmKernelReadiness.Delete(state.AccountID)
 			continue
 		}
-		// ListByPlatform includes active accounts only. Keep observing a healthy
-		// container while authentication is paused, without refreshing its token.
-		if a != nil && a.Status == StatusError && (a.ErrorMessage == OpenAIContainerAuthRequired || a.ErrorMessage == OpenAIContainerTwoFAEnrollmentPending) {
+		// ListByPlatform includes active accounts only. Local container health is
+		// independent of every account business state, including manual disable.
+		// prepare observes health first, then rejects ineligible accounts without
+		// refreshing credentials, starting containers, or enabling scheduling.
+		if a != nil && a.Status != StatusActive {
 			s.enqueue(lifecycle, a.ID, func(task context.Context) { s.prepare(task, a) })
 		}
 	}
