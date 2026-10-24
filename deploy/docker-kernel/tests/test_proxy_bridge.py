@@ -171,5 +171,140 @@ class ProxyBridgeTests(unittest.TestCase):
             proxy.close()
 
 
+class BridgeLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    def bridge(self, **kwargs):
+        return proxy_bridge.ProxyBridge('socks5://127.0.0.1:1080', ['127.0.0.1'], **kwargs)
+
+    async def test_client_eof_cancels_in_progress_handshake(self):
+        bridge = self.bridge()
+        started, canceled = asyncio.Event(), asyncio.Event()
+        async def connect(target):
+            started.set()
+            try:
+                await asyncio.Future()
+            finally:
+                canceled.set()
+        bridge.upstream = connect
+        reader = asyncio.StreamReader()
+        work = asyncio.create_task(bridge.connect_for_client(reader, b'target'))
+        await started.wait()
+        reader.feed_eof()
+        self.assertIsNone(await asyncio.wait_for(work, 1))
+        self.assertTrue(canceled.is_set())
+
+    async def test_cancellation_during_retry_delay_stops_more_attempts(self):
+        bridge = self.bridge(delays=(30, 30))
+        failed = asyncio.Event()
+        calls = []
+        async def connect(target, attempt, state):
+            calls.append(attempt)
+            failed.set()
+            raise proxy_bridge.HandshakeFailure('peer_closed', retryable=True)
+        bridge._connect = connect
+        reader = asyncio.StreamReader()
+        work = asyncio.create_task(bridge.connect_for_client(reader, b'target'))
+        await failed.wait()
+        reader.feed_eof()
+        self.assertIsNone(await asyncio.wait_for(work, 1))
+        self.assertEqual(calls, [1])
+
+    async def test_connect_success_racing_client_eof_closes_remote(self):
+        from unittest.mock import AsyncMock, Mock
+        bridge = self.bridge()
+        writer = Mock()
+        writer.wait_closed = AsyncMock()
+        bridge.upstream = AsyncMock(return_value=(object(), writer, b'reply'))
+        reader = asyncio.StreamReader()
+        reader.feed_eof()
+        self.assertIsNone(await bridge.connect_for_client(reader, b'target'))
+        writer.close.assert_called_once()
+
+    async def test_task_cancellation_closes_new_remote(self):
+        from unittest.mock import AsyncMock, Mock
+        bridge = self.bridge()
+        writer = Mock()
+        writer.wait_closed = AsyncMock()
+        bridge.upstream = AsyncMock(return_value=(object(), writer, b'reply'))
+        reader = asyncio.StreamReader()
+        work = asyncio.create_task(bridge.connect_for_client(reader, b'target'))
+        # Allow connect to complete, then cancel before ownership is transferred.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        work.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await work
+        writer.close.assert_called_once()
+
+    async def test_socket_configuration_failure_closes_connection(self):
+        from unittest.mock import AsyncMock, Mock, patch
+        import errno
+        writer = Mock()
+        writer.wait_closed = AsyncMock()
+        writer.get_extra_info.return_value.setsockopt.side_effect = OSError(errno.EINVAL, 'fixture')
+        bridge = self.bridge()
+        with patch.object(proxy_bridge.asyncio, 'open_connection', AsyncMock(return_value=(object(), writer))):
+            with self.assertRaises(proxy_bridge.HandshakeFailure):
+                await bridge.upstream(b'target')
+        writer.close.assert_called_once()
+
+    async def test_retry_budget_is_three(self):
+        from unittest.mock import AsyncMock
+        bridge = self.bridge(delays=(0, 0))
+        bridge._connect = AsyncMock(side_effect=proxy_bridge.HandshakeFailure('peer_closed', retryable=True))
+        with self.assertRaises(proxy_bridge.HandshakeFailure):
+            await bridge.upstream(b'target')
+        self.assertEqual(bridge._connect.await_count, 3)
+
+    async def test_pipelined_payload_and_half_close_preserve_response(self):
+        handlers = set()
+        received = []
+        async def upstream(reader, writer):
+            task = asyncio.current_task(); handlers.add(task)
+            try:
+                received.append(await reader.read())
+                # Half-close must leave downstream response delivery intact.
+                await asyncio.sleep(.02)
+                writer.write(b'complete-response'); await writer.drain()
+            finally:
+                await proxy_bridge.close_writer(writer)
+                handlers.discard(task)
+        server = await asyncio.start_server(upstream, '127.0.0.1', 0)
+        bridge = self.bridge()
+        async def connect(target):
+            r, w = await asyncio.open_connection('127.0.0.1', server.sockets[0].getsockname()[1])
+            return r, w, b'\x05\x00\x00\x01\x00\x00\x00\x00\x00\x00'
+        bridge.upstream = connect
+        async def handle(r, w):
+            task = asyncio.current_task(); handlers.add(task)
+            try: await bridge.handle(r, w)
+            finally: handlers.discard(task)
+        local = await asyncio.start_server(handle, '127.0.0.1', 0)
+        try:
+            r, w = await asyncio.open_connection('127.0.0.1', local.sockets[0].getsockname()[1])
+            w.write(b'\x05\x01\x00'); await w.drain()
+            self.assertEqual(await r.readexactly(2), b'\x05\x00')
+            w.write(b'\x05\x01\x00\x03\x0bchatgpt.com\x01\xbb' + b'payload-once')
+            await w.drain()
+            self.assertEqual((await r.readexactly(10))[:2], b'\x05\x00')
+            w.write_eof()
+            self.assertEqual(await asyncio.wait_for(r.read(), 1), b'complete-response')
+            self.assertEqual(received, [b'payload-once'])
+            await proxy_bridge.close_writer(w)
+        finally:
+            local.close(); server.close()
+            await local.wait_closed(); await server.wait_closed()
+            if handlers: await asyncio.wait_for(asyncio.gather(*handlers), 1)
+
+    async def test_reset_cancels_other_relay_direction_and_does_not_leak_diagnostics(self):
+        from unittest.mock import AsyncMock, Mock, patch
+        import errno
+        failed = AsyncMock()
+        failed.read.side_effect = OSError(errno.ECONNRESET, 'socks5://secret:password@private.example')
+        waiting = asyncio.StreamReader()
+        with patch.object(proxy_bridge, 'diagnostic') as log:
+            await asyncio.wait_for(self.bridge().relay(waiting, Mock(), failed, Mock()), 1)
+        log.assert_called_once_with('closed', 'tunnel_download', 1, 'connection_reset')
+
+
 if __name__ == '__main__':
     unittest.main()

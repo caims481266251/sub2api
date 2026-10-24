@@ -249,6 +249,8 @@ func (s *OpenAIGatewayService) proxyVMKernelWebSocket(ctx context.Context, c *gi
 				event, _ = json.Marshal(map[string]any{"event_id": newOpenAIFastPolicyWSEventID(), "type": "error", "error": map[string]any{"type": policy.Type, "code": "policy_violation", "message": policy.Message}})
 			case errors.As(err, &fast):
 				event = buildOpenAIFastPolicyBlockedWSEvent(fast)
+			default:
+				event, _ = json.Marshal(map[string]any{"type": "error", "error": map[string]any{"type": "invalid_request_error", "message": err.Error()}})
 			}
 			if len(event) > 0 {
 				_ = conn.Write(ctx, coderws.MessageText, event)
@@ -265,6 +267,7 @@ func (s *OpenAIGatewayService) proxyVMKernelWebSocket(ctx context.Context, c *gi
 			return err
 		}
 		turnCtx, cancel := context.WithCancel(ctx)
+		turnCtx = vmKernelResponsesHeaderContext(turnCtx, c, prepared)
 		events := make(chan vmkernel.Event)
 		type outcome struct {
 			result *vmkernel.Result
@@ -284,6 +287,8 @@ func (s *OpenAIGatewayService) proxyVMKernelWebSocket(ctx context.Context, c *gi
 		}()
 		var terminal []byte
 		var terminalEvent []byte
+		doneItems := newResponsesStreamOutputItems()
+		doneBytes := 0
 		requestedCancel := false
 		var finished outcome
 		var clientErr error
@@ -292,8 +297,23 @@ func (s *OpenAIGatewayService) proxyVMKernelWebSocket(ctx context.Context, c *gi
 		for active {
 			select {
 			case event := <-events:
-				event.Data = restoreCodexToolNamesFromSSEContext(c, event.Data, event.Type)
+				event.Data, err = restoreVMKernelResponsesTools(c, event.Data, event.Type)
+				if err != nil {
+					clientErr = err
+					cancel()
+					continue
+				}
+				if event.Type == "response.output_item.done" {
+					doneBytes += len(event.Data)
+					if doneBytes > vmKernelPresentationLimit {
+						clientErr = fmt.Errorf("VM completed output exceeds limit")
+						cancel()
+						continue
+					}
+					doneItems.Observe(event.Data)
+				}
 				if gjson.GetBytes(event.Data, "type").String() == "response.completed" || gjson.GetBytes(event.Data, "type").String() == "response.done" {
+					event.Data, _ = normalizeResponsesStreamingTerminalOutput(event.Data, nil, doneItems, nil)
 					if len(event.Data) > vmKernelPresentationLimit {
 						clientErr = fmt.Errorf("VM terminal event exceeds limit")
 						cancel()

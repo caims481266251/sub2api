@@ -34,11 +34,22 @@ func validateVMKernelIngress(account *Account, body []byte) error {
 	}
 	for _, tool := range gjson.GetBytes(body, "tools").Array() {
 		kind := tool.Get("type").String()
-		if kind != "" && kind != "function" {
+		// Native Responses tools use the ordinary OpenAI business normalizers.
+		// The Docker transport must not impose a function-only whitelist.
+		if account.Platform != PlatformOpenAI && kind != "" && kind != "function" {
 			return fmt.Errorf("VM tool type %s is unsupported", kind)
 		}
 	}
 	return nil
+}
+
+// Match ordinary Responses forwarding before presentation and replay caching.
+func restoreVMKernelResponsesTools(c *gin.Context, data []byte, eventType string) ([]byte, error) {
+	data, err := restoreOpenAIResponsesNamespacePayload(c, data)
+	if err != nil {
+		return nil, err
+	}
+	return restoreCodexToolNamesFromSSEContext(c, data, eventType), nil
 }
 
 func vmKernelStringPointer(value string) *string {
@@ -53,6 +64,9 @@ func vmKernelStringPointer(value string) *string {
 func vmKernelHTTP(ctx context.Context, runtime *VMKernelService, c *gin.Context, account *Account, ingress, provider string, body []byte, stream bool, model string) (*vmkernel.Result, error) {
 	if runtime == nil {
 		return nil, fmt.Errorf("VM kernel runtime is unavailable")
+	}
+	if provider == "responses" {
+		ctx = vmKernelResponsesHeaderContext(ctx, c, body)
 	}
 	emit := func(kind string, data []byte) error {
 		if c.Request.Context().Err() != nil {
@@ -76,7 +90,11 @@ func vmKernelHTTP(ctx context.Context, runtime *VMKernelService, c *gin.Context,
 	result, err := runtime.Execute(ctx, account, provider, body, func(event vmkernel.Event) error {
 		data := event.Data
 		if provider == "responses" {
-			data = restoreCodexToolNamesFromSSEContext(c, data, event.Type)
+			var err error
+			data, err = restoreVMKernelResponsesTools(c, data, event.Type)
+			if err != nil {
+				return err
+			}
 		}
 		return presentation.event(event.Type, data)
 	})
@@ -90,10 +108,29 @@ func vmKernelHTTP(ctx context.Context, runtime *VMKernelService, c *gin.Context,
 	if err != nil {
 		return result, err
 	}
+	if len(presentation.nativeResponse) > 0 {
+		// Replay the same complete, restored tool items delivered to the client.
+		result.Response = presentation.nativeResponse
+	}
 	if !stream {
 		c.Data(http.StatusOK, "application/json", output)
 	}
 	return result, nil
+}
+
+func vmKernelResponsesHeaderContext(ctx context.Context, c *gin.Context, body []byte) context.Context {
+	headers := make(http.Header)
+	if c != nil {
+		if beta := c.GetHeader("openai-beta"); beta != "" {
+			headers.Set("openai-beta", beta)
+		}
+	}
+	// Match the ordinary HTTP adapter's mapped GPT-5.5 Lite exception.
+	if gjson.GetBytes(body, "model").String() != "gpt-5.5" &&
+		((c != nil && isOpenAIResponsesLiteHeader(c.GetHeader(responsesLiteHeader))) || isOpenAIResponsesLiteWebSocketPayload(body)) {
+		headers.Set(responsesLiteHeader, "true")
+	}
+	return vmkernel.WithHeaders(ctx, headers)
 }
 
 func (s *GatewayService) forwardVMKernelMessages(ctx context.Context, c *gin.Context, account *Account, body []byte, ingress string, parsed *ParsedRequest) (*ForwardResult, error) {
@@ -182,6 +219,7 @@ func (s *GatewayService) forwardVMKernelMessages(ctx context.Context, c *gin.Con
 
 func (s *OpenAIGatewayService) prepareVMKernelResponses(ctx context.Context, c *gin.Context, account *Account, body []byte, ingress, defaultMappedModel string) ([]byte, string, string, error) {
 	beginUpstreamResponseModelObservation(c)
+	clearOpenAIResponsesNamespaceNames(c)
 	setCodexToolNameReverse(c, nil)
 	if _, err := s.prepareCodexAccountIdentitySource(ctx, c, account); err != nil {
 		return nil, "", "", err
@@ -237,6 +275,19 @@ func (s *OpenAIGatewayService) prepareVMKernelResponses(ctx context.Context, c *
 	if err != nil {
 		return nil, "", "", err
 	}
+	responsesLite := isOpenAIResponsesLiteHeader(c.GetHeader(responsesLiteHeader)) || isOpenAIResponsesLiteWebSocketPayload(prepared)
+	if responsesLite {
+		prepared, _, err = normalizeOpenAIResponsesLitePayloadForAccount(prepared, account)
+		if err != nil {
+			return nil, "", "", err
+		}
+	}
+	// The kernel receives Responses HTTP, including for client WS requests.
+	// Use the same namespace policy and opt-in flattening as ordinary HTTP.
+	prepared, _, err = normalizeOpenAIResponsesNamespaceBody(c, account, prepared, OpenAIUpstreamTransportHTTPSSE, false, false)
+	if err != nil {
+		return nil, "", "", err
+	}
 	if normalized, changed, err := normalizeOpenAIResponsesReasoningContentReplay(prepared); err != nil {
 		return nil, "", "", err
 	} else if changed {
@@ -248,7 +299,7 @@ func (s *OpenAIGatewayService) prepareVMKernelResponses(ctx context.Context, c *
 		prepared = normalized
 	}
 	var requestMap map[string]any
-	if err = json.Unmarshal(prepared, &requestMap); err != nil {
+	if err = decodeOpenAIJSONUseNumber(prepared, &requestMap); err != nil {
 		return nil, "", "", err
 	}
 	normalizeOpenAIResponseFormatSchemas(requestMap)
@@ -257,6 +308,7 @@ func (s *OpenAIGatewayService) prepareVMKernelResponses(ctx context.Context, c *
 		IsCodexCLI:                          openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator")) || (s.cfg != nil && s.cfg.Gateway.ForceCodexCLI),
 		PreserveToolCallIDs:                 ingress == "messages",
 		OmitPromotedSystemMessagesFromInput: !strings.EqualFold(gjson.GetBytes(prepared, "text.format.type").String(), "json_object"),
+		ResponsesLite:                       responsesLite,
 	})
 	if transformed.Error != nil {
 		return nil, "", "", transformed.Error
@@ -271,6 +323,12 @@ func (s *OpenAIGatewayService) prepareVMKernelResponses(ctx context.Context, c *
 	prepared, err = json.Marshal(requestMap)
 	if err != nil {
 		return nil, "", "", err
+	}
+	if model == "gpt-5.5" && isOpenAIResponsesLiteWebSocketPayload(prepared) {
+		prepared, err = sjson.DeleteBytes(prepared, "client_metadata."+responsesLiteWSMetadataKey)
+		if err != nil {
+			return nil, "", "", err
+		}
 	}
 	frame, err := sjson.SetBytes(prepared, "type", "response.create")
 	if err != nil {
@@ -348,7 +406,7 @@ func (s *OpenAIGatewayService) forwardVMKernelResponses(ctx context.Context, c *
 	if callErr == nil && result != nil && result.Completed && ingress == "responses" {
 		// History is auxiliary: losing its cache must never retry or lose billing
 		// for a request that has already completed.
-		_ = s.rememberVMKernelContinuation(ctx, c, account, vmKernelReplayCacheBody(c, account, body, model), restoreCodexToolNamesFromContext(c, result.Response))
+		_ = s.rememberVMKernelContinuation(ctx, c, account, vmKernelReplayCacheBody(c, account, body, model), result.Response)
 	}
 	out, err := vmKernelOpenAIResult(result, prepared, original, billing, model, stream)
 	if err != nil {

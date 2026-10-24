@@ -192,7 +192,7 @@ func TestVMKernelForwardUDSTwelveCombinations(t *testing.T) {
 
 func TestVMKernelUnsupportedDirectSeams(t *testing.T) {
 	a := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, ExecutionMode: AccountExecutionModeVMKernel}
-	for _, feature := range []string{`"generate":false`, `"context_management":{}`, `"compact":true`, `"background":true`, `"tools":[{"type":"custom","name":"x"}]`} {
+	for _, feature := range []string{`"generate":false`, `"context_management":{}`, `"compact":true`, `"background":true`} {
 		body := []byte(`{"model":"gpt-5","input":"hello",` + feature + `}`)
 		if err := validateVMKernelIngress(a, body); err == nil {
 			t.Fatalf("accepted %s", feature)

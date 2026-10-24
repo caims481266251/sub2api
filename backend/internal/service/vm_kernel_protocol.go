@@ -79,6 +79,8 @@ type vmKernelPresentation struct {
 	messages          *apicompat.ResponsesEventToAnthropicState
 	accumulator       *apicompat.BufferedResponseAccumulator
 	final             *apicompat.ResponsesResponse
+	nativeResponse    json.RawMessage
+	nativeDoneItems   *responsesStreamOutputItems
 	native            *apicompat.AnthropicResponse
 	nativeStopped     bool
 	nativeInputs      map[int]string
@@ -92,7 +94,8 @@ func newVMKernelPresentation(ingress, provider string, stream bool, emit func(st
 	chat.IncludeUsage = true
 	return &vmKernelPresentation{ingress: ingress, provider: provider, stream: stream, emit: emit,
 		anthropic: apicompat.NewAnthropicEventToResponsesState(), chat: chat,
-		messages: apicompat.NewResponsesEventToAnthropicState(), accumulator: apicompat.NewBufferedResponseAccumulator()}
+		messages: apicompat.NewResponsesEventToAnthropicState(), accumulator: apicompat.NewBufferedResponseAccumulator(),
+		nativeDoneItems: newResponsesStreamOutputItems()}
 }
 
 func (p *vmKernelPresentation) event(kind string, data []byte) error {
@@ -117,7 +120,32 @@ func (p *vmKernelPresentation) event(kind string, data []byte) error {
 	if p.bytes > vmKernelPresentationLimit {
 		return fmt.Errorf("VM response exceeds presentation limit")
 	}
-	// Native Messages streaming must preserve signed thinking and native fields.
+	// Native Responses must preserve the provider's complete tool items,
+	// including fields unknown to the cross-protocol presentation structs.
+	if p.ingress == "responses" && p.provider == "responses" {
+		p.nativeDoneItems.Observe(data)
+		if terminal {
+			data, _ = normalizeResponsesStreamingTerminalOutput(data, p.accumulator, p.nativeDoneItems, nil)
+			p.nativeResponse = append(json.RawMessage(nil), gjson.GetBytes(data, "response").Raw...)
+		}
+		if p.stream {
+			if responsesStreamEventMayContributeToOutput(eventType) {
+				var event apicompat.ResponsesStreamEvent
+				if err := json.Unmarshal(data, &event); err != nil {
+					return err
+				}
+				p.accumulator.ProcessEvent(&event)
+			}
+			return p.emit(kind, data)
+		}
+		if terminal {
+			return nil
+		}
+		if !responsesStreamEventMayContributeToOutput(eventType) {
+			return nil
+		}
+	}
+	// Native Messages streaming preserves signed thinking and native fields.
 	if p.stream && p.ingress == p.provider {
 		return p.emit(kind, data)
 	}
@@ -218,6 +246,9 @@ func (p *vmKernelPresentation) finish(model string, nativeUsage ...json.RawMessa
 			return nil, fmt.Errorf("VM message has no validated stop")
 		}
 		return json.Marshal(p.native)
+	}
+	if p.ingress == "responses" && p.provider == "responses" && len(p.nativeResponse) > 0 {
+		return ensureOpenAIResponseObjectCreatedAt(p.nativeResponse), nil
 	}
 	if p.final == nil {
 		return nil, fmt.Errorf("VM response has no validated completed response")

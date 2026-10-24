@@ -1,10 +1,47 @@
 package apicompat
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestFlattenResponsesNamespaces_CustomRoundTrip(t *testing.T) {
+	var request map[string]any
+	require.NoError(t, json.Unmarshal([]byte(`{"tools":[{"type":"namespace","name":"functions","tools":[{"type":"function","name":"lookup"},{"type":"custom","name":"patch","format":{"type":"grammar","definition":"fixture","syntax":"lark"}}]}],"input":[{"type":"custom_tool_call","name":"patch","namespace":"functions","call_id":"call_1","input":"patch text"},{"type":"custom_tool_call_output","call_id":"call_1","output":"ok"}],"tool_choice":{"type":"custom","name":"patch","namespace":"functions"}}`), &request))
+	names, changed, err := FlattenResponsesNamespaces(request)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.True(t, names["functions__patch"].Custom)
+	tools := request["tools"].([]any)
+	require.Len(t, tools, 2)
+	custom := tools[1].(map[string]any)
+	require.Equal(t, "custom", custom["type"])
+	require.Equal(t, "functions__patch", custom["name"])
+	require.Equal(t, "fixture", custom["format"].(map[string]any)["definition"])
+	require.Equal(t, "functions__patch", request["tool_choice"].(map[string]any)["name"])
+	history := request["input"].([]any)
+	require.Equal(t, "functions__patch", history[0].(map[string]any)["name"])
+	require.NotContains(t, history[0].(map[string]any), "namespace")
+	require.Equal(t, "ok", history[1].(map[string]any)["output"])
+	restored, changed, err := RestoreResponsesNamespaceCalls([]byte(`{"type":"response.output_item.done","item":{"type":"custom_tool_call","name":"functions__patch","call_id":"call_1","input":"patch text","opaque":9007199254740993}}`), names)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Contains(t, string(restored), "9007199254740993")
+	require.JSONEq(t, `{"type":"response.output_item.done","item":{"type":"custom_tool_call","name":"patch","namespace":"functions","call_id":"call_1","input":"patch text","opaque":9007199254740993}}`, string(restored))
+}
+
+func TestFlattenResponsesNamespaces_RejectsLossyChildren(t *testing.T) {
+	request := map[string]any{"tools": []any{map[string]any{"type": "namespace", "name": "functions", "tools": []any{map[string]any{"type": "function", "name": "keep"}, map[string]any{"type": "future_tool", "name": "unknown"}}}}}
+	before, err := json.Marshal(request)
+	require.NoError(t, err)
+	_, _, err = FlattenResponsesNamespaces(request)
+	require.ErrorContains(t, err, "without losing its semantics")
+	after, err := json.Marshal(request)
+	require.NoError(t, err)
+	require.JSONEq(t, string(before), string(after), "validation must not partially drop tools")
+}
 
 func TestFlattenResponsesNamespaces_RewritesDeclarationHistoryAndChoice(t *testing.T) {
 	req := map[string]any{

@@ -58,7 +58,7 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 	attemptID := hex.EncodeToString(random[:])
 	headers := map[string]string{}
 	if supplied, ok := ctx.Value(headersKey).(http.Header); ok {
-		for _, name := range []string{"anthropic-beta", "anthropic-version", "openai-beta"} {
+		for _, name := range []string{"anthropic-beta", "anthropic-version", "openai-beta", "x-openai-internal-codex-responses-lite"} {
 			if value := supplied.Get(name); value != "" {
 				headers[name] = value
 			}

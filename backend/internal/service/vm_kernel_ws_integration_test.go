@@ -395,7 +395,7 @@ func TestVMKernelWSProviderFailureDeliveredOnce(t *testing.T) {
 }
 
 func TestVMKernelWSPolicyFailureDeliveredOnceWithoutDispatch(t *testing.T) {
-	for _, kind := range []string{"cli_only", "fast"} {
+	for _, kind := range []string{"cli_only", "fast", "namespace_collision"} {
 		t.Run(kind, func(t *testing.T) {
 			var attempts, after atomic.Int32
 			runtime, account := vmForwardFixture(t, PlatformOpenAI, func(w http.ResponseWriter, r *http.Request) { attempts.Add(1) })
@@ -405,10 +405,12 @@ func TestVMKernelWSPolicyFailureDeliveredOnceWithoutDispatch(t *testing.T) {
 					account.Extra = map[string]any{}
 				}
 				account.Extra["codex_cli_only"] = true
-			} else {
+			} else if kind == "fast" {
 				s = newOpenAIGatewayServiceWithSettings(t, &OpenAIFastPolicySettings{Rules: []OpenAIFastPolicyRule{{ServiceTier: OpenAIFastTierPriority, Action: BetaPolicyActionBlock, Scope: BetaPolicyScopeAll, ErrorMessage: "ws fast blocked", ModelWhitelist: []string{"gpt-5.5"}, FallbackAction: BetaPolicyActionPass}}})
 				s.cfg = &config.Config{}
 				s.vmKernel = runtime
+			} else {
+				account.Extra = map[string]any{"openai_responses_flatten_namespaces": true}
 			}
 			done := make(chan error, 1)
 			httpWrites := make(chan int, 1)
@@ -428,7 +430,11 @@ func TestVMKernelWSPolicyFailureDeliveredOnceWithoutDispatch(t *testing.T) {
 						t.Error("policy reported success")
 					}
 				}}
-				err = s.proxyVMKernelWebSocket(r.Context(), c, conn, account, []byte(`{"type":"response.create","model":"gpt-5.5","service_tier":"priority","input":"hello"}`), hooks)
+				frame := []byte(`{"type":"response.create","model":"gpt-5.5","service_tier":"priority","input":"hello"}`)
+				if kind == "namespace_collision" {
+					frame = []byte(`{"type":"response.create","model":"gpt-5.5","input":"hello","tools":[{"type":"function","name":"ns__lookup"},{"type":"namespace","name":"ns","tools":[{"type":"function","name":"lookup"}]}]}`)
+				}
+				err = s.proxyVMKernelWebSocket(r.Context(), c, conn, account, frame, hooks)
 				httpWrites <- recorder.Body.Len()
 				done <- err
 			}))
@@ -446,7 +452,14 @@ func TestVMKernelWSPolicyFailureDeliveredOnceWithoutDispatch(t *testing.T) {
 				if readErr != nil {
 					break
 				}
-				if gjson.GetBytes(raw, "type").String() != "error" || gjson.GetBytes(raw, "error.code").String() != "policy_violation" {
+				wantCode := "policy_violation"
+				if kind == "namespace_collision" {
+					wantCode = ""
+					if !strings.Contains(gjson.GetBytes(raw, "error.message").String(), "conflicts") {
+						t.Error("missing namespace collision details")
+					}
+				}
+				if gjson.GetBytes(raw, "type").String() != "error" || gjson.GetBytes(raw, "error.code").String() != wantCode {
 					t.Errorf("unexpected policy event: %s", raw)
 				}
 				count++

@@ -4,3 +4,6 @@ __pycache__/
 tests/*
 !tests/test_update_agent.py
 !tests/test_container_isolation.py
+
+# Deterministic SOCKS/TLS failure contract fixture; fabricated credentials only.
+!tests/codex-socks-contract.py

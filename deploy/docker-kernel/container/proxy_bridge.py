@@ -6,6 +6,7 @@ import ipaddress
 import itertools
 import json
 import os
+import random
 import socket
 from pathlib import Path
 import sys
@@ -14,7 +15,7 @@ from urllib.parse import unquote, urlsplit
 
 LISTEN_HOST, LISTEN_PORT = '127.0.0.1', 1081
 HANDSHAKE_TIMEOUT, MAX_ATTEMPTS = 8, 3
-RETRY_DELAYS = (0.15, 0.4)
+RETRY_DELAYS = (0.2, 0.5)
 FAIL_BIND = b'\x01\x00\x00\x00\x00\x00\x00'
 
 
@@ -69,15 +70,16 @@ class ProxyBridge:
     async def _connect(self, target, attempt, state):
         state['stage'] = 'proxy_tcp'
         reader, writer = await asyncio.open_connection(self.ips[state['proxy_ip_index']], self.port)
+        # Own the connection before socket configuration, which can itself fail.
+        state['writer'] = writer
         upstream_socket = writer.get_extra_info('socket')
         if upstream_socket is not None:
             upstream_socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-            for option, value in ((getattr(socket, 'TCP_KEEPIDLE', None), 60),
-                                  (getattr(socket, 'TCP_KEEPINTVL', None), 20),
+            for option, value in ((getattr(socket, 'TCP_KEEPIDLE', None), 15),
+                                  (getattr(socket, 'TCP_KEEPINTVL', None), 15),
                                   (getattr(socket, 'TCP_KEEPCNT', None), 3)):
                 if option is not None:
                     upstream_socket.setsockopt(socket.IPPROTO_TCP, option, value)
-        state['writer'] = writer
         state['stage'] = 'socks_method'
         method = b'\x02' if self.auth else b'\x00'
         writer.write(b'\x05\x01' + method); await writer.drain()
@@ -121,21 +123,57 @@ class ProxyBridge:
                 retry = failure.retryable and attempt < MAX_ATTEMPTS
                 diagnostic('retry' if retry else 'failed', state['stage'], attempt, failure.reason, failure.code)
                 if not retry: raise failure from None
-                await asyncio.sleep(self.delays[min(attempt - 1, len(self.delays) - 1)])
+                delay = self.delays[min(attempt - 1, len(self.delays) - 1)]
+                # Concurrent accounts must not all reconnect at the same instant.
+                await asyncio.sleep(delay + random.uniform(0, min(delay / 4, 0.05)))
         raise HandshakeFailure('attempts_exhausted')
+
+    async def connect_for_client(self, reader, target):
+        # A SOCKS client normally waits for CONNECT before sending TLS. Watch
+        # its EOF while dialing so a canceled request cannot spend three full
+        # handshake timeouts opening an unused upstream connection. Preserve
+        # the first byte if a client pipelines data instead.
+        connect = asyncio.create_task(self.upstream(target))
+        first_byte = asyncio.create_task(reader.read(1))
+        handed_off = False
+        try:
+            await asyncio.wait((connect, first_byte), return_when=asyncio.FIRST_COMPLETED)
+            if first_byte.done() and first_byte.result() == b'':
+                return None
+            remote = await connect
+            first_byte.cancel()
+            buffered, = await asyncio.gather(first_byte, return_exceptions=True)
+            if isinstance(buffered, BaseException) and not isinstance(buffered, asyncio.CancelledError):
+                raise buffered
+            if buffered == b'':
+                return None
+            handed_off = True
+            return (*remote, buffered if isinstance(buffered, bytes) else b'')
+        finally:
+            connect.cancel(); first_byte.cancel()
+            results = await asyncio.gather(connect, first_byte, return_exceptions=True)
+            if not handed_off and isinstance(results[0], tuple):
+                await close_writer(results[0][1])
 
     @staticmethod
     async def relay(left_reader, left_writer, right_reader, right_writer):
-        async def copy(reader, writer):
-            while True:
-                data = await reader.read(65536)
-                if not data:
-                    if writer.can_write_eof(): writer.write_eof(); await writer.drain()
-                    return
-                writer.write(data); await writer.drain()
-        tasks = [asyncio.create_task(copy(left_reader, right_writer)), asyncio.create_task(copy(right_reader, left_writer))]
+        async def copy(reader, writer, direction):
+            try:
+                while True:
+                    data = await reader.read(65536)
+                    if not data:
+                        if writer.can_write_eof(): writer.write_eof(); await writer.drain()
+                        return
+                    writer.write(data); await writer.drain()
+            except OSError as error:
+                reason = {errno.ECONNRESET: 'connection_reset', errno.EPIPE: 'broken_pipe',
+                          errno.ETIMEDOUT: 'timeout'}.get(error.errno, 'socket_error')
+                diagnostic('closed', direction, 1, reason)
+                raise
+        tasks = [asyncio.create_task(copy(left_reader, right_writer, 'tunnel_upload')),
+                 asyncio.create_task(copy(right_reader, left_writer, 'tunnel_download'))]
         try: await asyncio.gather(*tasks)
-        except OSError: diagnostic('closed', 'tunnel', 1, 'socket_error_no_replay')
+        except OSError: pass  # The failed direction logged only safe metadata; never replay.
         finally:
             for task in tasks: task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
@@ -154,9 +192,13 @@ class ProxyBridge:
                 return await read_address(reader)
             target = await asyncio.wait_for(negotiate(), self.timeout)
             if target is None: return
-            remote_reader, remote, reply = await self.upstream(target)
+            connected = await self.connect_for_client(reader, target)
+            if connected is None: return
+            remote_reader, remote, reply, buffered = connected
             writer.write(reply); await writer.drain()
             # Only an established SOCKS tunnel gets application bytes. Never retry past this line.
+            if buffered:
+                remote.write(buffered); await remote.drain()
             await self.relay(reader, writer, remote_reader, remote)
         except HandshakeFailure as error:
             writer.write(b'\x05' + bytes([error.code]) + b'\x00' + FAIL_BIND)

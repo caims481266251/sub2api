@@ -14,6 +14,25 @@ import (
 
 const openAIResponsesNamespaceNamesContextKey = "openai_responses_namespace_names"
 
+// Shared request normalization without HTTP side effects, including Docker WS.
+func normalizeOpenAIResponsesNamespaceBody(c *gin.Context, account *Account, body []byte, transport OpenAIUpstreamTransport, passthroughEnabled, compactPath bool) ([]byte, string, error) {
+	var err error
+	if shouldFlattenOpenAIResponsesNamespaces(account, transport, passthroughEnabled, compactPath) {
+		body, err = flattenOpenAIResponsesNamespaces(c, body)
+		if err != nil {
+			return nil, "tools", err
+		}
+	}
+	if shouldStripOpenAIResponsesInputNamespaces(account, transport, passthroughEnabled) {
+		keep := shouldKeepOpenAIResponsesToolCallNamespaces(account, transport, passthroughEnabled, compactPath, body)
+		body, err = stripOpenAIResponsesInputNamespaces(body, keep)
+		if err != nil {
+			return nil, "input", err
+		}
+	}
+	return body, "", nil
+}
+
 // shouldFlattenOpenAIResponsesNamespaces 判定原生 Responses 转发前是否摊平
 // Codex namespace 工具。
 //
@@ -101,7 +120,9 @@ func shouldKeepOpenAIResponsesToolCallNamespaces(
 	if !account.IsOpenAIOAuthLike() {
 		return false
 	}
-	return !shouldFlattenOpenAIResponsesNamespaces(account, transport, passthroughEnabled, compactPath)
+	// Lite carriers and service-owned namespaces can remain native even when
+	// other declarations were flattened. Their calls still need a namespace.
+	return !shouldFlattenOpenAIResponsesNamespaces(account, transport, passthroughEnabled, compactPath) || hasOpenAIResponsesNamespaceToolDeclaration(body)
 }
 
 func hasOpenAIResponsesNamespaceToolDeclaration(body []byte) bool {
@@ -166,7 +187,7 @@ func flattenOpenAIResponsesNamespaces(c *gin.Context, body []byte) ([]byte, erro
 		return body, nil
 	}
 	var requestBody map[string]any
-	if err := json.Unmarshal(body, &requestBody); err != nil {
+	if err := decodeOpenAIJSONUseNumber(body, &requestBody); err != nil {
 		return body, fmt.Errorf("decode OpenAI namespace body: %w", err)
 	}
 	names, changed, err := apicompat.FlattenResponsesNamespacesExcept(requestBody, map[string]bool{"image_gen": true})

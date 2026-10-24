@@ -285,7 +285,7 @@ func TestOpenAIStreamingPassthroughScannerErrorFlushesWrittenResidual(t *testing
 	require.Equal(t, []int{len(wantBody)}, writer.flushBodyLengths)
 }
 
-func TestOpenAIStreamingPassthroughNamespaceRestoreErrorFlushesWrittenResidualOnce(t *testing.T) {
+func TestOpenAIStreamingPassthroughNamespaceLargeNumberFlushesWrittenResidualOnce(t *testing.T) {
 	writtenPrefix := `data: {"type":"response.output_text.delta","delta":"prefix"}` + "\n"
 	overflowData := `data: {"type":"response.output_text.delta","delta":"not-written","overflow":1e1000}`
 
@@ -300,9 +300,12 @@ func TestOpenAIStreamingPassthroughNamespaceRestoreErrorFlushesWrittenResidualOn
 		},
 	)
 
-	require.ErrorContains(t, err, "restore OpenAI passthrough namespace response")
-	require.Equal(t, writtenPrefix, recorder.Body.String())
-	require.Equal(t, []int{len(writtenPrefix)}, writer.flushBodyLengths)
+	// Valid JSON numbers need not fit float64. Lossless namespace restoration
+	// forwards the event; the missing terminal still reports an incomplete turn.
+	require.ErrorContains(t, err, "missing terminal event")
+	want := writtenPrefix + overflowData + "\n"
+	require.Equal(t, want, recorder.Body.String())
+	require.Equal(t, []int{len(want)}, writer.flushBodyLengths)
 }
 
 func TestOpenAIStreamingPassthroughBlankWriteFailureDoesNotFlushAndStillDrainsUsage(t *testing.T) {
