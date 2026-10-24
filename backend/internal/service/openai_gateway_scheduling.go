@@ -53,6 +53,9 @@ func explicitOpenAIHeaderSessionID(c *gin.Context) string {
 			return sessionID
 		}
 	}
+	if !isGrokRequestContext(c) {
+		return strings.TrimSpace(c.GetHeader("thread-id"))
+	}
 	return ""
 }
 
@@ -67,11 +70,44 @@ func explicitOpenAISessionID(c *gin.Context, body []byte) string {
 		return ""
 	}
 
-	sessionID := explicitOpenAIHeaderSessionID(c)
-	if sessionID == "" && len(body) > 0 {
-		sessionID = strings.TrimSpace(openAIRequestPayloadView(body).Get("prompt_cache_key").String())
+	if sessionID := explicitOpenAIHeaderSessionID(c); sessionID != "" {
+		return sessionID
 	}
-	return sessionID
+	return explicitOpenAIBodySessionID(body, !isGrokRequestContext(c))
+}
+
+// Keep scheduling and Docker forwarding on the same explicit session identity.
+// Header priority is unchanged; body aliases extend OpenAI clients only.
+func explicitOpenAIBodySessionID(body []byte, aliases bool) string {
+	payload := openAIRequestPayloadView(body)
+	if !aliases {
+		return strings.TrimSpace(payload.Get("prompt_cache_key").String())
+	}
+	paths := []string{"prompt_cache_key"}
+	if aliases {
+		paths = append(paths, "client_metadata.session_id", "conversation_id", "session_id", "thread_id")
+	}
+	for _, path := range paths {
+		value := payload.Get(path)
+		if value.Type == gjson.String {
+			if sessionID := strings.TrimSpace(value.String()); sessionID != "" {
+				return sessionID
+			}
+		}
+	}
+	return ""
+}
+
+// Account routing and Docker identity share the unscoped seed. Each boundary
+// applies its own tenant/account namespace after resolving the caller session.
+func openAIRequestSessionSeed(c *gin.Context, body []byte) string {
+	if sessionID := explicitOpenAIRequestSessionID(c, body); sessionID != "" {
+		return sessionID
+	}
+	if isGrokRequestContext(c) {
+		return deriveOpenAIContentSessionSeed(body)
+	}
+	return deriveOpenAIContentSessionSeed([]byte(openAIRequestPayloadView(body).Raw))
 }
 
 // openAIRequestPayloadView unwraps Responses WebSocket event envelopes while
@@ -108,7 +144,7 @@ func explicitOpenAIRequestSessionID(c *gin.Context, body []byte) string {
 		sessionID = strings.TrimSpace(c.GetHeader(grokConversationIDHeader))
 	}
 	if sessionID == "" && len(body) > 0 {
-		sessionID = strings.TrimSpace(openAIRequestPayloadView(body).Get("prompt_cache_key").String())
+		sessionID = explicitOpenAIBodySessionID(body, !isGrokRequestContext(c))
 	}
 	if sessionID == "" && isGrokRequestContext(c) && len(body) > 0 {
 		sessionID = grokPreviousResponseSessionSeed(body)
@@ -140,7 +176,7 @@ func (s *OpenAIGatewayService) GenerateExplicitSessionHash(c *gin.Context, body 
 		return ""
 	}
 
-	currentHash, legacyHash := deriveOpenAISessionHashes(sessionID)
+	currentHash, legacyHash := deriveOpenAIRequestSessionHashes(c, sessionID)
 	attachOpenAILegacySessionHashToGin(c, legacyHash)
 	return currentHash
 }
@@ -152,8 +188,8 @@ func (s *OpenAIGatewayService) GenerateExplicitSessionHash(c *gin.Context, body 
 //  2. Header: conversation_id
 //  3. Header: x-session-affinity / x-session-id / x-opencode-session (OpenCode)
 //  4. Header: x-conversation-id (CodeBuddy)
-//  5. Header: x-grok-conv-id (Grok groups only)
-//  6. Body:   prompt_cache_key
+//  5. Header: thread-id (OpenAI) / x-grok-conv-id (Grok groups only)
+//  6. Body:   prompt_cache_key, then OpenAI session/conversation aliases
 //  7. Body:   content-based fallback (model + system + tools + first user message)
 //
 // Grok sticky affinity is intentionally separate from the upstream
@@ -167,10 +203,7 @@ func (s *OpenAIGatewayService) GenerateSessionHash(c *gin.Context, body []byte) 
 		return ""
 	}
 
-	sessionID := explicitOpenAIRequestSessionID(c, body)
-	if sessionID == "" && len(body) > 0 {
-		sessionID = deriveOpenAIContentSessionSeed(body)
-	}
+	sessionID := openAIRequestSessionSeed(c, body)
 	if sessionID == "" {
 		return ""
 	}
@@ -179,7 +212,7 @@ func (s *OpenAIGatewayService) GenerateSessionHash(c *gin.Context, body []byte) 
 		sessionID = grokStickyAffinitySeed(sessionID, body)
 	}
 
-	currentHash, legacyHash := deriveOpenAISessionHashes(sessionID)
+	currentHash, legacyHash := deriveOpenAIRequestSessionHashes(c, sessionID)
 	attachOpenAILegacySessionHashToGin(c, legacyHash)
 	return currentHash
 }
@@ -215,7 +248,7 @@ func (s *OpenAIGatewayService) GenerateSessionHashWithFallback(c *gin.Context, b
 		return ""
 	}
 
-	currentHash, legacyHash := deriveOpenAISessionHashes(seed)
+	currentHash, legacyHash := deriveOpenAIRequestSessionHashes(c, seed)
 	attachOpenAILegacySessionHashToGin(c, legacyHash)
 	return currentHash
 }
@@ -1202,7 +1235,7 @@ func (s *OpenAIGatewayService) SelectAccountWithLoadAwareness(ctx context.Contex
 	return s.selectAccountWithLoadAwareness(ctx, groupID, PlatformOpenAI, sessionHash, requestedModel, excludedIDs, false, "", true)
 }
 
-func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Context, groupID *int64, platform string, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}, requireCompact bool, requiredCapability OpenAIEndpointCapability, useUpstreamTokenCost bool) (*AccountSelectionResult, error) {
+func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Context, groupID *int64, platform string, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}, requireCompact bool, requiredCapability OpenAIEndpointCapability, useUpstreamTokenCost bool) (selection *AccountSelectionResult, err error) {
 	platform = NormalizeOpenAICompatiblePlatform(platform)
 	if s.checkChannelPricingRestriction(ctx, groupID, requestedModel) {
 		slog.Warn("channel pricing restriction blocked request",
@@ -1321,6 +1354,11 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 	// rewriting the durable binding here would make a short burst migrate the
 	// whole conversation to a cache-cold account.
 	stickySpillover := false
+	defer func() {
+		if selection != nil && stickySpillover {
+			selection.PreserveStickyBinding = true
+		}
+	}()
 	if sessionHash != "" {
 		accountID := stickyAccountID
 		if accountID > 0 && !isExcluded(accountID) {

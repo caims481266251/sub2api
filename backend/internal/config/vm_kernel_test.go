@@ -13,6 +13,14 @@ func TestVMKernelConfigEnvironmentAndDefaults(t *testing.T) {
 	if !cfg.VMKernel.Enabled || cfg.VMKernel.HelperSocket != "/run/sub2api-vm/helper.sock" || cfg.VMKernel.Template != "default" || cfg.VMKernel.CPU != 2 || cfg.VMKernel.MemoryMiB != 512 {
 		t.Fatalf("VM environment/default mismatch: %+v", cfg.VMKernel)
 	}
+	if cfg.VMKernel.UpstreamTransport != "prefer_websocket" {
+		t.Fatal("kernel transport default mismatch")
+	}
+	t.Setenv("VM_KERNEL_UPSTREAM_TRANSPORT", "http")
+	cfg, err = Load()
+	if err != nil || cfg.VMKernel.UpstreamTransport != "http" {
+		t.Fatalf("HTTP override failed: %v", err)
+	}
 }
 
 func TestVMKernelConfigValidation(t *testing.T) {
@@ -21,6 +29,7 @@ func TestVMKernelConfigValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, change := range map[string]func(*Config){
+		"transport":            func(c *Config) { c.VMKernel.UpstreamTransport = "invalid" },
 		"relative socket":      func(c *Config) { c.VMKernel.HelperSocket = "relative.sock" },
 		"template path":        func(c *Config) { c.VMKernel.Template = "../template" },
 		"cpu":                  func(c *Config) { c.VMKernel.CPU = 33 },

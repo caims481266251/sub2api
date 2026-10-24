@@ -158,6 +158,8 @@ func (s *OpenAIGatewayService) proxyVMKernelWebSocket(ctx context.Context, c *gi
 	ctx = vmkernel.WithSessionBinding(ctx, &vmkernel.SessionBinding{})
 	fingerprint := openAITurnRouteFingerprint(account)
 	frame := first
+	turnState := ""
+	turnStateSession := ""
 	lastModel := gjson.GetBytes(first, "model").String()
 	for turn := 1; ; turn++ {
 		original := gjson.GetBytes(frame, "model").String()
@@ -266,8 +268,13 @@ func (s *OpenAIGatewayService) proxyVMKernelWebSocket(ctx context.Context, c *gi
 			}
 			return err
 		}
+		session := vmKernelPreparedSession(prepared)
+		if session != turnStateSession {
+			turnState = ""
+			turnStateSession = session
+		}
 		turnCtx, cancel := context.WithCancel(ctx)
-		turnCtx = vmKernelResponsesHeaderContext(turnCtx, c, prepared)
+		turnCtx = s.vmKernelResponsesHeaderContext(turnCtx, c, account, prepared, turnState)
 		events := make(chan vmkernel.Event)
 		type outcome struct {
 			result *vmkernel.Result
@@ -297,6 +304,17 @@ func (s *OpenAIGatewayService) proxyVMKernelWebSocket(ctx context.Context, c *gi
 		for active {
 			select {
 			case event := <-events:
+				if event.Type == vmkernel.CodexMetadataEvent {
+					if clientErr == nil {
+						if err := conn.Write(ctx, coderws.MessageText, event.Data); err != nil {
+							clientErr = err
+							cancel()
+						} else {
+							s.noteVMKernelTurnState(c, account, prepared, vmKernelMetadataState(event.Data))
+						}
+					}
+					continue
+				}
 				event.Data, err = restoreVMKernelResponsesTools(c, event.Data, event.Type)
 				if err != nil {
 					clientErr = err
@@ -375,6 +393,11 @@ func (s *OpenAIGatewayService) proxyVMKernelWebSocket(ctx context.Context, c *gi
 			result.OpenAIWSMode = true
 		}
 		if turnErr == nil {
+			if finished.result != nil {
+				if state := extractOpenAICodexTurnState(finished.result.Headers); state != "" {
+					turnState = state
+				}
+			}
 			if len(terminal) == 0 && finished.result != nil {
 				terminal = finished.result.Response
 			}

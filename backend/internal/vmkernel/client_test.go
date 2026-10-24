@@ -195,8 +195,8 @@ func TestClientSettledProviderFailurePreservesBusinessFeedback(t *testing.T) {
 	if r.RequestID != "request-fixture" || r.ResponseID != "resp_failure_fixture" || r.Headers.Get("Retry-After") != "30" || r.Headers.Get("x-codex-primary-used-percent") != "95" {
 		t.Fatalf("provider feedback was not preserved: request=%q response=%q retry=%q codex-usage=%q", r.RequestID, r.ResponseID, r.Headers.Get("Retry-After"), r.Headers.Get("x-codex-primary-used-percent"))
 	}
-	if r.Headers.Get("Authorization") != "" || r.Headers.Get("x-codex-turn-state") != "" {
-		t.Fatal("private headers escaped the kernel boundary")
+	if r.Headers.Get("Authorization") != "" || r.Headers.Get("x-codex-turn-state") != "private-session" {
+		t.Fatal("kernel header allowlist violated")
 	}
 }
 
@@ -523,8 +523,8 @@ func TestClientDisabledPromptCacheKeepsInputAndUsage(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&env); err != nil {
 			t.Fatal(err)
 		}
-		if env.Body["prompt_cache_key"] != nil || env.Body["prompt_cache_retention"] != nil || env.Session["session_id"] != "" || env.Headers["session-id"] != "" {
-			t.Error("disabled cache leaked a routing identifier")
+		if env.Body["prompt_cache_key"] != nil || env.Body["prompt_cache_retention"] != nil || env.Session["session_id"] != "caller-key" || env.Headers["session-id"] != "caller-key" {
+			t.Error("disabled cache must remove cache hints and preserve conversation identity")
 		}
 		if env.Body["input"] != "conversation" || env.Headers["x-codex-routing-hint"] != "model=gpt-6-luna" {
 			t.Error("cache toggle changed request semantics")
@@ -535,5 +535,54 @@ func TestClientDisabledPromptCacheKeepsInputAndUsage(t *testing.T) {
 	result, err := NewClient().Execute(WithSessionID(context.Background(), "old-session"), b, Request{Protocol: "responses", DisablePromptCache: true, Body: json.RawMessage(`{"model":"gpt-6-luna","input":"conversation","prompt_cache_key":"caller-key","prompt_cache_retention":"24h"}`)}, nil)
 	if err != nil || result == nil || !result.Completed || !bytes.Contains(result.Usage, []byte(`"cached_tokens":80`)) {
 		t.Fatalf("provider usage must remain authoritative: %v", err)
+	}
+}
+
+func TestClientCodexHeadersRoundTrip(t *testing.T) {
+	b := fakeKernel(t, func(w http.ResponseWriter, r *http.Request) {
+		var env map[string]json.RawMessage
+		if err := json.NewDecoder(r.Body).Decode(&env); err != nil {
+			t.Error(err)
+			return
+		}
+		var headers map[string]string
+		_ = json.Unmarshal(env["headers"], &headers)
+		if headers["x-codex-turn-state"] != "fixture-state" || headers["x-codex-turn-metadata"] != "fixture-metadata" || headers["x-codex-beta-features"] != "fixture-beta" {
+			t.Error("Codex context headers lost")
+		}
+		for _, key := range []string{"authorization", "cookie", "x-internal-token", "x-random"} {
+			if headers[key] != "" {
+				t.Errorf("unexpected header %s", key)
+			}
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"type\":\"response_headers\",\"headers\":{\"x-codex-turn-state\":\"next-state\",\"authorization\":\"secret\"}}\n\n")
+		fmt.Fprint(w, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_next\",\"status\":\"completed\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n")
+	})
+	h := make(http.Header)
+	for _, key := range []string{"authorization", "cookie", "x-internal-token", "x-random"} {
+		h.Set(key, "secret")
+	}
+	h.Set("x-codex-turn-state", "fixture-state")
+	h.Set("x-codex-turn-metadata", "fixture-metadata")
+	h.Set("x-codex-beta-features", "fixture-beta")
+	ctx := WithHeaders(context.Background(), h)
+	observed := ""
+	ctx = WithOnResponseHeaders(ctx, func(headers http.Header) {
+		if headers.Get("Authorization") != "" {
+			t.Error("callback leaked credentials")
+		}
+		if v := headers.Get("x-codex-turn-state"); v != "" {
+			observed = v
+		}
+	})
+	r, err := NewClient().Execute(ctx, b, Request{Protocol: "responses", Body: json.RawMessage(`{"model":"gpt-6-luna","input":"hello"}`)}, func(Event) error {
+		if observed != "next-state" {
+			t.Error("response headers arrived after public output")
+		}
+		return nil
+	})
+	if err != nil || !r.Completed || observed != "next-state" {
+		t.Fatalf("header roundtrip failed: %v", err)
 	}
 }

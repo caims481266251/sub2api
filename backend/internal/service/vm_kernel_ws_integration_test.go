@@ -23,13 +23,23 @@ func TestVMKernelWSUDSReplayHooksAndUsageOnce(t *testing.T) {
 	runtime, a := vmForwardFixture(t, PlatformOpenAI, func(w http.ResponseWriter, r *http.Request) {
 		n := attempts.Add(1)
 		var env struct {
-			Body json.RawMessage `json:"body"`
+			Body    json.RawMessage   `json:"body"`
+			Headers map[string]string `json:"headers"`
 		}
 		json.NewDecoder(r.Body).Decode(&env)
 		if n == 2 && gjson.GetBytes(env.Body, "input.#").Int() != 3 {
 			t.Errorf("kernel did not receive expanded context: %s", env.Body)
 		}
+		if n == 2 && env.Headers[openAICodexTurnStateHeader] != "state-from-first-turn" {
+			t.Errorf("second turn lost kernel response state")
+		}
 		w.Header().Set("Content-Type", "text/event-stream")
+		if n == 1 {
+			_, err := fmt.Fprint(w, "data: {\"type\":\"response_headers\",\"headers\":{\"x-codex-turn-state\":\"state-from-first-turn\"}}\n\n")
+			if err != nil {
+				t.Error(err)
+			}
+		}
 		for _, event := range vmForwardEvents("responses") {
 			fmt.Fprintf(w, "data: %s\n\n", strings.ReplaceAll(event, "resp_fixture", fmt.Sprintf("resp_%d", n)))
 		}

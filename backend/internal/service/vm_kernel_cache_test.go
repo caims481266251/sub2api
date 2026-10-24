@@ -31,7 +31,8 @@ func TestVMKernelCacheIdentitySurvivesTurnsAndReconnects(t *testing.T) {
 	next := `{"model":"gpt-6-luna","prompt_cache_key":"caller-key","input":[{"role":"user","content":"hello"},{"role":"assistant","content":"ok"},{"role":"user","content":"next"}]}`
 	key := prepare(10, account, first, "", "responses")
 	require.Equal(t, key, prepare(10, account, next, "", "responses"))
-	require.Equal(t, key, prepare(10, account, first, "rotating-irrelevant-header", "responses"), "explicit prompt key wins")
+	require.Equal(t, prepare(10, account, first, "caller-header", "responses"), prepare(10, account, next, "caller-header", "responses"))
+	require.NotEqual(t, key, prepare(10, account, first, "caller-header", "responses"), "session header wins consistently with account scheduling")
 	require.NotEqual(t, "caller-key", key)
 	require.NotEqual(t, key, prepare(11, account, first, "", "responses"))
 	other := *account
@@ -66,14 +67,56 @@ func TestVMKernelCacheMetadataDoesNotRotatePerRequest(t *testing.T) {
 	var last string
 	for i := 0; i < 3; i++ {
 		m := map[string]any{}
-		applyVMKernelPromptCacheKey(c, a, m, "stable")
 		applyCodexAccountIdentityClientMetadataMap(m, a, 0)
+		applyVMKernelPromptCacheKey(c, a, m, "stable")
 		raw, _ := json.Marshal(m)
 		if i > 0 {
 			require.Equal(t, last, string(raw))
 		}
 		last = string(raw)
 	}
+}
+
+func TestVMKernelSessionIdentityMetadataAliasesAndContainerIsolation(t *testing.T) {
+	a := &Account{ID: 2, Platform: PlatformOpenAI, Type: AccountTypeOAuth, ExecutionMode: AccountExecutionModeDockerKernel, Credentials: map[string]any{"chatgpt_account_id": "shared-upstream"}}
+	prepare := func(a *Account, keyID int64, header string, fields map[string]any) []byte {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest("POST", "/v1/responses", nil)
+		c.Set("api_key", &APIKey{ID: keyID})
+		if header != "" {
+			c.Request.Header.Set(header, "stable")
+		}
+		fields["model"], fields["input"] = "gpt-5", "hello"
+		body, err := json.Marshal(fields)
+		require.NoError(t, err)
+		out, _, _, err := (&OpenAIGatewayService{}).prepareVMKernelResponses(context.Background(), c, a, body, "responses", "")
+		require.NoError(t, err)
+		return out
+	}
+	base := prepare(a, 10, "", map[string]any{"prompt_cache_key": "stable"})
+	session := vmKernelPreparedSession(base)
+	require.NotEmpty(t, session)
+	for _, fields := range []map[string]any{
+		{"prompt_cache_key": "stable", "client_metadata": map[string]any{"session_id": "stable"}},
+		{"client_metadata": map[string]any{"session_id": "stable"}},
+		{"conversation_id": "stable"},
+		{"session_id": "stable"},
+		{"thread_id": "stable"},
+	} {
+		out := prepare(a, 10, "", fields)
+		require.Equal(t, session, vmKernelPreparedSession(out))
+		require.Equal(t, session, gjson.GetBytes(out, "prompt_cache_key").String())
+		require.False(t, gjson.GetBytes(out, "conversation_id").Exists())
+		require.False(t, gjson.GetBytes(out, "session_id").Exists())
+		require.False(t, gjson.GetBytes(out, "thread_id").Exists())
+	}
+	for _, header := range append(append([]string{}, explicitOpenAIHeaderSessionNames...), "thread-id") {
+		require.Equal(t, session, vmKernelPreparedSession(prepare(a, 10, header, map[string]any{})), header)
+	}
+	other := *a
+	other.ID++
+	require.NotEqual(t, session, vmKernelPreparedSession(prepare(&other, 10, "session-id", map[string]any{})))
+	require.NotEqual(t, session, vmKernelPreparedSession(prepare(a, 11, "session-id", map[string]any{})))
 }
 
 func TestVMKernelHeaderOnlySessionSurvivesContinuation(t *testing.T) {
@@ -133,7 +176,7 @@ func TestDockerRequestCacheTogglePreservesConversation(t *testing.T) {
 			require.Contains(t, string(prepared), "remember this")
 		}
 		replay := vmKernelReplayCacheBody(c, a, body, "gpt-6-luna")
-		require.Equal(t, enabled, gjson.GetBytes(replay, "prompt_cache_key").Exists())
+		require.Equal(t, "caller-session", gjson.GetBytes(replay, "prompt_cache_key").String(), "internal replay keeps the canonical header identity independently of cache hints")
 		responseID := fmt.Sprintf("resp_%d", i)
 		require.NoError(t, h.complete(replay, []byte(fmt.Sprintf(`{"id":%q,"output":[{"type":"function_call","call_id":"call_lookup","name":"lookup","arguments":"{}"}]}`, responseID))))
 		next, err := h.prepare([]byte(fmt.Sprintf(`{"type":"response.create","model":"gpt-6-luna","previous_response_id":%q,"input":[{"type":"function_call_output","call_id":"call_lookup","output":"found"}]}`, responseID)))
@@ -163,6 +206,7 @@ func TestVMKernelRequestCacheDispatchToggle(t *testing.T) {
 	gateway := &OpenAIGatewayService{vmKernel: runtime}
 	initialCredential := vmCredentialRevision(account)
 	initialRoute := vmAccountRouteRevision(account)
+	lastSession := ""
 	for _, enabled := range []bool{false, true, false} {
 		account.Extra = map[string]any{DockerRequestCacheEnabledKey: enabled}
 		for _, stream := range []bool{false, true} {
@@ -177,8 +221,17 @@ func TestVMKernelRequestCacheDispatchToggle(t *testing.T) {
 			env := <-envelopes
 			key := gjson.GetBytes(env, "body.prompt_cache_key").String()
 			require.Equal(t, enabled, key != "")
-			require.Equal(t, key, gjson.GetBytes(env, "session.session_id").String())
-			require.Equal(t, key, gjson.GetBytes(env, "headers.session-id").String())
+			session := gjson.GetBytes(env, "session.session_id").String()
+			require.NotEmpty(t, session)
+			if lastSession != "" {
+				require.Equal(t, lastSession, session, "cache toggle must not rotate the conversation")
+			}
+			lastSession = session
+			if enabled {
+				require.Equal(t, key, session)
+			}
+			require.Equal(t, session, gjson.GetBytes(env, "headers.session-id").String())
+			require.Equal(t, session, gjson.GetBytes(env, "body.client_metadata.session_id").String())
 			require.Contains(t, gjson.GetBytes(env, "body.input").Raw, "context must survive")
 		}
 		require.Equal(t, initialCredential, vmCredentialRevision(account))

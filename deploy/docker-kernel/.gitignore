@@ -7,3 +7,4 @@ tests/*
 
 # Deterministic SOCKS/TLS failure contract fixture; fabricated credentials only.
 !tests/codex-socks-contract.py
+!tests/codex-connection-reuse-contract.py

@@ -2274,6 +2274,7 @@ func setDefaults() {
 	viper.SetDefault("vm_kernel.template", "default")
 	viper.SetDefault("vm_kernel.cpu", 2)
 	viper.SetDefault("vm_kernel.memory_mib", 512)
+	viper.SetDefault("vm_kernel.upstream_transport", "prefer_websocket")
 	viper.SetDefault("gateway.upstream_routing.enabled", false)
 	viper.SetDefault("runtime.role", RuntimeRoleFull)
 	viper.SetDefault("runtime.regional_scheduler_file", "")

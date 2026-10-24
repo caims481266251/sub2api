@@ -409,6 +409,9 @@ func (s *defaultOpenAIAccountScheduler) Select(
 	start := time.Now()
 	// 命名返回值保证 defer 写入的耗时同时返回给调用方。
 	defer func() {
+		if selection != nil && req.PreserveStickyBinding {
+			selection.PreserveStickyBinding = true
+		}
 		decision.LatencyMs = time.Since(start).Milliseconds()
 		s.metrics.recordSelect(decision)
 	}()

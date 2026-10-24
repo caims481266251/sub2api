@@ -14,6 +14,9 @@ type Event struct {
 	Data json.RawMessage
 }
 
+// CodexMetadataEvent carries allowlisted transport context, never model output.
+const CodexMetadataEvent = "codex.response.metadata"
+
 type Result struct {
 	// ProviderHTTPFailure distinguishes a verified HTTP rejection from an in-stream error.
 	ProviderHTTPFailure       bool
@@ -38,6 +41,10 @@ type Result struct {
 type Binding struct {
 	Socket, Token, InstanceID string
 	Generation                uint64
+	AccountID                 int64
+	GuestBootID               string
+	CredentialRevision        string
+	ProxyRevision             string
 }
 
 type Request struct {
@@ -66,6 +73,7 @@ const (
 	acceptedKey
 	bindingKey
 	headersKey
+	responseHeadersKey
 )
 
 func WithSessionID(ctx context.Context, id string) context.Context {
@@ -92,4 +100,24 @@ func BindingFromContext(ctx context.Context) *SessionBinding {
 }
 func WithHeaders(ctx context.Context, headers http.Header) context.Context {
 	return context.WithValue(ctx, headersKey, headers.Clone())
+}
+
+// CodexRequestHeaderNames is the kernel adapter's protocol allowlist.
+// Authorization, cookies and arbitrary client headers never enter the envelope.
+var CodexRequestHeaderNames = []string{
+	"originator", "openai-beta", "session-id", "thread-id", "x-client-request-id",
+	"x-codex-beta-features", "x-codex-installation-id", "x-codex-parent-thread-id",
+	"x-codex-turn-metadata", "x-codex-turn-state", "x-codex-window-id",
+	"x-openai-internal-codex-responses-lite", "x-openai-memgen-request", "x-openai-subagent",
+}
+
+// WithOnResponseHeaders observes allowlisted headers before the next public event.
+// The caller decides when to commit them. The callback runs synchronously.
+func WithOnResponseHeaders(ctx context.Context, callback func(http.Header)) context.Context {
+	return context.WithValue(ctx, responseHeadersKey, callback)
+}
+func notifyResponseHeaders(ctx context.Context, headers http.Header) {
+	if callback, ok := ctx.Value(responseHeadersKey).(func(http.Header)); ok && callback != nil {
+		callback(headers.Clone())
+	}
 }

@@ -36,6 +36,27 @@ func DeriveSessionHashFromSeed(seed string) string {
 	return currentHash
 }
 
+// DeriveOpenAIRequestSessionHashFromSeed scopes protocol-specific routing
+// hints to the same API key namespace as the standard OpenAI ingress.
+func DeriveOpenAIRequestSessionHashFromSeed(c *gin.Context, seed string) string {
+	current, legacy := deriveOpenAIRequestSessionHashes(c, seed)
+	attachOpenAILegacySessionHashToGin(c, legacy)
+	return current
+}
+
+// Both hash formats share the tenant namespace. Falling back to the previous
+// unscoped hash would let another API key inherit an unrelated binding.
+func deriveOpenAIRequestSessionHashes(c *gin.Context, seed string) (string, string) {
+	seed = strings.TrimSpace(seed)
+	if seed == "" {
+		return "", ""
+	}
+	if keyID := getAPIKeyIDFromContext(c); keyID > 0 && !isGrokRequestContext(c) {
+		seed = fmt.Sprintf("openai-sticky:v1:key:%d:session:%s", keyID, seed)
+	}
+	return deriveOpenAISessionHashes(seed)
+}
+
 func deriveOpenAISessionHashes(sessionID string) (currentHash string, legacyHash string) {
 	normalized := strings.TrimSpace(sessionID)
 	if normalized == "" {

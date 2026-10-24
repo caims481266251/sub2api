@@ -13,6 +13,23 @@
 镜像必须使用 Docker 宿主的原生架构，Python/nftables 不得整体跨架构模拟；ARM64 主机需要为固定 amd64 GPT 内核提供 binfmt 执行支持。helper 会拒绝镜像与宿主架构不一致的配置。
 
 2. 准备已授权的固定内核 `/opt/sub2api-docker/payload/usr/local/bin/kin-codex-kernel`，记录 SHA256。内核不随源代码分发。
+
+连接复用验收：在 Linux 容器内，以内核的非 root 用户执行
+`python3 codex-connection-reuse-contract.py --binary /opt/kin-payload/usr/local/bin/kin-codex-kernel`
+（脚本位于 `deploy/docker-kernel/tests/`，也可通过 `docker exec -i` 的标准输入执行）。
+它仅使用虚构凭据和 loopback 模拟上游，不读取或修改业务配置。先验证普通客户端
+3 次请求复用 1 条连接，再要求内核同样复用；退出码 0 才表示通过，退出码 1
+表示不满足契约或执行失败，详情见 JSON 的 `reason` / `error_class`。测试内核和
+临时文件在退出时清理。它是候选内核的独立验收入口，不自动替换或重启线上内核。
+
+2026-10-24 核验：摘要为
+`0ffec538a57afbe66f13832513ee4c2a27ecc970faa9367c7cb8a13551196dd3`
+的内核 3 次请求建立 3 条上游连接，契约未通过。同日 GitHub 发布接口返回的
+vm2api 最新发布 v1.3.226，其 kin-codex-kernel 附件摘要仍相同。
+上游 `scripts/fetch-payload.mjs` 明确将该构件标记为 closed-source；没有该内核
+源码时，无法在本仓库把它改为账号级持久 HTTP 客户端。不能把修改宿主 UDS
+keepalive 或代理桥保活当作完成这一修复。
+
 3. helper 的模板必须为 `container-v1`，包含固定镜像 digest、payload_dir 和文件校验清单。禁止使用旧 KVM 模板。
 4. 运行现有 `vm-runtime-helper` 可执行文件，指定新的独立 root 和私有 socket；此兼容名称不再包含虚拟机运行实现。主程序不挂载 Docker socket。
 5. 主程序通过现有 `VM_KERNEL_*` 部署配置接入 helper（保留配置名，避免无关配置重构）。内存默认 512 MiB，是上限，不是预分配；不再使用虚拟磁盘参数。
@@ -34,6 +51,20 @@ vm-runtime-helper --enabled --root /opt/sub2api-docker/instances \
 应用配置：`VM_KERNEL_ENABLED=true`、`VM_KERNEL_HELPER_SOCKET=/opt/sub2api-docker/run/helper.sock`、`VM_KERNEL_TEMPLATE=default`、`VM_KERNEL_MEMORY_MIB=512`。应用保持非 root 且加入专用服务组，并挂载 helper 的实例/socket 目录到相同绝对路径。
 
 ## 行为边界
+
+- 容器启动即执行常驻内核的生命周期保持不变。上游传输默认采用 vm2api 的
+  prefer_websocket，启动默认值和每次请求保持一致；部署可设置
+  VM_KERNEL_UPSTREAM_TRANSPORT=http，以每请求参数覆盖为 HTTP，无需逐请求重启内核。
+  这不修改公开 WS 接口的准入开关，也不保证固定内核实际采用 WS 或跨请求复用上游连接。
+- 主程序到内核的 UDS HTTP 连接按账号、socket、实例、代际、boot ID、内部令牌及
+  凭据/代理版本隔离复用。身份变化淘汰旧池，但保留已经开始的请求；服务停止释放本地池。
+  每池最多保留 32 条空闲连接，空闲超时 90 秒，最多保留 256 个池；这些仅限制缓存资源，
+  不限制活动连接和账号业务并发。取消控制请求保持独立短连接，避免被业务流占用。
+  已提交请求不因 Keep-Alive 失效而自动重放。
+- 固定内核的 WebSocket 路径可能用通用 SSE 名称 event: response 包裹事件；
+  适配层从 JSON type 读取具体事件，并按既有规则校验完成、用量和响应 ID。
+  codex.response.metadata 与 response_headers 使用同一响应头白名单，保留
+  turn-state 和限流头，不公开内部计时、私有元数据或认证信息。
 
 - 首版开放 GPT；Claude 的协议转换代码仍被共享链路使用，不开放未经验收的 Claude Docker 账号创建。
 - 内核是容器主进程；固定入口设置代理出口规则后降权并移除全部能力。每个账号独立目录、持久 device_id、bridge 子网和地址，只开放绑定代理出口。内核 socket 不发布 TCP 端口。

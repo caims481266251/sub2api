@@ -590,6 +590,8 @@ type AccountSelectionResult struct {
 	// Live transfer moves it into the Live lease instead of double counting.
 	AccountRequestID string
 	WaitPlan         *AccountWaitPlan // nil means no wait allowed
+	// PreserveStickyBinding carries temporary spillover through slot waiting.
+	PreserveStickyBinding bool
 	// stickySessionHit 标记账号来自会话粘性绑定命中，供非高级调度路径回填决策标签。
 	stickySessionHit bool
 	// profitGate 携带本次选号真实生效的利润门（无门为 nil）。门安装在调度栈的

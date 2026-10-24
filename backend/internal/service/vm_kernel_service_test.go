@@ -330,6 +330,17 @@ func TestVMKernelUsesExistingGatewayTimeoutPolicy(t *testing.T) {
 	}
 }
 
+func TestVMKernelUsesConfiguredUpstreamTransport(t *testing.T) {
+	for _, policy := range []string{"", "prefer_websocket", "http"} {
+		cfg := &config.Config{VMKernel: config.VMKernelConfig{UpstreamTransport: policy}}
+		client := newVMKernelClient(cfg, PlatformOpenAI)
+		if client.UpstreamTransport != policy {
+			t.Fatalf("kernel transport not wired: %q", client.UpstreamTransport)
+		}
+		client.Close()
+	}
+}
+
 func TestVMKernelLifecycleFinalCredentialAndGroupFence(t *testing.T) {
 	for _, change := range []string{"credentials", "groups", "proxy"} {
 		t.Run(change, func(t *testing.T) {

@@ -58,7 +58,7 @@ func WithOpenAIGuardianParentAffinity(ctx context.Context, c *gin.Context, body 
 		return ctx
 	}
 
-	currentHash, legacyHash := deriveOpenAISessionHashes(parentID)
+	currentHash, legacyHash := deriveOpenAIRequestSessionHashes(c, parentID)
 	if currentHash == "" {
 		return ctx
 	}

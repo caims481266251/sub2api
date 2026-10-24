@@ -61,16 +61,29 @@ func vmKernelStringPointer(value string) *string {
 
 // Output presentation is downstream of the native attempt. It never initiates
 // a second attempt, selects an account, or records usage.
-func vmKernelHTTP(ctx context.Context, runtime *VMKernelService, c *gin.Context, account *Account, ingress, provider string, body []byte, stream bool, model string) (*vmkernel.Result, error) {
+func vmKernelHTTP(ctx context.Context, runtime *VMKernelService, c *gin.Context, account *Account, ingress, provider string, body []byte, stream bool, model string, gateways ...*OpenAIGatewayService) (*vmkernel.Result, error) {
 	if runtime == nil {
 		return nil, fmt.Errorf("VM kernel runtime is unavailable")
 	}
+	var gateway *OpenAIGatewayService
+	var staged http.Header
 	if provider == "responses" {
-		ctx = vmKernelResponsesHeaderContext(ctx, c, body)
+		gateway = &OpenAIGatewayService{}
+		if len(gateways) > 0 && gateways[0] != nil {
+			gateway = gateways[0]
+		}
+		ctx = gateway.vmKernelResponsesHeaderContext(ctx, c, account, body)
+		ctx = vmkernel.WithOnResponseHeaders(ctx, func(headers http.Header) {
+			stageOpenAICodexTurnState(&staged, headers)
+		})
 	}
 	emit := func(kind string, data []byte) error {
 		if c.Request.Context().Err() != nil {
 			return c.Request.Context().Err()
+		}
+		if gateway != nil && !c.Writer.Written() {
+			gateway.relayOpenAICodexTurnState(c, account, staged)
+			gateway.noteVMKernelTurnState(c, account, body, extractOpenAICodexTurnState(staged))
 		}
 		c.Header("Content-Type", "text/event-stream")
 		c.Header("Cache-Control", "no-cache")
@@ -96,6 +109,16 @@ func vmKernelHTTP(ctx context.Context, runtime *VMKernelService, c *gin.Context,
 				return err
 			}
 		}
+		if event.Type == vmkernel.CodexMetadataEvent {
+			if ingress != "responses" || !stream {
+				return nil
+			}
+			if err := emit(event.Type, data); err != nil {
+				return err
+			}
+			gateway.noteVMKernelTurnState(c, account, body, vmKernelMetadataState(data))
+			return nil
+		}
 		return presentation.event(event.Type, data)
 	})
 	if err != nil {
@@ -113,18 +136,49 @@ func vmKernelHTTP(ctx context.Context, runtime *VMKernelService, c *gin.Context,
 		result.Response = presentation.nativeResponse
 	}
 	if !stream {
+		if gateway != nil {
+			gateway.relayOpenAICodexTurnState(c, account, result.Headers)
+			gateway.noteVMKernelTurnState(c, account, body, extractOpenAICodexTurnState(result.Headers))
+		}
 		c.Data(http.StatusOK, "application/json", output)
 	}
 	return result, nil
 }
 
-func vmKernelResponsesHeaderContext(ctx context.Context, c *gin.Context, body []byte) context.Context {
+func (s *OpenAIGatewayService) vmKernelResponsesHeaderContext(ctx context.Context, c *gin.Context, account *Account, body []byte, turnState ...string) context.Context {
 	headers := make(http.Header)
-	if c != nil {
-		if beta := c.GetHeader("openai-beta"); beta != "" {
-			headers.Set("openai-beta", beta)
+	if c != nil && c.Request != nil {
+		for _, name := range vmkernel.CodexRequestHeaderNames {
+			if value := c.GetHeader(name); value != "" {
+				headers.Set(name, value)
+			}
 		}
 	}
+	applyCodexAccountIdentityHeaders(headers, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c))
+	// Prepared metadata is already account-scoped. Per-turn WS metadata takes
+	// precedence over the connection handshake; never namespace it twice.
+	for _, name := range []string{"x-codex-turn-metadata", "x-codex-installation-id", "x-codex-window-id"} {
+		if value := gjson.GetBytes(body, "client_metadata."+name); value.Type == gjson.String && value.String() != "" {
+			headers.Set(name, value.String())
+		}
+	}
+	if value := gjson.GetBytes(body, "client_metadata."+openAICodexTurnStateHeader); value.Type == gjson.String && value.String() != "" {
+		headers.Set(openAICodexTurnStateHeader, value.String())
+	}
+	s.guardVMKernelTurnState(c, account, body, headers)
+	if len(turnState) > 0 && turnState[0] != "" {
+		// Only state from this same session and generation-bound WS is supplied.
+		// It is newer than the handshake or a repeated client payload value.
+		headers.Set(openAICodexTurnStateHeader, turnState[0])
+	}
+	if session := vmKernelPreparedSession(body); session != "" {
+		headers.Set("session-id", session)
+		if raw := headers.Get(openAIWSTurnMetadataHeader); raw != "" {
+			headers.Set(openAIWSTurnMetadataHeader, vmKernelScopeTurnMetadataSession(raw, session))
+		}
+		ctx = vmkernel.WithSessionID(ctx, session)
+	}
+	headers.Del(responsesLiteHeader)
 	// Match the ordinary HTTP adapter's mapped GPT-5.5 Lite exception.
 	if gjson.GetBytes(body, "model").String() != "gpt-5.5" &&
 		((c != nil && isOpenAIResponsesLiteHeader(c.GetHeader(responsesLiteHeader))) || isOpenAIResponsesLiteWebSocketPayload(body)) {
@@ -218,6 +272,7 @@ func (s *GatewayService) forwardVMKernelMessages(ctx context.Context, c *gin.Con
 }
 
 func (s *OpenAIGatewayService) prepareVMKernelResponses(ctx context.Context, c *gin.Context, account *Account, body []byte, ingress, defaultMappedModel string) ([]byte, string, string, error) {
+	cacheSeed := vmKernelPromptCacheSeed(c, body, "")
 	beginUpstreamResponseModelObservation(c)
 	clearOpenAIResponsesNamespaceNames(c)
 	setCodexToolNameReverse(c, nil)
@@ -318,8 +373,8 @@ func (s *OpenAIGatewayService) prepareVMKernelResponses(ctx context.Context, c *
 		model = transformed.NormalizedModel
 	}
 	applyCodexClientMetadata(requestMap, account)
-	applyVMKernelPromptCacheKey(c, account, requestMap, vmKernelPromptCacheSeed(c, body, model))
 	applyCodexAccountIdentityClientMetadataMap(requestMap, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c))
+	applyVMKernelPromptCacheKey(c, account, requestMap, cacheSeed)
 	prepared, err = json.Marshal(requestMap)
 	if err != nil {
 		return nil, "", "", err
@@ -397,7 +452,7 @@ func (s *OpenAIGatewayService) forwardVMKernelResponses(ctx context.Context, c *
 		reportVMKernelPreparationError(c, ingress, err)
 		return nil, err
 	}
-	result, callErr := vmKernelHTTP(ctx, s.vmKernel, c, account, ingress, "responses", prepared, stream, original)
+	result, callErr := vmKernelHTTP(ctx, s.vmKernel, c, account, ingress, "responses", prepared, stream, original, s)
 	s.observeVMKernelOpenAIResult(ctx, c, account, model, result)
 	callErr = vmKernelBusinessError(ctx, result, callErr)
 	if callErr != nil {

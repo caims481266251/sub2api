@@ -348,6 +348,15 @@ func (s *OpenAIGatewayService) bindOpenAIStickySessionDuringSelection(ctx contex
 	return s.BindStickySession(ctx, groupID, sessionHash, accountID)
 }
 
+// BindStickySessionAfterSelection preserves temporary spillover even when
+// the handler acquires a slot after waiting outside the scheduler.
+func (s *OpenAIGatewayService) BindStickySessionAfterSelection(ctx context.Context, groupID *int64, sessionHash string, selection *AccountSelectionResult) error {
+	if selection == nil || selection.Account == nil || selection.PreserveStickyBinding {
+		return nil
+	}
+	return s.BindStickySessionAfterProfitAdmission(ctx, groupID, sessionHash, selection.Account.ID)
+}
+
 // BindStickySessionAfterProfitAdmission records the terminally admitted
 // account. Without a profit gate it preserves the pre-existing eager binding
 // behavior at the handler bind points. With a gate it never overwrites a

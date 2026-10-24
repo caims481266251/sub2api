@@ -65,7 +65,7 @@ def main():
               'socket_path': '/slot/run/kernel.sock', 'internal_token': token,
               'credential_path': '/slot/credentials/credential.json',
               'proxy_url': kernel_proxy_url, 'proxy_required': True,
-              'max_request_bytes': 33554432, 'upstream_transport': 'http',
+              'max_request_bytes': 33554432, 'upstream_transport': 'prefer_websocket',
               'client_features': False, 'analytics': False, 'test_endpoints': False}
     target = Path('/slot/run/codex-kernel.json')
     if target.is_symlink(): raise ValueError('config_path_invalid')

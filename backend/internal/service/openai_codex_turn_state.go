@@ -22,6 +22,7 @@ const openAICodexTurnStateHeader = "x-codex-turn-state"
 // 账号，出站守卫据此剥离已知异账号的回带值。
 type openAICodexTurnStateOrigin struct {
 	accountID int64
+	sessionID string // Docker-only resolved session; ordinary-account policy is unchanged.
 	expiresAt time.Time
 }
 

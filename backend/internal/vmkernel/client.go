@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -25,6 +26,11 @@ const MaxEventBytes = 16 << 20
 type Client struct {
 	ResponseHeaderTimeout time.Duration
 	CancelTimeout         time.Duration
+	// Set before serving requests. Empty uses vm2api's prefer_websocket default.
+	UpstreamTransport string
+	poolMu            sync.Mutex
+	pools             map[string]*kernelConnectionPool
+	closed            bool
 }
 
 func NewClient() *Client {
@@ -58,7 +64,7 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 	attemptID := hex.EncodeToString(random[:])
 	headers := map[string]string{}
 	if supplied, ok := ctx.Value(headersKey).(http.Header); ok {
-		for _, name := range []string{"anthropic-beta", "anthropic-version", "openai-beta", "x-openai-internal-codex-responses-lite"} {
+		for _, name := range append([]string{"anthropic-beta", "anthropic-version"}, CodexRequestHeaderNames...) {
 			if value := supplied.Get(name); value != "" {
 				headers[name] = value
 			}
@@ -73,15 +79,38 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 			sessionID = cacheKey
 		}
 		if request.DisablePromptCache {
-			sessionID = ""
 			delete(body, "prompt_cache_key")
 			delete(body, "prompt_cache_retention")
 		}
 		// vm2api sends the same resolved identity in all three places. Leaving
 		// session empty lets the kernel generate a new upstream session per call.
 		if sessionID != "" {
-			body["prompt_cache_key"], _ = json.Marshal(sessionID)
+			if !request.DisablePromptCache {
+				body["prompt_cache_key"], _ = json.Marshal(sessionID)
+			}
 			headers["session-id"] = sessionID
+		}
+		// Headers are the resolved/guarded context. Do not let an older body
+		// value bypass account provenance or override a newer WS turn-state.
+		var metadata map[string]json.RawMessage
+		_ = json.Unmarshal(body["client_metadata"], &metadata)
+		if metadata == nil {
+			metadata = map[string]json.RawMessage{}
+		}
+		if sessionID != "" {
+			metadata["session_id"], _ = json.Marshal(sessionID)
+		}
+		for _, name := range []string{"x-codex-turn-state", "x-codex-turn-metadata"} {
+			if value := headers[name]; value != "" {
+				metadata[name], _ = json.Marshal(value)
+			} else {
+				delete(metadata, name)
+			}
+		}
+		if len(metadata) > 0 {
+			body["client_metadata"], _ = json.Marshal(metadata)
+		} else {
+			delete(body, "client_metadata")
 		}
 		var model, tier string
 		_ = json.Unmarshal(body["model"], &model)
@@ -94,7 +123,14 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 			headers["x-codex-routing-hint"] = hint
 		}
 		envelope["session"] = map[string]string{"session_id": sessionID}
-		envelope["options"] = map[string]string{"upstream_transport": "http"}
+		policy := c.UpstreamTransport
+		if policy == "" {
+			policy = "prefer_websocket"
+		}
+		if policy != "http" && policy != "prefer_websocket" {
+			return nil, &AttemptError{Code: "kernel_transport_policy_invalid", SafeToRetry: true}
+		}
+		envelope["options"] = map[string]string{"upstream_transport": policy}
 	} else {
 		envelope["delivery_mode"] = "realtime"
 		envelope["preserve_cache_breakpoints"] = true
@@ -104,15 +140,11 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 	if err != nil {
 		return nil, err
 	}
-	transport := &http.Transport{
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "unix", binding.Socket)
-		},
-		ResponseHeaderTimeout: c.ResponseHeaderTimeout, MaxResponseHeaderBytes: 64 << 10,
-		DisableKeepAlives: true,
+	client, release, err := c.acquireConnectionPool(binding)
+	if err != nil {
+		return nil, err
 	}
-	defer transport.CloseIdleConnections()
-	client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	defer release()
 	var dispatched atomic.Bool
 	// Once a connection is obtained a write may partially reach the guest even
 	// without a WroteHeaders callback. Conservatively forbid replay from here.
@@ -121,6 +153,9 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 	if err != nil {
 		return nil, err
 	}
+	// Keep-alive must not introduce Transport's implicit body replay when an
+	// idle socket dies. A dispatched inference remains a single attempt.
+	req.GetBody = nil
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("TE", "trailers")
 	req.Header.Set("x-kin-internal-token", binding.Token)
@@ -136,6 +171,7 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 	}
 	defer resp.Body.Close()
 	copyPublicHeaders(result.Headers, resp.Header)
+	notifyResponseHeaders(ctx, result.Headers)
 	result.RequestID = result.Headers.Get("x-request-id")
 	if resp.StatusCode != http.StatusOK {
 		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, (64<<10)+1))
@@ -162,6 +198,31 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 		// responses settle the handler without becoming provider auth errors.
 		return result, &AttemptError{Code: fmt.Sprintf("kernel_status_%d", resp.StatusCode)}
 	}
+	// Stage metadata until a public event is committed. A rejected attempt must
+	// not turn into HTTP 200 just because the kernel returned transport headers.
+	var pendingMetadata *Event
+	lastMetadataState := ""
+	stageMetadata := func() {
+		state := result.Headers.Get("x-codex-turn-state")
+		if request.Protocol != "responses" || state == "" || state == lastMetadataState {
+			return
+		}
+		lastMetadataState = state
+		raw, _ := json.Marshal(map[string]any{"type": CodexMetadataEvent, "headers": map[string]string{"x-codex-turn-state": state}})
+		pendingMetadata = &Event{Type: CodexMetadataEvent, Data: raw}
+	}
+	flushMetadata := func() error {
+		if pendingMetadata == nil {
+			return nil
+		}
+		event := *pendingMetadata
+		pendingMetadata = nil
+		if emit != nil {
+			return emit(event)
+		}
+		return nil
+	}
+	stageMetadata()
 	usage := map[string]json.RawMessage{}
 	observeHeaders(result, usage, resp.Header)
 	var terminals []Event
@@ -183,8 +244,15 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 		if json.Unmarshal(event.Data, &fields) != nil {
 			return errors.New("kernel_event_invalid")
 		}
-		if event.Type == "" {
-			_ = json.Unmarshal(fields["type"], &event.Type)
+		// The fixed kernel wraps WebSocket events in the generic SSE event
+		// name "response"; their concrete type lives in the JSON payload.
+		// Preserve explicitly typed SSE events and never treat the wrapper
+		// itself as proof of completion.
+		if event.Type == "" || event.Type == "response" {
+			var payloadType string
+			if json.Unmarshal(fields["type"], &payloadType) == nil && payloadType != "" {
+				event.Type = payloadType
+			}
 		}
 		for _, nested := range []string{"message", "response"} {
 			if raw := fields[nested]; len(raw) > 0 {
@@ -218,7 +286,7 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 			}
 		}
 		observeObject(result, usage, fields)
-		if event.Type == "response_headers" {
+		if event.Type == "response_headers" || event.Type == "codex.response.metadata" {
 			var rawHeaders map[string]json.RawMessage
 			if json.Unmarshal(fields["headers"], &rawHeaders) == nil {
 				h := make(http.Header)
@@ -229,7 +297,9 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 					}
 				}
 				copyPublicHeaders(result.Headers, h)
+				notifyResponseHeaders(ctx, result.Headers)
 				observeHeaders(result, usage, h)
+				stageMetadata()
 			}
 			return nil
 		}
@@ -275,6 +345,9 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 			terminals = append(terminals, event)
 			return nil
 		}
+		if err := flushMetadata(); err != nil {
+			return err
+		}
 		if emit != nil {
 			return emit(event)
 		}
@@ -307,6 +380,8 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 		err = readEvents(resp.Body, consume)
 	}
 	copyPublicHeaders(result.Headers, resp.Trailer)
+	notifyResponseHeaders(ctx, result.Headers)
+	stageMetadata()
 	for _, name := range []string{"X-Usage", "X-Kin-Usage"} {
 		if value := resp.Trailer.Get(name); value != "" {
 			mergeUsage(usage, json.RawMessage(value))
@@ -339,6 +414,10 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 	if result.Terminal == "" || !result.HasUsage || result.ResponseID == "" || (request.Protocol == "messages" && stopReason == "") {
 		result.CancelStatus, result.CancelHTTPStatus = c.cancel(binding, attemptID)
 		return result, &AttemptError{Code: "kernel_completion_metadata_missing"}
+	}
+	if err := flushMetadata(); err != nil {
+		result.ClientDisconnect = true
+		return result, &AttemptError{Code: "kernel_downstream_write_failed", Cause: err}
 	}
 	for _, event := range terminals {
 		if emit != nil {
@@ -583,7 +662,7 @@ func publicEvent(protocol, kind string) bool {
 func copyPublicHeaders(dst, src http.Header) {
 	for key, values := range src {
 		lower := strings.ToLower(key)
-		if lower == "x-request-id" || lower == "retry-after" || (strings.HasPrefix(lower, "x-codex-primary-") || strings.HasPrefix(lower, "x-codex-secondary-")) || strings.HasPrefix(lower, "anthropic-ratelimit-") || strings.HasPrefix(lower, "x-ratelimit-") {
+		if lower == "x-codex-turn-state" || lower == "x-request-id" || lower == "retry-after" || (strings.HasPrefix(lower, "x-codex-primary-") || strings.HasPrefix(lower, "x-codex-secondary-")) || strings.HasPrefix(lower, "anthropic-ratelimit-") || strings.HasPrefix(lower, "x-ratelimit-") {
 			dst[key] = append([]string(nil), values...)
 		}
 	}

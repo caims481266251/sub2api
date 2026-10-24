@@ -150,6 +150,7 @@ type VMKernelService struct {
 // Use the ordinary gateway's timeout policy; Docker mode has no extra deadline.
 func newVMKernelClient(cfg *config.Config, platform string) *vmkernel.Client {
 	client := vmkernel.NewClient()
+	client.UpstreamTransport = cfg.VMKernel.UpstreamTransport
 	seconds := cfg.Gateway.ResponseHeaderTimeout
 	if platform == PlatformOpenAI {
 		seconds = cfg.Gateway.OpenAIResponseHeaderTimeout
@@ -224,6 +225,9 @@ func (s *VMKernelService) Stop() {
 		vmKernelServices.CompareAndDelete(s.platform, s)
 		if s.helper != nil {
 			s.helper.CloseIdleConnections()
+		}
+		if s.kernel != nil {
+			s.kernel.Close()
 		}
 		if s.releaseCoordinator != nil {
 			s.releaseCoordinator()
@@ -833,7 +837,9 @@ func (s *VMKernelService) execute(ctx context.Context, selected *Account, protoc
 	return result, err
 }
 func (s *VMKernelService) call(ctx context.Context, state *vmruntime.State, account *Account, protocol string, body []byte, emit func(vmkernel.Event) error) (*vmkernel.Result, error) {
-	return s.kernel.Execute(ctx, vmkernel.Binding{Socket: state.KernelSocket, Token: state.InternalToken, InstanceID: state.InstanceID, Generation: state.Generation}, vmkernel.Request{Protocol: protocol, Body: body, DisablePromptCache: account.IsVMKernel() && account.Platform == PlatformOpenAI && !account.DockerRequestCacheEnabled()}, emit)
+	return s.kernel.Execute(ctx, vmkernel.Binding{Socket: state.KernelSocket, Token: state.InternalToken, InstanceID: state.InstanceID, Generation: state.Generation,
+		AccountID: account.ID, GuestBootID: state.GuestBootID, CredentialRevision: state.AppliedCredentialRevision, ProxyRevision: state.AppliedProxyRevision},
+		vmkernel.Request{Protocol: protocol, Body: body, DisablePromptCache: account.IsVMKernel() && account.Platform == PlatformOpenAI && !account.DockerRequestCacheEnabled()}, emit)
 }
 func vmAccountRouteRevision(a *Account) [32]byte {
 	if a == nil {

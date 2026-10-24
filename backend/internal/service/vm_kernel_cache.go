@@ -1,14 +1,10 @@
 package service
 
 import (
-	"encoding/json"
 	"fmt"
-	"strings"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/gin-gonic/gin"
-	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
 
@@ -32,81 +28,51 @@ func ValidateDockerRequestCacheExtra(extra map[string]any) error {
 	return nil
 }
 
-// Match vm2api's contract: a stable caller session (or first-user seed) must
-// reach both the prompt cache key and the kernel session, across HTTP requests
-// and WS reconnects. Request IDs and connection IDs are never cache identities.
-func vmKernelPromptCacheSeed(c *gin.Context, body []byte, model string) string {
-	if key := strings.TrimSpace(gjson.GetBytes(body, "prompt_cache_key").String()); key != "" {
-		return key
-	}
-	if key := explicitOpenAIHeaderSessionID(c); key != "" {
-		return key
-	}
-	for _, path := range []string{"client_metadata.session_id", "conversation_id", "session_id"} {
-		if key := strings.TrimSpace(gjson.GetBytes(body, path).String()); key != "" {
-			return key
-		}
-	}
-	if gjson.GetBytes(body, "messages").IsArray() {
-		var req apicompat.ChatCompletionsRequest
-		if json.Unmarshal(body, &req) == nil {
-			return deriveCompatPromptCacheKey(&req, model)
-		}
-	}
-	input := gjson.GetBytes(body, "input")
-	seed := ""
-	if input.Type == gjson.String {
-		seed = input.String()
-	} else {
-		for _, item := range input.Array() {
-			if item.Get("role").String() == "user" {
-				content := item.Get("content")
-				if content.Type == gjson.String {
-					seed = content.String()
-				} else {
-					seed = normalizeCompatSeedJSON(json.RawMessage(content.Raw))
-				}
-				if strings.TrimSpace(seed) != "" {
-					break
-				}
-			}
-		}
-	}
-	if seed == "" {
-		seed = gjson.GetBytes(body, "instructions").String()
-	}
-	if seed == "" {
-		return ""
-	}
-	return "container_" + hashSensitiveValueForLog(seed)
+// Scheduling and Docker forwarding resolve the same raw conversation seed.
+// The inbound model is already part of the common content fallback.
+func vmKernelPromptCacheSeed(c *gin.Context, body []byte, _ string) string {
+	return openAIRequestSessionSeed(c, body)
 }
 
 func applyVMKernelPromptCacheKey(c *gin.Context, account *Account, request map[string]any, seed string) {
-	if !account.DockerRequestCacheEnabled() {
-		delete(request, "prompt_cache_key")
-		delete(request, "prompt_cache_retention")
-		return
-	}
 	if seed == "" {
 		return
 	}
-	// Use the ordinary account/API-key namespace, exactly once. Older imported
-	// accounts without upstream identity still need tenant and local-row isolation.
-	if codexAccountIdentityNamespace(account) == "" {
-		seed = generateSessionUUID(isolateOpenAISessionID(getAPIKeyIDFromContext(c), fmt.Sprintf("container:%d:%s", account.ID, seed)))
+	// Resolve after the ordinary metadata rewrite. Optional metadata must not
+	// change the derivation kind. Local account IDs also isolate containers that
+	// import the same upstream credential; API keys retain tenant isolation.
+	session := deriveStableUUIDv4(fmt.Sprintf("sub2api:docker-session:v1:key:%d:account:%d:credential:%s:seed:%s",
+		getAPIKeyIDFromContext(c), account.ID, codexAccountIdentityNamespace(codexAccountIdentitySource(c, account)), seed))
+	metadata, _ := request["client_metadata"].(map[string]any)
+	if metadata == nil {
+		metadata = map[string]any{}
 	}
-	request["prompt_cache_key"] = seed
+	metadata["session_id"] = session
+	if _, exists := metadata["session-id"]; exists {
+		metadata["session-id"] = session
+	}
+	if raw, ok := metadata[openAIWSTurnMetadataHeader].(string); ok {
+		metadata[openAIWSTurnMetadataHeader] = vmKernelScopeTurnMetadataSession(raw, session)
+	}
+	request["client_metadata"] = metadata
+	delete(request, "conversation_id")
+	delete(request, "session_id")
+	// Inbound affinity aliases are consumed here; the upstream Responses
+	// schema does not accept a top-level thread_id.
+	delete(request, "thread_id")
+	if account.DockerRequestCacheEnabled() {
+		request["prompt_cache_key"] = session
+	} else {
+		delete(request, "prompt_cache_key")
+		delete(request, "prompt_cache_retention")
+	}
 }
 
 // Save the unscoped seed with replay history so a continuation without repeated
 // session headers inherits it and the account namespace is not applied twice.
 func vmKernelReplayCacheBody(c *gin.Context, account *Account, body []byte, model string) []byte {
-	if !account.DockerRequestCacheEnabled() {
-		// Conversation history still persists; only cache hints are omitted.
-		next, _ := sjson.DeleteBytes(body, "prompt_cache_key")
-		next, _ = sjson.DeleteBytes(next, "prompt_cache_retention")
-		return next
-	}
+	// Internal history retains the raw seed even with caching disabled. Cache
+	// hints are removed at dispatch, not from conversation identity/replay.
 	if seed := vmKernelPromptCacheSeed(c, body, model); seed != "" {
 		if next, err := sjson.SetBytes(body, "prompt_cache_key", seed); err == nil {
 			return next

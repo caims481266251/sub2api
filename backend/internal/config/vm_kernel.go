@@ -15,6 +15,8 @@ type VMKernelConfig struct {
 	Template     string `mapstructure:"template"`
 	CPU          int    `mapstructure:"cpu"`
 	MemoryMiB    int    `mapstructure:"memory_mib"`
+	// Per-request kernel policy; it does not control the public WS ingress.
+	UpstreamTransport string `mapstructure:"upstream_transport"`
 }
 
 func (c *Config) validateVMKernel() error {
@@ -22,6 +24,9 @@ func (c *Config) validateVMKernel() error {
 		return nil
 	}
 	vm := c.VMKernel
+	if vm.UpstreamTransport != "" && vm.UpstreamTransport != "http" && vm.UpstreamTransport != "prefer_websocket" {
+		return fmt.Errorf("vm_kernel.upstream_transport must be http or prefer_websocket")
+	}
 	if !filepath.IsAbs(vm.HelperSocket) || strings.TrimSpace(vm.HelperSocket) != vm.HelperSocket || strings.ContainsRune(vm.HelperSocket, '\x00') {
 		return fmt.Errorf("vm_kernel.helper_socket must be an absolute socket path")
 	}
