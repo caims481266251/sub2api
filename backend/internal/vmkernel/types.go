@@ -15,6 +15,8 @@ type Event struct {
 }
 
 type Result struct {
+	// ProviderHTTPFailure distinguishes a verified HTTP rejection from an in-stream error.
+	ProviderHTTPFailure       bool
 	DispatchedCredentialsHash string `json:"-"`
 	// Settled means the attempt ended at the guest, including a provider rejection.
 	// It is deliberately independent of successful completion and usage presence.

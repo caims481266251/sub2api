@@ -55,8 +55,8 @@ func vmKernelBusinessError(ctx context.Context, result *vmkernel.Result, err err
 	}
 }
 
-// The ordinary stream error classifier owns provider authentication, rate-limit
-// and cooling policies. Kernel HTTP authentication errors are not provider 401s.
+// The ordinary HTTP/stream error handlers own provider authentication, rate-limit
+// and cooling policies. Local kernel authentication failures are not provider 401s.
 func (s *OpenAIGatewayService) observeVMKernelOpenAIResult(ctx context.Context, c *gin.Context, account *Account, model string, result *vmkernel.Result) {
 	if result == nil {
 		return
@@ -72,7 +72,16 @@ func (s *OpenAIGatewayService) observeVMKernelOpenAIResult(ctx context.Context, 
 		}
 	}
 	if len(result.ErrorEvent) != 0 && s.rateLimitService != nil {
-		s.handleOpenAIWSFailureAccountSideEffects(ctx, account, model, result.Headers, result.ErrorEvent)
+		if result.ProviderHTTPFailure {
+			// Preserve HTTP quota headers just as the ordinary HTTP path does.
+			// Stream-only semantic filtering is not applicable to this rejection,
+			// even when the public ingress is WebSocket or SSE.
+			status := vmKernelProviderErrorStatus(result.ErrorEvent)
+			s.rateLimitService.observeQualityStatus(ctx, account, status)
+			s.handleOpenAIAccountUpstreamError(ctx, account, status, result.Headers, result.ErrorEvent, model)
+		} else {
+			s.handleOpenAIWSFailureAccountSideEffects(ctx, account, model, result.Headers, result.ErrorEvent)
+		}
 	}
 }
 

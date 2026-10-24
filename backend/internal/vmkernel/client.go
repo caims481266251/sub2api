@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptrace"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -145,6 +146,7 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 			}
 			if event != nil {
 				result.ErrorEvent = event
+				result.ProviderHTTPFailure = true
 				result.Settled = true
 				// Settlement means the kernel handler returned a complete failure,
 				// never that the provider performed no work or retry is safe.
@@ -350,15 +352,18 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 // Local scheduler errors settle the attempt but must not become provider quota
 // or authentication feedback. Settlement alone never authorizes replay.
 func settledHTTPFailure(raw []byte, terminal string, httpStatus int) (json.RawMessage, string) {
+	type providerError struct {
+		Status          int             `json:"status"`
+		StatusCode      int             `json:"status_code"`
+		Code            string          `json:"code"`
+		Type            string          `json:"type"`
+		Message         string          `json:"message"`
+		ResetsAt        json.RawMessage `json:"resets_at"`
+		ResetsInSeconds json.RawMessage `json:"resets_in_seconds"`
+	}
 	var envelope struct {
-		Status int `json:"status"`
-		Error  struct {
-			Status     int    `json:"status"`
-			StatusCode int    `json:"status_code"`
-			Code       string `json:"code"`
-			Type       string `json:"type"`
-			Message    string `json:"message"`
-		} `json:"error"`
+		Status int           `json:"status"`
+		Error  providerError `json:"error"`
 	}
 	if json.Unmarshal(raw, &envelope) != nil {
 		return nil, ""
@@ -401,6 +406,42 @@ func settledHTTPFailure(raw []byte, terminal string, httpStatus int) (json.RawMe
 		if status >= 400 && status <= 599 {
 			fields["status"] = status
 			break
+		}
+	}
+	// The Codex kernel embeds the original quota body in this exact wrapper.
+	// Only unwrap after provider provenance and status have been established;
+	// local capacity/auth/proxy failures must never become account quota feedback.
+	if fields["status"] == http.StatusTooManyRequests && e.Code != "upstream_transport" && e.Code != "upstream_transport_error" {
+		quota := e
+		const prefix = "upstream status 429: "
+		if strings.HasPrefix(e.Message, prefix) {
+			var nested struct {
+				Error json.RawMessage `json:"error"`
+			}
+			if json.Unmarshal([]byte(strings.TrimPrefix(e.Message, prefix)), &nested) == nil && len(nested.Error) > 0 {
+				var inner providerError
+				if json.Unmarshal(nested.Error, &inner) == nil && (inner.Type == "usage_limit_reached" || inner.Type == "rate_limit_exceeded") {
+					quota = inner
+					fields["message"] = "Upstream quota limit reached"
+				}
+			}
+		}
+		quotaType := quota.Type
+		if quotaType != "usage_limit_reached" && quotaType != "rate_limit_exceeded" {
+			quotaType = quota.Code
+		}
+		if quotaType == "usage_limit_reached" || quotaType == "rate_limit_exceeded" {
+			fields["type"] = quotaType
+			for key, raw := range map[string]json.RawMessage{"resets_at": quota.ResetsAt, "resets_in_seconds": quota.ResetsInSeconds} {
+				// Forward only integral reset metadata, never arbitrary diagnostics.
+				value := string(raw)
+				if len(raw) > 0 && raw[0] == '"' {
+					_ = json.Unmarshal(raw, &value)
+				}
+				if n, err := strconv.ParseInt(value, 10, 64); err == nil && n >= 0 && n <= int64((1<<63-1)/time.Second) {
+					fields[key] = n
+				}
+			}
 		}
 	}
 	out, _ := json.Marshal(map[string]any{"type": "error", "error": fields})

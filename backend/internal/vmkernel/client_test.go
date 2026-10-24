@@ -355,10 +355,13 @@ func TestClientCodexHTTPFailureClassification(t *testing.T) {
 				t.Fatal("safe response metadata lost or private header retained")
 			}
 			if tc.providerStatus == 0 {
-				if len(result.ErrorEvent) != 0 || len(result.Response) != 0 {
+				if result.ProviderHTTPFailure || len(result.ErrorEvent) != 0 || len(result.Response) != 0 {
 					t.Fatal("local or unknown rejection became provider feedback")
 				}
 				return
+			}
+			if !result.ProviderHTTPFailure {
+				t.Fatal("verified HTTP failure lost its transport classification")
 			}
 			var event struct {
 				Type  string `json:"type"`
@@ -469,5 +472,43 @@ func TestClientCodexCacheSessionEnvelopeMatchesVM2API(t *testing.T) {
 	}
 	if identities[0] != identities[1] || attempts[0] == attempts[1] {
 		t.Fatal("session must persist while attempt IDs remain distinct")
+	}
+}
+
+func TestSettledHTTPQuotaMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		name, body      string
+		reset, relative int64
+	}{
+		{"direct numeric", `{"error":{"code":"usage_limit_reached","type":"api_error","resets_at":1900000000,"resets_in_seconds":14716}}`, 1900000000, 14716},
+		{"direct strings", `{"error":{"code":"provider_error","type":"rate_limit_exceeded","resets_at":"1900000000","resets_in_seconds":"14716"}}`, 1900000000, 14716},
+		{"observed nested quota", `{"error":{"code":"usage_limit_reached","type":"api_error","message":"upstream status 429: {\"error\":{\"type\":\"usage_limit_reached\",\"resets_at\":1900000000,\"resets_in_seconds\":14716,\"message\":\"private-diagnostic\",\"credential\":\"private-secret\"}}"}}`, 1900000000, 14716},
+		{"invalid resets", `{"error":{"code":"usage_limit_reached","resets_at":{},"resets_in_seconds":-1}}`, 0, 0},
+		{"fractional resets", `{"error":{"code":"usage_limit_reached","resets_at":123.5,"resets_in_seconds":"9223372036854775807"}}`, 0, 0},
+		{"no arbitrary message extraction", `{"error":{"code":"usage_limit_reached","message":"diagnostic upstream status 429: {\"error\":{\"type\":\"usage_limit_reached\",\"resets_at\":1900000000}}"}}`, 0, 0},
+		{"unknown inner type", `{"error":{"code":"usage_limit_reached","message":"upstream status 429: {\"error\":{\"type\":\"unknown\",\"resets_at\":1900000000}}"}}`, 0, 0},
+		{"transport not quota", `{"error":{"code":"upstream_transport","resets_at":1900000000}}`, 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, code := settledHTTPFailure([]byte(tc.body), "", 429)
+			if code != "" || len(raw) == 0 {
+				t.Fatalf("missing provider event: %s", code)
+			}
+			var event struct {
+				Error struct {
+					ResetsAt        int64 `json:"resets_at"`
+					ResetsInSeconds int64 `json:"resets_in_seconds"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal(raw, &event); err != nil {
+				t.Fatal(err)
+			}
+			if event.Error.ResetsAt != tc.reset || event.Error.ResetsInSeconds != tc.relative {
+				t.Fatalf("reset metadata mismatch: %s", raw)
+			}
+			if bytes.Contains(raw, []byte("private-")) {
+				t.Fatal("embedded private diagnostic leaked")
+			}
+		})
 	}
 }
