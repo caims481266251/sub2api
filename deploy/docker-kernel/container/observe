@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import socket
 import subprocess
-from common import projection, process_identity, read
+from common import projection, process_identity, read, verify_kernel_isolation, verify_kernel_identity_receipt
 
 
 class LocalHTTP(http.client.HTTPConnection):
@@ -36,6 +36,10 @@ def main():
     subprocess.run(['/usr/local/lib/sub2-container/firewall','--check'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if read('/slot/run/codex-kernel.json').get('proxy_url') == 'socks5h://127.0.0.1:1081':
         check_proxy_bridge()
+    verify_kernel_isolation(Path('/proc/1/status').read_text(),
+                            read('/slot/run/codex-kernel.json'),
+                            read('/slot/run/instance.json'),
+                            Path('/etc/machine-id').read_text(), socket.gethostname())
     process = process_identity()
     token = Path('/slot/run/internal.token').read_text().strip()
     conn = LocalHTTP('kernel')
@@ -43,6 +47,7 @@ def main():
     response = conn.getresponse(); health = json.loads(response.read(1048576)); conn.close()
     if response.status != 200 or health.get('healthy',health.get('ok',False)) is not True or process_identity() != process:
         raise ValueError('kernel_not_ready')
+    verify_kernel_identity_receipt(health, read('/slot/run/codex-kernel.json'))
     # Keep admission fencing separate from process health. A pending credential
     # or proxy projection does not make a responding local kernel unhealthy.
     applied = False

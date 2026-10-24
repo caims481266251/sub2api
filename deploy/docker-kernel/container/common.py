@@ -34,3 +34,33 @@ def process_identity():
         raise ValueError('wrong_kernel_process')
     stat = Path('/proc/1/stat').read_text().rsplit(')', 1)[1].split()
     return stat[19]
+
+
+def verify_kernel_isolation(status, config, state, machine_id, hostname):
+    """Verify local execution evidence; this does not claim upstream identity."""
+    fields = dict(line.split(":", 1) for line in status.splitlines() if ":" in line)
+    for name in ("Uid", "Gid"):
+        if fields.get(name, "").split() != ["10001"] * 4:
+            raise ValueError("kernel_user_mismatch")
+    for name in ("CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"):
+        if int(fields.get(name, "-1").strip(), 16) != 0:
+            raise ValueError("kernel_capabilities_mismatch")
+    if fields.get("NoNewPrivs", "").strip() != "1":
+        raise ValueError("kernel_privileges_mismatch")
+    if (config.get("device_id") != state["client_identity"]["device_id"]
+            or config.get("vm_id") != state["instance_id"]
+            or config.get("credential_path") != "/slot/credentials/credential.json"
+            or config.get("socket_path") != "/slot/run/kernel.sock"
+            or config.get("proxy_required") is not True
+            or machine_id.strip() != state["identity"]["machine_id"].replace("-", "")
+            or hostname != state["identity"]["hostname"]):
+        raise ValueError("kernel_identity_mismatch")
+
+
+def verify_kernel_identity_receipt(health, config):
+    # The fixed kernel reports the identity it loaded. This is stronger than a
+    # config-file checksum, but still not proof of an upstream HTTP fingerprint.
+    if (health.get("device_id") != config.get("device_id")
+            or health.get("vm_id") != config.get("vm_id")
+            or not health.get("device_id") or not health.get("vm_id")):
+        raise ValueError("kernel_identity_receipt_mismatch")

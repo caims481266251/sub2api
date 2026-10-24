@@ -51,10 +51,16 @@ func TestContainerPreflightUsesNoVM(t *testing.T) {
 type containerObservationCommands struct {
 	container  containerInspect
 	generation uint64
+	network    networkInspect
 }
 
 func (f *containerObservationCommands) Run(_ context.Context, args ...string) ([]byte, error) {
 	switch args[0] {
+	case "network":
+		if args[1] == "ls" {
+			return []byte(f.network.Name), nil
+		}
+		return json.Marshal([]networkInspect{f.network})
 	case "container":
 		return []byte(f.container.ID), nil
 	case "inspect":
@@ -81,14 +87,23 @@ func TestContainerObservationFencesProcessAndRejectsOldVM(t *testing.T) {
 	}
 	defer listener.Close()
 	image := "sha256:" + strings.Repeat("a", 64)
-	f := &containerObservationCommands{generation: 2}
+	fixture, container, template := isolationFixture(t, dir)
+	nd, networkState, nf := networkDriverFixture()
+	if _, err := nd.ensureNetwork(context.Background(), networkState); err != nil {
+		t.Fatal(err)
+	}
+	fixture.Network = networkState.Network
+	container.HostConfig.NetworkMode = fixture.Network.NetworkName
+	container.NetworkSettings.Networks = map[string]containerNetworkEndpoint{fixture.Network.NetworkName: {IPAddress: fixture.Network.Address, NetworkID: nf.network.ID, MacAddress: fixture.Identity.MAC}}
+	f := &containerObservationCommands{generation: 2, container: container, network: *nf.network}
 	f.container.ID = "container-1"
 	f.container.State.Running = true
 	f.container.State.StartedAt = "2026-10-23T00:00:00Z"
 	f.container.Config.Image = image
 	f.container.Config.Labels = map[string]string{"sub2.vm.instance": "instance-1", "sub2.vm.account": "42", "sub2.vm.runtime": "container-v1", "sub2.vm.service-gid": "0"}
-	d := &DockerDriver{Commands: f, Templates: map[string]Template{"docker": {Runtime: "container-v1", Image: image}}}
-	s := State{AccountID: 42, InstanceID: "instance-1", Generation: 2, Spec: Spec{Template: "docker"}}
+	f.network.Labels["sub2.vm.instance"] = "instance-1"
+	d := &DockerDriver{Commands: f, Templates: map[string]Template{"docker": {Runtime: "container-v1", Image: image, PayloadDir: template.PayloadDir}}}
+	s := State{AccountID: 42, InstanceID: "instance-1", Generation: 2, Spec: Spec{Template: "docker"}, Identity: fixture.Identity, Network: fixture.Network}
 	first, err := d.Inspect(context.Background(), s, dir)
 	if err != nil || !first.KernelReady || first.ActualAccelerator != "docker" {
 		t.Fatalf("%+v %v", first, err)
@@ -103,6 +118,18 @@ func TestContainerObservationFencesProcessAndRejectsOldVM(t *testing.T) {
 	if err != nil || !stale.Healthy || stale.KernelReady {
 		t.Fatal("configuration drift must block admission without inventing a process fault", err)
 	}
+
+	f.container.HostConfig.ReadonlyRootfs = false
+	if _, err := d.Inspect(context.Background(), s, dir); errorCode(err) != "runtime_isolation_mismatch" {
+		t.Fatal("unsafe container remained observable as ready", err)
+	}
+	if _, err := d.Ensure(context.Background(), s, dir); errorCode(err) != "runtime_isolation_mismatch" {
+		t.Fatal("unsafe container adopted on restart", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "run", "instance.json")); !os.IsNotExist(err) {
+		t.Fatal("projection was written before isolation validation", err)
+	}
+	f.container.HostConfig.ReadonlyRootfs = true
 	f.container.Config.Labels["sub2.vm.runtime"] = "upstream-v1"
 	old, err := d.Inspect(context.Background(), s, dir)
 	if err != nil || old.KernelReady || old.Running {

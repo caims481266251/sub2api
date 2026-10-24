@@ -99,6 +99,12 @@ func (d *DockerDriver) containerEnsure(ctx context.Context, s State, dir string)
 			return "", fault("runtime_policy_conflict")
 		}
 	}
+	// Inspect before touching any existing projection or starting a process.
+	if c != nil {
+		if err := checkContainerIsolation(s, c, dir, t); err != nil {
+			return "", err
+		}
+	}
 	if err := writeInstanceProjection(dir, s, d.ServiceGID); err != nil {
 		return "", err
 	}
@@ -130,6 +136,16 @@ func (d *DockerDriver) containerEnsure(ctx context.Context, s State, dir string)
 	}
 	if s.Network == nil {
 		return "", fault("network_lease_missing")
+	}
+	network, err := d.inspectNetwork(ctx, s.Network.NetworkName)
+	if err != nil {
+		return "", err
+	}
+	if network == nil {
+		return "", fault("network_configuration_unconfirmed")
+	}
+	if err := checkNetworkMembers(network, ""); err != nil {
+		return "", err
 	}
 	machineID := filepath.Join(dir, "run", "machine-id")
 	if err := atomicBytes(machineID, []byte(strings.ReplaceAll(s.Identity.MachineID, "-", "")+"\n")); err != nil {
@@ -196,6 +212,9 @@ func (d *DockerDriver) containerInspect(ctx context.Context, s State, dir string
 	}
 	if c.Config.Labels["sub2.vm.service-gid"] != fmt.Sprint(d.ServiceGID) {
 		return Observation{}, fault("runtime_policy_conflict")
+	}
+	if err := checkContainerIsolation(s, c, dir, t); err != nil {
+		return Observation{}, err
 	}
 	if err := d.checkContainerNetwork(ctx, s, c); err != nil {
 		return Observation{}, err

@@ -190,3 +190,28 @@ func TestDockerStoppedNetworkValidatesIntentBeforeStart(t *testing.T) {
 		t.Fatal("missing static address accepted")
 	}
 }
+
+func TestNetworkRejectsForeignMembersAndMAC(t *testing.T) {
+	d, s, f := networkDriverFixture()
+	s.Identity.MAC = "02:11:22:33:44:55"
+	if _, err := d.ensureNetwork(context.Background(), s); err != nil {
+		t.Fatal(err)
+	}
+	c := &containerInspect{ID: "own-container"}
+	c.NetworkSettings.Networks = map[string]containerNetworkEndpoint{s.Network.NetworkName: {IPAddress: s.Network.Address, NetworkID: f.network.ID, MacAddress: s.Identity.MAC}}
+	f.network.Containers[c.ID] = json.RawMessage(`{}`)
+	if err := d.checkContainerNetwork(context.Background(), s, c); err != nil {
+		t.Fatal(err)
+	}
+	f.network.Containers["foreign"] = json.RawMessage(`{}`)
+	if err := d.checkContainerNetwork(context.Background(), s, c); errorCode(err) != "runtime_network_foreign_member" {
+		t.Fatal(err)
+	}
+	delete(f.network.Containers, "foreign")
+	ep := c.NetworkSettings.Networks[s.Network.NetworkName]
+	ep.MacAddress = "02:00:00:00:00:01"
+	c.NetworkSettings.Networks[s.Network.NetworkName] = ep
+	if err := d.checkContainerNetwork(context.Background(), s, c); errorCode(err) != "runtime_network_mismatch" {
+		t.Fatal(err)
+	}
+}

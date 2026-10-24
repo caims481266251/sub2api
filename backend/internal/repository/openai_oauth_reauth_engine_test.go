@@ -35,3 +35,17 @@ func TestOpenAIOAuthReauthEngineLegacyClaimFiltersBeforeLocking(t *testing.T) {
 	require.Nil(t, claim)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+func TestContainerReauthEngineRoutesLocallyBeforeClaim(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+	repo := &openAIOAuthReauthRepository{db: db}
+	mock.ExpectQuery("(?s)CASE WHEN oauth_profile.*OR EXISTS.*FROM accounts AS account.*account.id = openai_oauth_reauth_tasks.account_id.*account.execution_mode = 'docker_kernel'.*THEN 'local_worker'.*ANY.*FOR UPDATE SKIP LOCKED").
+		WithArgs("failed", "failed", "callback_processing", int64(1800), "queued", "running", "starting", "local-worker", "password_totp", `{"local_worker"}`, "session_studio").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+	claim, err := repo.ClaimNextTaskForRuntime(context.Background(), "local-worker", 30*time.Minute, "password_totp", []string{"local_worker"}, "session_studio")
+	require.NoError(t, err)
+	require.Nil(t, claim)
+	require.NoError(t, mock.ExpectationsWereMet())
+}

@@ -113,7 +113,7 @@ class OpenAIOAuthReauthWorkerTest(unittest.TestCase):
             with patch.dict(os.environ, env, clear=True):
                 config = WorkerConfig.from_env()
                 self.assertIsNone(config.protocol_root)
-                self.assertEqual(config.tosub2_root, Path(root))
+                self.assertEqual(config.tosub2_root, Path(root).resolve())
 
     def test_rejects_missing_login_runtimes(self):
         with patch.dict(os.environ, {"OPENAI_REAUTH_WORKER_TOKEN": "x" * 32}, clear=True):
@@ -152,7 +152,7 @@ class OpenAIOAuthReauthWorkerTest(unittest.TestCase):
             progress=lambda *_args: None,
         )
         result = SimpleNamespace(returncode=1, stdout="synthetic-secret", stderr="synthetic-secret")
-        with patch.dict(os.environ, {"OPENAI_REAUTH_WORKER_TOKEN": "synthetic-worker-token"}), patch(
+        with patch.dict(os.environ, {"OPENAI_REAUTH_WORKER_TOKEN": "synthetic-worker-token", "HTTPS_PROXY":"http://foreign.test", "all_proxy":"socks5://foreign.test", "NO_PROXY":"*", "CHATGPT_PROXY_URL":"http://foreign.test"}), patch(
             "tools.openai_oauth_reauth_worker.shutil.which", return_value="node"
         ), patch.object(Path, "is_file", return_value=True), patch(
             "tools.openai_oauth_reauth_worker.subprocess.run", return_value=result
@@ -166,6 +166,13 @@ class OpenAIOAuthReauthWorkerTest(unittest.TestCase):
         self.assertNotIn("OPENAI_REAUTH_WORKER_TOKEN", runner.call_args.kwargs["env"])
         self.assertEqual(runner.call_args.kwargs["env"]["CHATGPT_LOGIN_PASSWORD"], "synthetic-secret")
         self.assertNotIn("synthetic-secret", runner.call_args.args[0])
+        child_env = runner.call_args.kwargs["env"]
+        for key in ("HTTPS_PROXY", "all_proxy", "NO_PROXY", "CHATGPT_PROXY_URL"):
+            self.assertNotIn(key, child_env)
+        self.assertEqual(Path(child_env["HOME"]).parent, Path(runner.call_args.kwargs["cwd"]))
+        self.assertEqual(Path(child_env["XDG_CACHE_HOME"]).parent, Path(runner.call_args.kwargs["cwd"]))
+        self.assertFalse(Path(child_env["HOME"]).exists())  # Task completion cleans private state.
+
 
     def test_workspace_id_from_auth_payload(self):
         self.assertEqual(

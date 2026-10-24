@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -96,6 +97,9 @@ func TestContainerTwoFAIdentityAndRequiredSecret(t *testing.T) {
 }
 func TestContainerReauthSuccessPreservesUnrelatedRuntimeBlocks(t *testing.T) {
 	svc, reader, repo, updater, _, blocker := newReauthTestService("acct-1")
+	id := int64(7)
+	reader.account.ProxyID = &id
+	reader.proxy = &Proxy{ID: id, Protocol: "socks5h", Host: "192.0.2.7", Port: 1080, Status: StatusActive}
 	reader.account.ExecutionMode = AccountExecutionModeDockerKernel
 	savePasswordReauthConfig(t, svc)
 	task, err := svc.CreateTask(t.Context(), 42)
@@ -254,4 +258,37 @@ func TestContainerReauthRealKernelHTTP401Contract(t *testing.T) {
 	require.NotContains(t, w.Body.String(), "private-provider-body")
 	require.True(t, VMKernelRuntimeReady(account), "provider 401 must not damage container health")
 	require.Zero(t, runtime.slot(account.ID).active)
+}
+
+func TestContainerReauthAlwaysUsesAccountProxy(t *testing.T) {
+	for _, missing := range []bool{false, true} {
+		t.Run(fmt.Sprint(missing), func(t *testing.T) {
+			svc, reader, repo, _, _, _ := newReauthTestService("acct-1")
+			reader.account.ExecutionMode = AccountExecutionModeDockerKernel
+			id := int64(7)
+			reader.account.ProxyID = &id
+			reader.proxy = &Proxy{ID: id, Protocol: "socks5h", Host: "192.0.2.7", Port: 1080, Status: StatusActive}
+			savePasswordReauthConfig(t, svc)
+			// A stale generic re-login override must not select a separate exit.
+			repo.config.ProxySource = OpenAIOAuthReauthProxySourceMihomo
+			svc.acquireMihomoProxy = func(context.Context, string) (string, func(), error) {
+				t.Fatal("container used shared proxy pool")
+				return "", nil, nil
+			}
+			_, err := svc.CreateTask(t.Context(), 42)
+			require.NoError(t, err)
+			if missing {
+				reader.account.ProxyID = nil
+			}
+			claim, err := svc.ClaimTask(t.Context(), "worker")
+			require.NoError(t, err)
+			if missing {
+				require.Nil(t, claim)
+				require.Equal(t, "configured account proxy is unavailable", repo.task.Error)
+			} else {
+				require.NotNil(t, claim)
+				require.Equal(t, "socks5h://192.0.2.7:1080", claim.ProxyURL)
+			}
+		})
+	}
 }

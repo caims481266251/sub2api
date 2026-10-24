@@ -3,3 +3,4 @@ __pycache__/
 !tests/
 tests/*
 !tests/test_update_agent.py
+!tests/test_container_isolation.py

@@ -172,8 +172,10 @@ func (h *Helper) resolve(req Request) (Request, *State, error) {
 				return req, nil, fault("manifest_inventory_unreadable")
 			}
 			if old.AccountID == req.AccountID {
+				if req.InstanceID != "" {
+					return req, nil, fault("account_binding_conflict")
+				}
 				req.InstanceID = old.InstanceID
-				break
 			}
 		}
 		if req.InstanceID == "" && req.Operation == "prepare" {
@@ -512,7 +514,7 @@ func (h *Helper) read(dir string) (*State, error) {
 	if err = json.Unmarshal(b, &s); err != nil {
 		return nil, err
 	}
-	if s.InstanceID == "" || s.AccountID <= 0 || s.Identity.UUID == "" {
+	if s.InstanceID == "" || s.InstanceID != filepath.Base(dir) || s.AccountID <= 0 || !validIdentity(s.Identity) {
 		return nil, fault("manifest_invalid")
 	}
 	return &s, nil

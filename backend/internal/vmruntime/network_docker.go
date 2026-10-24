@@ -120,8 +120,8 @@ func (d *DockerDriver) ensureNetwork(ctx context.Context, s State) (bool, error)
 }
 func (d *DockerDriver) checkContainerNetwork(ctx context.Context, s State, c *containerInspect) error {
 	if s.Network == nil {
-		return nil
-	} // Existing accounts keep their legacy network until explicit migration.
+		return fault("network_lease_missing")
+	}
 	n, err := d.inspectNetwork(ctx, s.Network.NetworkName)
 	if err != nil {
 		return err
@@ -129,11 +129,14 @@ func (d *DockerDriver) checkContainerNetwork(ctx context.Context, s State, c *co
 	if !networkMatches(n, s) {
 		return fault("network_configuration_unconfirmed")
 	}
+	if err := checkNetworkMembers(n, c.ID); err != nil {
+		return err
+	}
 	if len(c.NetworkSettings.Networks) != 1 {
 		return fault("runtime_network_mismatch")
 	}
 	endpoint, ok := c.NetworkSettings.Networks[s.Network.NetworkName]
-	if !ok || endpoint.IPAddress != s.Network.Address || endpoint.NetworkID != n.ID {
+	if !ok || endpoint.IPAddress != s.Network.Address || endpoint.NetworkID != n.ID || endpoint.MacAddress != s.Identity.MAC {
 		return fault("runtime_network_mismatch")
 	}
 	return nil
@@ -143,7 +146,7 @@ func (d *DockerDriver) checkContainerNetwork(ctx context.Context, s State, c *co
 // address intent and exclusive network membership before starting any process.
 func (d *DockerDriver) checkStoppedContainerNetwork(ctx context.Context, s State, c *containerInspect) error {
 	if s.Network == nil {
-		return nil
+		return fault("network_lease_missing")
 	}
 	n, err := d.inspectNetwork(ctx, s.Network.NetworkName)
 	if err != nil {
@@ -151,6 +154,9 @@ func (d *DockerDriver) checkStoppedContainerNetwork(ctx context.Context, s State
 	}
 	if !networkMatches(n, s) {
 		return fault("network_configuration_unconfirmed")
+	}
+	if err := checkNetworkMembers(n, c.ID); err != nil {
+		return err
 	}
 	if c.HostConfig.NetworkMode != s.Network.NetworkName || len(c.NetworkSettings.Networks) != 1 {
 		return fault("runtime_network_mismatch")
@@ -187,6 +193,17 @@ func (d *DockerDriver) removeNetwork(ctx context.Context, s State) error {
 	}
 	if n != nil {
 		return fault("network_removal_unconfirmed")
+	}
+	return nil
+}
+
+// A stopped container may have no active endpoint. Any foreign member is still
+// a conflict, including one attached by an external Docker administrator.
+func checkNetworkMembers(n *networkInspect, containerID string) error {
+	for id := range n.Containers {
+		if id != containerID {
+			return fault("runtime_network_foreign_member")
+		}
 	}
 	return nil
 }

@@ -186,7 +186,11 @@ func (r *openAIOAuthReauthRepository) ClaimNextTaskForRuntime(ctx context.Contex
 					SELECT 1 FROM openai_oauth_reauth_configs AS config
 					WHERE config.account_id = openai_oauth_reauth_tasks.account_id AND config.credential_mode = $9
 				))
-				AND CASE WHEN oauth_profile IN ('excel','siwc') THEN 'local_worker' ELSE COALESCE((SELECT CASE WHEN $11 <> '' THEN
+				AND CASE WHEN oauth_profile IN ('excel','siwc') OR EXISTS (
+                    SELECT 1 FROM accounts AS account
+                    WHERE account.id = openai_oauth_reauth_tasks.account_id
+                        AND account.execution_mode = 'docker_kernel'
+                ) THEN 'local_worker' ELSE COALESCE((SELECT CASE WHEN $11 <> '' THEN
 					CASE WHEN config.credential_mode = 'password_totp' THEN $11 ELSE 'local_worker' END
 					ELSE engine END FROM openai_oauth_reauth_configs AS config
 					WHERE config.account_id = openai_oauth_reauth_tasks.account_id), 'local_worker') END = ANY($10::text[])

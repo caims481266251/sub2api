@@ -1125,6 +1125,24 @@ def _siwc_password_failure(output: str, exit_code: int) -> str:
     return f"SIWC authorization failed (stage={stage}, reason={reason}, exit={exit_code}); credentials retained{guidance}"
 
 
+def isolated_login_environment(task_dir: Path) -> dict[str, str]:
+    """Keep login state and proxy selection scoped to the claimed task."""
+    child_env = os.environ.copy()
+    for key in list(child_env):
+        if key.lower() in {"http_proxy", "https_proxy", "all_proxy", "no_proxy"} or key in {
+            "OPENAI_REAUTH_WORKER_TOKEN", "CHATGPT_PROXY_URL", "CHATGPT_BASE", "AUTH_BASE",
+        }:
+            child_env.pop(key, None)
+    for key, name in (("HOME", "home"), ("XDG_CONFIG_HOME", "config"),
+                      ("XDG_CACHE_HOME", "cache"), ("XDG_DATA_HOME", "data"),
+                      ("XDG_STATE_HOME", "state"), ("TMPDIR", "tmp")):
+        directory = task_dir / name
+        directory.mkdir(mode=0o700)
+        child_env[key] = str(directory)
+    child_env["TMP"] = child_env["TEMP"] = child_env["TMPDIR"]
+    return child_env
+
+
 def process_password_claim(api: WorkerAPI, claim: dict[str, Any]) -> None:
     oauth_profile = str(claim.get("oauth_profile") or "codex")
     if oauth_profile not in {"codex", "excel", "siwc"}:
@@ -1193,8 +1211,7 @@ def process_password_claim(api: WorkerAPI, claim: dict[str, Any]) -> None:
         ]
         if proxy_url:
             command.extend(("--proxy", proxy_url))
-        child_env = os.environ.copy()
-        child_env.pop("OPENAI_REAUTH_WORKER_TOKEN", None)
+        child_env = isolated_login_environment(Path(temp_dir))
         if oauth_profile == "excel":
             # One bounded fixed-exit attempt. Never rotate proxies to retry a rejected login.
             child_env["CHATGPT_PROXY_MAX_ATTEMPTS"] = "1"

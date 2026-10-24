@@ -81,3 +81,58 @@ func TestKernelSOCKSProjectionUsesRemoteDNSAndAcceptsPrepareReplay(t *testing.T)
 		t.Fatalf("normalized same-generation replay restarted instance: %v", e)
 	}
 }
+
+func TestMissingEstablishedIdentityIsNotRegenerated(t *testing.T) {
+	h, root := openTest(t, &fakeDriver{})
+	s, err := h.Do(context.Background(), prepareRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.ClientIdentity = nil
+	if err = h.save(filepath.Join(root, s.InstanceID), s); err != nil {
+		t.Fatal(err)
+	}
+	req := prepareRequest()
+	req.Operation = "apply-config"
+	req.Generation = 2
+	if _, err = h.Do(context.Background(), req); errorCode(err) != "client_identity_missing" {
+		t.Fatal("lost identity replaced", err)
+	}
+}
+
+func TestManifestCannotBeCopiedToAnotherInstanceDirectory(t *testing.T) {
+	h, root := openTest(t, &fakeDriver{})
+	s, err := h.Do(context.Background(), prepareRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(root, uuid.NewString())
+	if err = os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = h.save(dir, s); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = h.Do(context.Background(), prepareRequest()); errorCode(err) != "manifest_inventory_unreadable" {
+		t.Fatal("copied instance accepted", err)
+	}
+}
+
+func TestDuplicateAccountManifestIsRejected(t *testing.T) {
+	h, root := openTest(t, &fakeDriver{})
+	s, err := h.Do(context.Background(), prepareRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.InstanceID = uuid.NewString()
+	dir := filepath.Join(root, s.InstanceID)
+	if err = os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = h.save(dir, s); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = h.Do(context.Background(), prepareRequest()); errorCode(err) != "account_binding_conflict" {
+		t.Fatal("ambiguous account binding accepted", err)
+	}
+}

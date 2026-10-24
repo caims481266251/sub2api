@@ -82,18 +82,28 @@ func (d *DockerDriver) Apply(ctx context.Context, s State, dir string) (Observat
 }
 
 type containerNetworkEndpoint struct {
-	IPAddress, NetworkID string
-	IPAMConfig           *struct{ IPv4Address string }
+	IPAddress, NetworkID, MacAddress string
+	IPAMConfig                       *struct{ IPv4Address string }
 }
 type containerInspect struct {
-	HostConfig      struct{ NetworkMode string }
+	HostConfig struct {
+		NetworkMode, PidMode, IpcMode, UTSMode      string
+		Privileged, ReadonlyRootfs, PublishAllPorts bool
+		CapAdd, CapDrop, SecurityOpt                []string
+		Tmpfs                                       map[string]string
+		PortBindings                                map[string]json.RawMessage
+		Devices                                     []json.RawMessage
+		DeviceRequests                              []json.RawMessage
+	}
+	Mounts          []containerMount
 	NetworkSettings struct {
 		Networks map[string]containerNetworkEndpoint
 	}
 	ID     string `json:"Id"`
 	Config struct {
-		Image  string
-		Labels map[string]string
+		Image    string
+		Hostname string
+		Labels   map[string]string
 	} `json:"Config"`
 	State struct {
 		Running   bool

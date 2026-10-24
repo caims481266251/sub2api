@@ -829,6 +829,12 @@ func (s *OpenAIOAuthReauthService) ClaimTaskWithEngines(ctx context.Context, wor
 		mode = OpenAIOAuthReauthModeEmailOTPURL
 	}
 	engine := effectiveReauthEngine(mode, stored.Engine, runtimeSettings.Engine)
+	// Container accounts must authorize through their own bound egress.
+	// Session Studio cannot accept an account proxy; ordinary accounts retain
+	// the existing configurable engine and proxy selection.
+	if account.ExecutionMode == AccountExecutionModeDockerKernel {
+		engine = OpenAIOAuthReauthEngineLocal
+	}
 	if record.OAuthProfile == "excel" || record.OAuthProfile == "siwc" {
 		engine = OpenAIOAuthReauthEngineLocal
 		if mode != OpenAIOAuthReauthModePasswordTOTP {
@@ -847,6 +853,13 @@ func (s *OpenAIOAuthReauthService) ClaimTaskWithEngines(ctx context.Context, wor
 		return nil, nil
 	}
 	proxySource, proxyErr := normalizeReauthProxySource(stored.ProxySource, stored.ProxyID)
+	if account.ExecutionMode == AccountExecutionModeDockerKernel {
+		proxySource, proxyErr = OpenAIOAuthReauthProxySourceAccount, nil
+		if account.ProxyID == nil || *account.ProxyID <= 0 {
+			_ = s.repo.MarkFailed(ctx, record.ID, workerID, "configured account proxy is unavailable")
+			return nil, nil
+		}
+	}
 	if proxyErr != nil {
 		_ = s.repo.MarkFailed(ctx, record.ID, workerID, "configured re-login proxy source is invalid")
 		return nil, nil

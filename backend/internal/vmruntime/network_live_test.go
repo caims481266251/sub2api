@@ -3,7 +3,6 @@ package vmruntime
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -12,7 +11,7 @@ import (
 )
 
 // Opt-in daemon test: creates only uniquely labelled, disposable networks and
-// one inert sleep container; it never opens provider connections or uses tokens.
+// two inert sleep containers; it never opens provider connections or uses tokens.
 func TestDockerLiveIsolatedAllocationAndRestart(t *testing.T) {
 	if os.Getenv("SUB2_VM_NETWORK_LIVE_TEST") != "1" {
 		t.Skip("explicit local Docker verification only")
@@ -56,7 +55,8 @@ func TestDockerLiveIsolatedAllocationAndRestart(t *testing.T) {
 	if a.Network.Subnet == b.Network.Subnet {
 		t.Fatal("allocation collision")
 	}
-	args := []string{"run", "-d", "--pull=never", "--name", containerName(a), "--network=" + a.Network.NetworkName, "--ip=" + a.Network.Address, "--label", "sub2.vm.instance=" + a.InstanceID, "--label", "sub2.vm.account=900001", "--label", "sub2.vm.runtime=container-v1", "--label", "sub2.vm.service-gid=0", "--entrypoint=/bin/sleep", strings.TrimSpace(string(image)), "120"}
+	a.Identity.MAC = "02:00:00:90:00:01"
+	args := []string{"run", "-d", "--init", "--pull=never", "--name", containerName(a), "--network=" + a.Network.NetworkName, "--ip=" + a.Network.Address, "--mac-address=" + a.Identity.MAC, "--label", "sub2.vm.instance=" + a.InstanceID, "--label", "sub2.vm.account=900001", "--label", "sub2.vm.runtime=container-v1", "--label", "sub2.vm.service-gid=0", "--entrypoint=/bin/sleep", strings.TrimSpace(string(image)), "120"}
 	if _, err = d.run(ctx, args...); err != nil {
 		t.Fatal(err)
 	}
@@ -67,18 +67,46 @@ func TestDockerLiveIsolatedAllocationAndRestart(t *testing.T) {
 	if err = d.checkContainerNetwork(ctx, a, c); err != nil {
 		t.Fatal(err)
 	}
+
+	// A second account has an independent namespace. Attaching it to A's
+	// network must invalidate A even though A still has only its own endpoint.
+	if _, err = d.run(ctx, "run", "-d", "--init", "--pull=never", "--name", containerName(b),
+		"--network="+b.Network.NetworkName, "--ip="+b.Network.Address,
+		"--label", "sub2.vm.instance="+b.InstanceID, "--label", "sub2.vm.account=900002",
+		"--entrypoint=/bin/sleep", strings.TrimSpace(string(image)), "120"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = d.run(ctx, "exec", containerName(a), "sh", "-c", "echo account-a > /tmp/account-private"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = d.run(ctx, "exec", containerName(b), "test", "!", "-e", "/tmp/account-private"); err != nil {
+		t.Fatal("private filesystem leaked", err)
+	}
+	if _, err = d.run(ctx, "network", "connect", a.Network.NetworkName, containerName(b)); err != nil {
+		t.Fatal(err)
+	}
+	foreignErr := d.checkContainerNetwork(ctx, a, c)
+	if _, err = d.run(ctx, "network", "disconnect", a.Network.NetworkName, containerName(b)); err != nil {
+		t.Fatal(err)
+	}
+	if errorCode(foreignErr) != "runtime_network_foreign_member" {
+		t.Fatal("foreign network member accepted", foreignErr)
+	}
 	if errorCode(d.removeNetwork(ctx, a)) != "network_still_in_use" {
 		t.Fatal("removed occupied network")
 	}
 	if err = d.Stop(ctx, a); err != nil {
 		t.Fatal(err)
 	}
-	dir := t.TempDir()
-	if err = os.Mkdir(filepath.Join(dir, "run"), 0700); err != nil {
+	c, err = d.inspectContainer(ctx, containerName(a))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = d.Ensure(ctx, a, dir); err != nil {
+	if err = d.checkStoppedContainerNetwork(ctx, a, c); err != nil {
 		t.Fatal("restart rejected", err)
+	}
+	if _, err = d.run(ctx, "start", c.ID); err != nil {
+		t.Fatal(err)
 	}
 	c, err = d.inspectContainer(ctx, containerName(a))
 	if err != nil {
@@ -93,7 +121,11 @@ func TestDockerLiveIsolatedAllocationAndRestart(t *testing.T) {
 	if _, err = d.run(ctx, "network", "connect", b.Network.NetworkName, c.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = d.Ensure(ctx, a, dir); errorCode(err) != "runtime_network_mismatch" {
+	c, err = d.inspectContainer(ctx, containerName(a))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = d.checkStoppedContainerNetwork(ctx, a, c); errorCode(err) != "runtime_network_mismatch" {
 		t.Fatal("foreign attachment not rejected", err)
 	}
 	c, err = d.inspectContainer(ctx, containerName(a))
@@ -103,5 +135,9 @@ func TestDockerLiveIsolatedAllocationAndRestart(t *testing.T) {
 	if _, err = d.run(ctx, "network", "disconnect", b.Network.NetworkName, c.ID); err != nil {
 		t.Fatal(err)
 	}
-	t.Log("two unique network leases; static IP preserved on restart; occupied network retained; foreign attachment rejected before start")
+	other, err := d.inspectContainer(ctx, containerName(b))
+	if err != nil || !other.State.Running {
+		t.Fatal("other account interrupted", err)
+	}
+	t.Log("two unique networks and private filesystems; static IP preserved; foreign network member and attachment rejected; other account unaffected")
 }
