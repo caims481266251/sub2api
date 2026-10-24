@@ -77,6 +77,8 @@
         <p v-if="form.execution_mode === 'docker_kernel'" class="mt-2 text-sm text-gray-500">{{ t('admin.accounts.executionModeVMHint') }}</p>
       </div>
 
+      <DockerRequestCacheField v-if="form.platform === 'openai' && form.execution_mode === 'docker_kernel'" v-model="dockerRequestCache" />
+
       <!-- Platform Selection - Segmented Control Style -->
       <div>
         <label class="input-label">{{ t('admin.accounts.platform') }}</label>
@@ -4207,6 +4209,8 @@ import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Select from '@/components/common/Select.vue'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import OpenAIUsageConcurrencyField from './OpenAIUsageConcurrencyField.vue'
+import DockerRequestCacheField from './DockerRequestCacheField.vue'
+import { DOCKER_REQUEST_CACHE_KEY, readDockerRequestCache } from '@/utils/dockerRequestCache'
 import { OPENAI_USAGE_CONCURRENCY_KEY, readOpenAIUsageConcurrency } from '@/utils/openaiUsageConcurrency'
 import UpstreamRequestIdHeaderField from '@/components/account/UpstreamRequestIdHeaderField.vue'
 import PlatformIcon from '@/components/common/PlatformIcon.vue'
@@ -4312,7 +4316,9 @@ const withAccountExtraSettings = (extra?: Record<string, unknown>): Record<strin
     throw new Error(t('admin.accounts.costMultiplierInvalid'))
   }
   const name = upstreamRequestIdHeader.value.trim()
-  return { ...(extra || {}), cost_multiplier: costMultiplier.value, ...(name ? { upstream_request_id_header: name } : {}) }
+  const cacheExtra = form.platform === 'openai' && form.execution_mode === 'docker_kernel'
+    ? { [DOCKER_REQUEST_CACHE_KEY]: dockerRequestCache.value } : {}
+  return { ...(extra || {}), ...cacheExtra, cost_multiplier: costMultiplier.value, ...(name ? { upstream_request_id_header: name } : {}) }
 }
 
 const baseUrlHint = computed(() => {
@@ -4776,6 +4782,7 @@ const interceptWarmupRequests = ref(false)
 const autoPauseOnExpired = ref(true)
 const copilotSDKEnabled = ref(false)
 const usageConcurrency = ref(readOpenAIUsageConcurrency())
+const dockerRequestCache = ref(readDockerRequestCache())
 const openAIRequestTimezone = ref('Asia/Singapore')
 const openaiPassthroughEnabled = ref(false)
 // OpenAI Codex namespace 工具摊平兼容开关（仅 OAuth），缺省关闭即原样保留
@@ -5713,6 +5720,7 @@ const resetForm = () => {
   form.credentials = {}
   form.proxy_id = null
   usageConcurrency.value = readOpenAIUsageConcurrency()
+  dockerRequestCache.value = readDockerRequestCache()
   form.concurrency = 10
   form.load_factor = null
   form.priority = 1

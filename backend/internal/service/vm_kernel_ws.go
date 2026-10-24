@@ -358,7 +358,7 @@ func (s *OpenAIGatewayService) proxyVMKernelWebSocket(ctx context.Context, c *gi
 			if len(terminal) == 0 && finished.result != nil {
 				terminal = finished.result.Response
 			}
-			replayBody = vmKernelReplayCacheBody(c, replayBody, model)
+			replayBody = vmKernelReplayCacheBody(c, account, replayBody, model)
 			turnErr = history.complete(replayBody, terminal)
 			if turnErr == nil {
 				_ = s.rememberVMKernelContinuation(ctx, c, account, replayBody, terminal)

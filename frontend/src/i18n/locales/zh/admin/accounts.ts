@@ -5,6 +5,10 @@ export default {
 executionMode: '执行模式',
   executionModeNormal: '普通（默认）',
   executionModeVM: 'Docker 内核',
+  dockerRequestCache: {
+    title: '启用请求缓存',
+    hint: '默认开启。开启后复用此账号的请求缓存标识；关闭不影响多轮对话和工具调用，也不保证上游缓存命中为零。保存后对后续请求生效，无需重启容器。'
+  },
   executionModeVMHint: '支持 OpenAI 标准 OAuth，OpenAI 可通过 2FA 登录。并发遵循账号配置；实例准备和验证完成后才能接收请求。创建后不能修改执行模式。',
       vmProxyRequired: 'Docker 内核账号必须选择代理。',
       vmRuntimeReady: '正常',

@@ -6,10 +6,31 @@ import (
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
+
+const DockerRequestCacheEnabledKey = "docker_request_cache_enabled"
+
+// Default on for existing and new accounts; an explicit false keeps caching disabled.
+func (a *Account) DockerRequestCacheEnabled() bool {
+	if a == nil || !a.IsVMKernel() || a.Platform != PlatformOpenAI {
+		return false
+	}
+	enabled, configured := a.Extra[DockerRequestCacheEnabledKey].(bool)
+	return !configured || enabled
+}
+
+func ValidateDockerRequestCacheExtra(extra map[string]any) error {
+	if value, exists := extra[DockerRequestCacheEnabledKey]; exists && value != nil {
+		if _, ok := value.(bool); !ok {
+			return infraerrors.BadRequest("INVALID_DOCKER_REQUEST_CACHE", "Docker request cache setting must be a boolean")
+		}
+	}
+	return nil
+}
 
 // Match vm2api's contract: a stable caller session (or first-user seed) must
 // reach both the prompt cache key and the kernel session, across HTTP requests
@@ -61,6 +82,11 @@ func vmKernelPromptCacheSeed(c *gin.Context, body []byte, model string) string {
 }
 
 func applyVMKernelPromptCacheKey(c *gin.Context, account *Account, request map[string]any, seed string) {
+	if !account.DockerRequestCacheEnabled() {
+		delete(request, "prompt_cache_key")
+		delete(request, "prompt_cache_retention")
+		return
+	}
 	if seed == "" {
 		return
 	}
@@ -74,7 +100,13 @@ func applyVMKernelPromptCacheKey(c *gin.Context, account *Account, request map[s
 
 // Save the unscoped seed with replay history so a continuation without repeated
 // session headers inherits it and the account namespace is not applied twice.
-func vmKernelReplayCacheBody(c *gin.Context, body []byte, model string) []byte {
+func vmKernelReplayCacheBody(c *gin.Context, account *Account, body []byte, model string) []byte {
+	if !account.DockerRequestCacheEnabled() {
+		// Conversation history still persists; only cache hints are omitted.
+		next, _ := sjson.DeleteBytes(body, "prompt_cache_key")
+		next, _ = sjson.DeleteBytes(next, "prompt_cache_retention")
+		return next
+	}
 	if seed := vmKernelPromptCacheSeed(c, body, model); seed != "" {
 		if next, err := sjson.SetBytes(body, "prompt_cache_key", seed); err == nil {
 			return next

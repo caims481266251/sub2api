@@ -348,7 +348,7 @@ func (s *OpenAIGatewayService) forwardVMKernelResponses(ctx context.Context, c *
 	if callErr == nil && result != nil && result.Completed && ingress == "responses" {
 		// History is auxiliary: losing its cache must never retry or lose billing
 		// for a request that has already completed.
-		_ = s.rememberVMKernelContinuation(ctx, c, account, vmKernelReplayCacheBody(c, body, model), restoreCodexToolNamesFromContext(c, result.Response))
+		_ = s.rememberVMKernelContinuation(ctx, c, account, vmKernelReplayCacheBody(c, account, body, model), restoreCodexToolNamesFromContext(c, result.Response))
 	}
 	out, err := vmKernelOpenAIResult(result, prepared, original, billing, model, stream)
 	if err != nil {

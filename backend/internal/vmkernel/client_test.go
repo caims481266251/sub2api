@@ -512,3 +512,28 @@ func TestSettledHTTPQuotaMetadata(t *testing.T) {
 		})
 	}
 }
+
+func TestClientDisabledPromptCacheKeepsInputAndUsage(t *testing.T) {
+	b := fakeKernel(t, func(w http.ResponseWriter, r *http.Request) {
+		var env struct {
+			Body    map[string]any    `json:"body"`
+			Headers map[string]string `json:"headers"`
+			Session map[string]string `json:"session"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&env); err != nil {
+			t.Fatal(err)
+		}
+		if env.Body["prompt_cache_key"] != nil || env.Body["prompt_cache_retention"] != nil || env.Session["session_id"] != "" || env.Headers["session-id"] != "" {
+			t.Error("disabled cache leaked a routing identifier")
+		}
+		if env.Body["input"] != "conversation" || env.Headers["x-codex-routing-hint"] != "model=gpt-6-luna" {
+			t.Error("cache toggle changed request semantics")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"resp_off","status":"completed","usage":{"input_tokens":100,"output_tokens":1,"input_tokens_details":{"cached_tokens":80}}}`)
+	})
+	result, err := NewClient().Execute(WithSessionID(context.Background(), "old-session"), b, Request{Protocol: "responses", DisablePromptCache: true, Body: json.RawMessage(`{"model":"gpt-6-luna","input":"conversation","prompt_cache_key":"caller-key","prompt_cache_retention":"24h"}`)}, nil)
+	if err != nil || result == nil || !result.Completed || !bytes.Contains(result.Usage, []byte(`"cached_tokens":80`)) {
+		t.Fatalf("provider usage must remain authoritative: %v", err)
+	}
+}

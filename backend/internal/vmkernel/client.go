@@ -72,6 +72,11 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 		if cacheKey = strings.TrimSpace(cacheKey); cacheKey != "" {
 			sessionID = cacheKey
 		}
+		if request.DisablePromptCache {
+			sessionID = ""
+			delete(body, "prompt_cache_key")
+			delete(body, "prompt_cache_retention")
+		}
 		// vm2api sends the same resolved identity in all three places. Leaving
 		// session empty lets the kernel generate a new upstream session per call.
 		if sessionID != "" {

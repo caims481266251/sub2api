@@ -5,6 +5,10 @@ export default {
 executionMode: 'Execution mode',
   executionModeNormal: 'Normal (default)',
   executionModeVM: 'Docker kernel',
+  dockerRequestCache: {
+    title: 'Enable request caching',
+    hint: 'On by default. Reuses request cache identifiers for this account when enabled. Disabling keeps conversation and tool continuity and does not guarantee zero upstream cache hits. Applies to subsequent requests without restarting the container.'
+  },
   executionModeVMHint: 'Supports standard OpenAI OAuth, including OpenAI 2FA login. Concurrency follows account settings. Requests are admitted after runtime preparation and validation. Execution mode cannot be changed after creation.',
       vmProxyRequired: 'Docker kernel accounts require a configured proxy.',
       vmRuntimeReady: 'Normal',

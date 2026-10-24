@@ -826,14 +826,14 @@ func (s *VMKernelService) execute(ctx context.Context, selected *Account, protoc
 			slot.activeDone = nil
 		}
 	}()
-	result, err = s.call(ctx, state, protocol, body, emit)
+	result, err = s.call(ctx, state, latest, protocol, body, emit)
 	if result != nil {
 		result.DispatchedCredentialsHash, _ = hashReauthCredentials(latest.Credentials)
 	}
 	return result, err
 }
-func (s *VMKernelService) call(ctx context.Context, state *vmruntime.State, protocol string, body []byte, emit func(vmkernel.Event) error) (*vmkernel.Result, error) {
-	return s.kernel.Execute(ctx, vmkernel.Binding{Socket: state.KernelSocket, Token: state.InternalToken, InstanceID: state.InstanceID, Generation: state.Generation}, vmkernel.Request{Protocol: protocol, Body: body}, emit)
+func (s *VMKernelService) call(ctx context.Context, state *vmruntime.State, account *Account, protocol string, body []byte, emit func(vmkernel.Event) error) (*vmkernel.Result, error) {
+	return s.kernel.Execute(ctx, vmkernel.Binding{Socket: state.KernelSocket, Token: state.InternalToken, InstanceID: state.InstanceID, Generation: state.Generation}, vmkernel.Request{Protocol: protocol, Body: body, DisablePromptCache: account.IsVMKernel() && account.Platform == PlatformOpenAI && !account.DockerRequestCacheEnabled()}, emit)
 }
 func vmAccountRouteRevision(a *Account) [32]byte {
 	if a == nil {

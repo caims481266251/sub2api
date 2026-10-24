@@ -13,6 +13,7 @@
     >
       <VMKernelStatusBadge v-if="account?.execution_mode === 'docker_kernel'" :status="account.vm_kernel" />
       <p v-if="account?.execution_mode === 'docker_kernel'" class="text-sm text-blue-700 dark:text-blue-300">{{ t('admin.accounts.executionModeVM') }} — {{ t('admin.accounts.executionModeVMHint') }}</p>
+      <DockerRequestCacheField v-if="account.platform === 'openai' && account.execution_mode === 'docker_kernel'" v-model="dockerRequestCache" />
       <div>
         <label class="input-label">{{ t('common.name') }}</label>
         <input v-model="form.name" type="text" required class="input" data-tour="edit-account-form-name" />
@@ -3506,6 +3507,8 @@ import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Select from '@/components/common/Select.vue'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import OpenAIUsageConcurrencyField from './OpenAIUsageConcurrencyField.vue'
+import DockerRequestCacheField from './DockerRequestCacheField.vue'
+import { DOCKER_REQUEST_CACHE_KEY, readDockerRequestCache } from '@/utils/dockerRequestCache'
 import { OPENAI_USAGE_CONCURRENCY_KEY, readOpenAIUsageConcurrency } from '@/utils/openaiUsageConcurrency'
 import UpstreamRequestIdHeaderField from '@/components/account/UpstreamRequestIdHeaderField.vue'
 import Toggle from '@/components/common/Toggle.vue'
@@ -4190,6 +4193,7 @@ const excelBPS403GroupOptions = computed(() => [
 ])
 const copilotSDKEnabled = ref(false)
 const usageConcurrency = ref(readOpenAIUsageConcurrency())
+const dockerRequestCache = ref(readDockerRequestCache())
 const openAIRequestTimezone = ref('Asia/Singapore')
 const openaiPassthroughEnabled = ref(false)
 // OpenAI Codex namespace 工具摊平兼容开关（仅 OAuth），缺省关闭即原样保留
@@ -4657,6 +4661,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   form.proxy_id = newAccount.proxy_id
   form.concurrency = newAccount.concurrency
   usageConcurrency.value = readOpenAIUsageConcurrency(newAccount.extra)
+  dockerRequestCache.value = readDockerRequestCache(newAccount.extra)
   form.load_factor = newAccount.load_factor ?? null
   form.priority = newAccount.priority
   costMultiplier.value = readAccountCostMultiplier(newAccount.extra)
@@ -6667,6 +6672,9 @@ const handleSubmit = async () => {
     }
     if (props.account.platform === 'openai') {
       costExtra[OPENAI_USAGE_CONCURRENCY_KEY] = { ...usageConcurrency.value }
+    }
+    if (props.account.platform === 'openai' && props.account.execution_mode === 'docker_kernel') {
+      costExtra[DOCKER_REQUEST_CACHE_KEY] = dockerRequestCache.value
     }
     updatePayload.extra = costExtra
 

@@ -62,6 +62,7 @@ vi.mock('vue-i18n', async () => {
 })
 
 import CreateAccountModal from '../CreateAccountModal.vue'
+import { adminAPI } from '@/api/admin'
 import OpenAITwoFAImport from '../OpenAITwoFAImport.vue'
 
 const BaseDialogStub = defineComponent({
@@ -138,6 +139,27 @@ describe('CreateAccountModal auto BPS switch', () => {
     mocks.refreshOpenAIToken.mockResolvedValue({ access_token: 'at', refresh_token: 'rt', expires_in: 3600, email: 'user@example.com' })
     mocks.createPlan.mockResolvedValue({ id: 1 })
     mocks.createOpenAICodexPAT.mockResolvedValue({})
+  })
+
+  it.each([false, true])('persists the Docker cache switch on OAuth creation: %s', async (enabled) => {
+    const capabilities = vi.mocked(adminAPI.accounts.getManagementCapabilities)
+    capabilities.mockResolvedValueOnce({ vm_kernel_enabled: true } as any)
+    const wrapper = mountModal()
+    await flushPromises()
+    expect(wrapper.find('[data-testid="docker-request-cache"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="account-execution-mode"]').setValue('docker_kernel')
+    const toggle = '[data-testid="docker-request-cache-enabled"]'
+    expect((wrapper.get(toggle).element as HTMLInputElement).checked).toBe(true)
+    await wrapper.get(toggle).setValue(enabled)
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Docker cache')
+    wrapper.getComponent({ name: 'ProxySelector' }).vm.$emit('update:modelValue', 1)
+    capabilities.mockResolvedValueOnce({ vm_kernel_enabled: true } as any)
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+    wrapper.getComponent(OAuthAuthorizationFlowStub).vm.$emit('validate-refresh-token', 'fixture-refresh')
+    await flushPromises()
+    expect(mocks.createAccount).toHaveBeenCalledTimes(1)
+    expect(mocks.createAccount.mock.calls[0][0]).toMatchObject({ execution_mode: 'docker_kernel', extra: { docker_request_cache_enabled: enabled } })
   })
 
   it('is offered for OpenAI OAuth but not for API Key', async () => {

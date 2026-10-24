@@ -145,3 +145,14 @@ func TestSchedulerMetadataAccountDropsInvalidUpstreamBillingProbe(t *testing.T) 
 		require.NotContains(t, metadata.Extra, service.UpstreamBillingProbeExtraKey)
 	}
 }
+
+func TestSchedulerMetadataKeepsDockerRequestCacheSwitch(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		account := service.Account{ID: 41, Platform: service.PlatformOpenAI, ExecutionMode: service.AccountExecutionModeDockerKernel, Extra: map[string]any{service.DockerRequestCacheEnabledKey: enabled}}
+		meta := buildSchedulerMetadataAccount(account)
+		require.Equal(t, enabled, meta.DockerRequestCacheEnabled())
+		require.Equal(t, enabled, meta.Extra[service.DockerRequestCacheEnabledKey])
+	}
+	legacy := buildSchedulerMetadataAccount(service.Account{Platform: service.PlatformOpenAI, ExecutionMode: service.AccountExecutionModeDockerKernel})
+	require.True(t, legacy.DockerRequestCacheEnabled())
+}

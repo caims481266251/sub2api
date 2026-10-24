@@ -41,9 +41,11 @@ type Binding struct {
 }
 
 type Request struct {
-	Protocol string
-	Body     json.RawMessage
-	Headers  map[string]string
+	// DisablePromptCache suppresses cache routing hints without changing conversation input.
+	DisablePromptCache bool
+	Protocol           string
+	Body               json.RawMessage
+	Headers            map[string]string
 }
 
 // AttemptError's SafeToRetry is true only when the request was not submitted.

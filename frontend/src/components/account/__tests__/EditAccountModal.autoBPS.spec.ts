@@ -102,6 +102,30 @@ describe('EditAccountModal Prism OAuth switch', () => {
     mocks.listByAccount.mockResolvedValue([])
   })
 
+  it('defaults Docker caching on and saves per-account changes without dropping extra', async () => {
+    const wrapper = mountModal(buildOAuthAccount({ execution_mode: 'docker_kernel', extra: { fixture_flag: true } }))
+    await flushPromises()
+    const toggle = '[data-testid="docker-request-cache-enabled"]'
+    expect((wrapper.get(toggle).element as HTMLInputElement).checked).toBe(true)
+    await wrapper.get(toggle).setValue(true)
+    await submit(wrapper)
+    expect(mocks.updateAccount.mock.calls[0][1].extra).toMatchObject({ fixture_flag: true, docker_request_cache_enabled: true })
+    await wrapper.setProps({ account: buildOAuthAccount({ id: 8, execution_mode: 'docker_kernel', extra: { docker_request_cache_enabled: true } }) })
+    await flushPromises()
+    expect((wrapper.get(toggle).element as HTMLInputElement).checked).toBe(true)
+    await wrapper.get(toggle).setValue(false)
+    await submit(wrapper)
+    expect(mocks.updateAccount.mock.calls[1][0]).toBe(8)
+    expect(mocks.updateAccount.mock.calls[1][1].extra.docker_request_cache_enabled).toBe(false)
+    await wrapper.setProps({ account: buildOAuthAccount({ id: 9, execution_mode: 'docker_kernel' }) })
+    await flushPromises()
+    expect((wrapper.get(toggle).element as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('hides the Docker cache switch on ordinary accounts', () => {
+    expect(mountModal().find('[data-testid="docker-request-cache"]').exists()).toBe(false)
+  })
+
   it('loads and disables usage concurrency without overwriting original concurrency', async () => {
     const wrapper = mountModal(buildOAuthAccount({ concurrency: 15, extra: { fixture_flag: true, openai_usage_concurrency: { enabled: true, threshold_percent: 5, concurrency: 6 } } }))
     await flushPromises()
