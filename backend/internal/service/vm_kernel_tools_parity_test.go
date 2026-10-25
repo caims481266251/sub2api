@@ -144,6 +144,7 @@ func TestVMKernelToolsHTTPContinuationKeepsCompleteOutput(t *testing.T) {
 								t.Errorf("replay lost %s", kind)
 							}
 						}
+						assertVMKernelContinuationToolResults(t, envelope.Body)
 					}
 					w.Header().Set("Content-Type", "text/event-stream")
 					for _, event := range vmToolEvents(name, namespace, fmt.Sprintf("%s_%d", responseID, n)) {
@@ -172,7 +173,7 @@ func TestVMKernelToolsHTTPContinuationKeepsCompleteOutput(t *testing.T) {
 				require.True(t, result.VMKernelUsageAuthoritative)
 				next, err := sjson.SetBytes(body, "previous_response_id", responseID+"_1")
 				require.NoError(t, err)
-				next, err = sjson.SetBytes(next, "input", []any{map[string]any{"type": "custom_tool_call_output", "call_id": "call_fixture", "output": "done"}})
+				next, err = sjson.SetRawBytes(next, "input", []byte(vmContinuationToolResults))
 				require.NoError(t, err)
 				result, err = svc.forwardVMKernelResponses(context.Background(), vmContinuationContext(71, 81, 998732), account, next, "responses", "")
 				require.NoError(t, err)

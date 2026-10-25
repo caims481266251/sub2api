@@ -48,8 +48,9 @@ func vmForwardUDS(t *testing.T, handler http.HandlerFunc) string {
 		// A real kernel reads its envelope before replying. With Connection: close,
 		// net/http does not drain unread request bodies; replying early would race
 		// the client's write and fabricate an unrelated broken-pipe failure.
-		raw, err := io.ReadAll(io.LimitReader(r.Body, 32<<20+1))
-		if err != nil || len(raw) > 32<<20 {
+		// Test-owned payloads include large requests accepted by the HTTP gateway.
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
 			http.Error(w, "invalid fixture request", 400)
 			return
 		}

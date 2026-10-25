@@ -74,6 +74,7 @@ const (
 	bindingKey
 	headersKey
 	responseHeadersKey
+	firstTokenPredicateKey
 )
 
 func WithSessionID(ctx context.Context, id string) context.Context {
@@ -81,6 +82,12 @@ func WithSessionID(ctx context.Context, id string) context.Context {
 }
 func WithOnAccepted(ctx context.Context, callback func()) context.Context {
 	return context.WithValue(ctx, acceptedKey, callback)
+}
+
+// WithFirstTokenPredicate lets the business adapter apply its existing TTFT
+// policy without coupling kernel transport to gateway settings.
+func WithFirstTokenPredicate(ctx context.Context, predicate func(Event) bool) context.Context {
+	return context.WithValue(ctx, firstTokenPredicateKey, predicate)
 }
 
 // SessionBinding belongs to one public WS connection. It is checked on each

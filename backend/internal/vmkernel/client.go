@@ -40,6 +40,12 @@ func NewClient() *Client {
 // Execute sends exactly one kernel request. There is no automatic retry here.
 func (c *Client) Execute(ctx context.Context, binding Binding, request Request, emit func(Event) error) (*Result, error) {
 	started := time.Now()
+	startsFirstToken, _ := ctx.Value(firstTokenPredicateKey).(func(Event) bool)
+	if startsFirstToken == nil {
+		startsFirstToken = func(event Event) bool {
+			return strings.Contains(event.Type, "delta") || event.Type == "content_block_start"
+		}
+	}
 	if !filepath.IsAbs(binding.Socket) || binding.Token == "" || binding.Generation == 0 {
 		return nil, &AttemptError{Code: "kernel_binding_invalid", SafeToRetry: true}
 	}
@@ -319,7 +325,7 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 			return nil
 		}
 		accept()
-		if result.FirstTokenMs == nil && (strings.Contains(event.Type, "delta") || event.Type == "content_block_start") {
+		if result.FirstTokenMs == nil && startsFirstToken(event) {
 			ms := int(time.Since(started).Milliseconds())
 			result.FirstTokenMs = &ms
 		}

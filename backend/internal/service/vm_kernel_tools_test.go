@@ -178,6 +178,7 @@ func TestVMKernelToolsWSUDSContinuation(t *testing.T) {
 					if !gjson.GetBytes(env.Body, `input.#(type=="custom_tool_call_output")`).Exists() {
 						t.Error("tool result lost")
 					}
+					assertVMKernelContinuationToolResults(t, env.Body)
 				}
 				w.Header().Set("Content-Type", "text/event-stream")
 				for _, event := range vmToolEvents(name, ns, fmt.Sprintf("resp_tool_%d", n)) {
@@ -224,7 +225,7 @@ func TestVMKernelToolsWSUDSContinuation(t *testing.T) {
 				if turn == 1 {
 					next, err := sjson.SetBytes(first, "previous_response_id", "resp_tool_1")
 					require.NoError(t, err)
-					next, err = sjson.SetRawBytes(next, "input", []byte(`[{"type":"custom_tool_call_output","call_id":"call_fixture","output":"done"}]`))
+					next, err = sjson.SetRawBytes(next, "input", []byte(vmContinuationToolResults))
 					require.NoError(t, err)
 					require.NoError(t, client.Write(ctx, coderws.MessageText, next))
 				}

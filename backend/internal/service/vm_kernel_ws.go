@@ -274,6 +274,7 @@ func (s *OpenAIGatewayService) proxyVMKernelWebSocket(ctx context.Context, c *gi
 			turnStateSession = session
 		}
 		turnCtx, cancel := context.WithCancel(ctx)
+		turnCtx = s.vmKernelResponsesTTFTContext(turnCtx)
 		turnCtx = s.vmKernelResponsesHeaderContext(turnCtx, c, account, prepared, turnState)
 		events := make(chan vmkernel.Event)
 		type outcome struct {

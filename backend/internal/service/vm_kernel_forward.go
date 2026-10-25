@@ -20,8 +20,10 @@ func validateVMKernelIngress(account *Account, body []byte) error {
 	if err := ValidateVMKernelAccount(account); err != nil {
 		return err
 	}
-	if !gjson.ValidBytes(body) || len(body) > vmKernelPresentationLimit {
-		return fmt.Errorf("invalid or oversized VM request")
+	// Request size is governed by the shared ingress policy. Response buffering
+	// limits must not reject requests accepted by the ordinary gateway.
+	if !gjson.ValidBytes(body) {
+		return fmt.Errorf("invalid JSON request")
 	}
 	for _, key := range []string{"audio", "modalities", "image_generation", "background", "additional_tools", "context_management", "compact"} {
 		value := gjson.GetBytes(body, key)
@@ -72,6 +74,7 @@ func vmKernelHTTP(ctx context.Context, runtime *VMKernelService, c *gin.Context,
 		if len(gateways) > 0 && gateways[0] != nil {
 			gateway = gateways[0]
 		}
+		ctx = gateway.vmKernelResponsesTTFTContext(ctx)
 		ctx = gateway.vmKernelResponsesHeaderContext(ctx, c, account, body)
 		ctx = vmkernel.WithOnResponseHeaders(ctx, func(headers http.Header) {
 			stageOpenAICodexTurnState(&staged, headers)
@@ -143,6 +146,13 @@ func vmKernelHTTP(ctx context.Context, runtime *VMKernelService, c *gin.Context,
 		c.Data(http.StatusOK, "application/json", output)
 	}
 	return result, nil
+}
+
+func (s *OpenAIGatewayService) vmKernelResponsesTTFTContext(ctx context.Context) context.Context {
+	mode := s.openAITTFTMode(ctx)
+	return vmkernel.WithFirstTokenPredicate(ctx, func(event vmkernel.Event) bool {
+		return openAIStreamDataStartsTTFT(string(event.Data), event.Type, false, mode)
+	})
 }
 
 func (s *OpenAIGatewayService) vmKernelResponsesHeaderContext(ctx context.Context, c *gin.Context, account *Account, body []byte, turnState ...string) context.Context {
@@ -367,6 +377,11 @@ func (s *OpenAIGatewayService) prepareVMKernelResponses(ctx context.Context, c *
 	})
 	if transformed.Error != nil {
 		return nil, "", "", transformed.Error
+	}
+	// Match ordinary Codex forwarding after call IDs have been normalized.
+	// HTTP and WS continuations already contain their expanded history here.
+	if input, ok := requestMap["input"].([]any); ok {
+		sanitizeOpenAIResponsesOrphanToolOutputs(requestMap, input, false)
 	}
 	setCodexToolNameReverse(c, transformed.ToolNameReverse)
 	if transformed.NormalizedModel != "" {
