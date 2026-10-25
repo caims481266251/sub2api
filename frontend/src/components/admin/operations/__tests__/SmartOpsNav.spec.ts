@@ -12,7 +12,7 @@ const smartOpsPaths = ['/admin/auto-config', '/admin/priority-scheduling', '/adm
 async function mountAt(path: string) {
   const router = createRouter({
     history: createMemoryHistory(),
-    routes: [...smartOpsPaths, '/admin/request-captures', '/admin/harvest-flow'].map(route => ({ path: route, component: { template: '<div />' } }))
+    routes: [...smartOpsPaths, '/admin/request-captures', '/admin/harvest-flow', '/admin/ticket-borrowing'].map(route => ({ path: route, component: { template: '<div />' } }))
   })
   await router.push(path)
   await router.isReady()
@@ -25,16 +25,16 @@ const hrefs = (wrapper: Awaited<ReturnType<typeof mountAt>>) => wrapper.findAll(
 describe('SmartOpsNav', () => {
   beforeEach(() => setActivePinia(createPinia()))
 
-  it('ends with the ticket harvest flow and hides request capture while the feature is off', async () => {
+  it('includes harvesting and borrowing and hides request capture while the feature is off', async () => {
     const wrapper = await mountAt('/admin/harvest-flow')
-    expect(hrefs(wrapper)).toEqual([...smartOpsPaths, '/admin/harvest-flow'])
+    expect(hrefs(wrapper)).toEqual([...smartOpsPaths, '/admin/harvest-flow', '/admin/ticket-borrowing'])
     expect(wrapper.find('[aria-current="page"]').text()).toBe('nav.harvestFlow')
   })
 
   it('lists request capture before the ticket harvest flow when the feature is on', async () => {
     useAdminSettingsStore().setRequestCaptureEnabledLocal(true)
     const wrapper = await mountAt('/admin/request-captures')
-    expect(hrefs(wrapper)).toEqual([...smartOpsPaths, '/admin/request-captures', '/admin/harvest-flow'])
+    expect(hrefs(wrapper)).toEqual([...smartOpsPaths, '/admin/request-captures', '/admin/harvest-flow', '/admin/ticket-borrowing'])
     expect(wrapper.find('[aria-current="page"]').text()).toBe('admin.requestCapture.title')
   })
 

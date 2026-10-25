@@ -77,6 +77,33 @@ func RegisterUserRoutes(
 			}
 		}
 
+		hosting := authenticated.Group("/hosting")
+		{
+			hosting.GET("", h.Hosting.Overview)
+			hosting.GET("/status", h.Hosting.Status)
+			hosting.GET("/billing", panelRateLimiter.Heavy(), h.Hosting.Billing)
+			hosting.GET("/accounts/:id/billing", panelRateLimiter.Heavy(), h.Hosting.Billing)
+			hosting.POST("/pools", h.Hosting.SavePool)
+			hosting.PUT("/pools/:id", h.Hosting.SavePool)
+			hosting.DELETE("/pools/:id", h.Hosting.DeletePool)
+			hosting.POST("/import", panelRateLimiter.Heavy(), h.Hosting.Import)
+			hosting.POST("/oauth/start", panelRateLimiter.Heavy(), h.Hosting.OAuthStart)
+			hosting.POST("/oauth/complete", panelRateLimiter.Heavy(), h.Hosting.OAuthComplete)
+			hosting.POST("/two-fa-login", panelRateLimiter.Heavy(), h.Hosting.StartTwoFALogin)
+			hosting.GET("/two-fa-login/:id", h.Hosting.TwoFALogin)
+			hosting.POST("/two-fa-login/:id/complete", panelRateLimiter.Heavy(), h.Hosting.CompleteTwoFALogin)
+			hosting.DELETE("/two-fa-login/:id", h.Hosting.DeleteTwoFALogin)
+			hosting.PUT("/accounts/:id/settings", h.Hosting.UpdateAccountSettings)
+			hosting.GET("/accounts/:id/usage", panelRateLimiter.Heavy(), h.Hosting.RequireEnabled, h.Hosting.AccountUsage)
+			hosting.GET("/accounts/:id/stats", panelRateLimiter.Heavy(), h.Hosting.AccountStats)
+			hosting.GET("/accounts/:id/operations/:operation", panelRateLimiter.Heavy(), h.Hosting.RequireEnabled, h.Hosting.AccountOperation)
+			hosting.POST("/accounts/:id/operations/:operation", panelRateLimiter.Heavy(), h.Hosting.RequireEnabled, h.Hosting.AccountOperation)
+			hosting.POST("/accounts/:id/quota/refresh", panelRateLimiter.Heavy(), h.Hosting.RequireEnabled, h.Hosting.RefreshQuota)
+			hosting.POST("/accounts/:id/reset-quota", panelRateLimiter.Heavy(), h.Hosting.RequireEnabled, h.Hosting.ResetQuota)
+			hosting.POST("/accounts/:id/:action", h.Hosting.Change)
+			hosting.DELETE("/accounts/:id", h.Hosting.Change)
+		}
+
 		// API Key管理
 		keys := authenticated.Group("/keys")
 		{

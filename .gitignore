@@ -134,12 +134,16 @@ deploy/docker-compose.override.yml
 .gocache/
 vite.config.js
 docs/*
+!docs/hosting-openai-parity.md
 !docs/security-penalties.md
 !docs/ip-risk-control.md
 !docs/anonymous-api-guard.md
 !docs/registration-email-alias-block.md
 !docs/openai-ws-sse-acceleration.md
 !docs/openai-outbound-identity.md
+!docs/openai-session-affinity.md
+!docs/security-penalties.md
+!docs/ip-risk-control.md
 !docs/openai-2fa-dual-oauth.md
 !docs/openai-siwc.md
 !docs/PAYMENT.md
@@ -179,6 +183,8 @@ issues/
 !docs/codex-ticket-pinning.md
 
 !docs/account-auto-config.md
+!docs/account-hosting.md
+!docs/screenshots/auto-config/
 
 # Runtime credential encryption keys must never enter source control.
 **/credential-operations.key
@@ -194,6 +200,19 @@ issues/
 !/docs/upstream-regional-routing.md
 
 !docs/harvest-gateway-borrow.md
+!docs/screenshots/harvest-gateway-borrow/
+!docs/screenshots/channel-monitor-v3/
+!docs/screenshots/usage-tps-single-token/
+!docs/screenshots/support-tickets/
+
+# Dedicated borrowing design and operator instructions
+!docs/ticket-borrowing.md
+!docs/ticket-borrowing-implementation-plan.md
+!docs/recent-features-release-20261010.md
+!docs/ticket-borrowing-ui-20261010.md
+!docs/ticket-borrowing-429-release-20261010.md
+
+!docs/github-release.md
 
 !docs/openai-2fa-rotation.md
 **/totp-recovery/

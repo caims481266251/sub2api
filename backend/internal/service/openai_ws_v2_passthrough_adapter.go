@@ -909,10 +909,26 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	}
 
 	dialer := s.getOpenAIWSPassthroughDialer()
+	if s.borrowRoutes != nil {
+		if e := s.borrowRoutes.Check(ctx, account.ID, gjson.GetBytes(firstClientMessage, "model").String(), "ws"); e != nil {
+			return e
+		}
+	}
 	if dialer == nil {
 		return errors.New("openai ws passthrough dialer is nil")
 	}
 
+	var borrowing *borrowWSUse
+	if s.borrowRoutes != nil {
+		borrowing, err = s.borrowRoutes.reserveWS(ctx, ctx, account, wsURL, gjson.GetBytes(firstClientMessage, "model").String(), gjson.GetBytes(firstClientMessage, "previous_response_id").String(), headers)
+		if err != nil {
+			return err
+		}
+		if borrowing != nil {
+			ctx = borrowing.use.ctx
+			defer borrowing.finish()
+		}
+	}
 	agentTaskRecoveryTried := false
 	var upstreamConn openAIWSClientConn
 	statusCode := 0
@@ -929,13 +945,33 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		if err != nil {
 			return fmt.Errorf("refresh ws authentication headers: %w", err)
 		}
-		dialCtx, cancelDial := context.WithTimeout(upstreamroute.WithAccountID(ctx, account.ID), s.openAIWSDialTimeout())
+		if s.borrowRoutes != nil {
+			var route *BorrowRoute
+			if borrowing != nil {
+				route = borrowing.route
+			}
+			if err := s.borrowRoutes.checkWSRoute(ctx, account.ID, route); err != nil {
+				return err
+			}
+			injectBorrowWSCookie(headers, route)
+		}
+		fingerprintCtx := ctx
+		if borrowing != nil {
+			fingerprintCtx, err = prepareBorrowWSDial(ctx, headers, borrowing.route, gjson.GetBytes(firstClientMessage, "model").String())
+			if err != nil {
+				return err
+			}
+		}
+		dialCtx, cancelDial := context.WithTimeout(upstreamroute.WithAccountID(fingerprintCtx, account.ID), s.openAIWSDialTimeout())
 		finishCapture := captureOpenAIWSHandshake(ctx, account.ID, wsURL)
 		upstreamConn, statusCode, handshakeHeaders, err = dialer.Dial(dialCtx, wsURL, headers, proxyURL)
 		finishCapture(statusCode, handshakeHeaders, err)
 		cancelDial()
 		if err == nil {
 			break
+		}
+		if borrowing != nil {
+			_ = s.borrowRoutes.observeWSHandshake(ctx, borrowing.route, handshakeHeaders, statusCode)
 		}
 		var handshakeErr *openAIWSHandshakeError
 		responseBody := []byte(nil)
@@ -967,6 +1003,13 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	defer func() {
 		_ = upstreamConn.Close()
 	}()
+	if borrowing != nil {
+		if err := s.borrowRoutes.observeWSHandshake(ctx, borrowing.route, handshakeHeaders, statusCode); err != nil {
+			return err
+		}
+		borrowing.use.attach(upstreamConn)
+	}
+
 	handshakeBinding := s.bindOpenAIWSHandshake(account, gjson.GetBytes(firstClientMessage, "model").String(), headers)
 	logOpenAIWSV2Passthrough(
 		"relay_dial_ok account_id=%d status_code=%d upstream_request_id=%s",
@@ -978,6 +1021,14 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	upstreamFrameConn, ok := upstreamConn.(openaiwsv2.FrameConn)
 	if !ok {
 		return errors.New("openai ws passthrough upstream connection does not support frame relay")
+	}
+	if s.borrowRoutes != nil {
+		upstreamFrameConn = &borrowWSFrameConn{FrameConn: upstreamFrameConn, borrow: borrowing, service: s.borrowRoutes, accountID: account.ID}
+	}
+	if s.recentRequests != nil && account.Platform == PlatformOpenAI {
+		recentConn := &recentRequestsFrameConn{FrameConn: upstreamFrameConn, cache: s.recentRequests, account: account, scope: AccountActivityScopeWithCredentialAccount(account, codexAccountIdentitySource(c, account)), ttftMode: s.openAITTFTMode(ctx)}
+		defer func() { recentConn.current().finish(nil) }()
+		upstreamFrameConn = recentConn
 	}
 	if capture := requestcapture.FromContext(ctx); capture != nil {
 		upstreamFrameConn = &captureUpstreamFrameConn{FrameConn: upstreamFrameConn, capture: capture, account: account.ID, route: openAIWSCaptureRoute(ctx, wsURL)}
@@ -1216,6 +1267,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			// mutations and new generations must not feed an ineligible socket.
 			if isResponseCreate || eventType == "session.update" || strings.HasPrefix(eventType, "conversation.item.") {
 				latest, err := s.admitOpenAITurn(ctx, c, account, model, payload)
+				if err == nil && s.borrowRoutes != nil {
+					err = s.borrowRoutes.Check(ctx, account.ID, model, "ws")
+				}
 				if err == nil {
 					err = s.checkOpenAIWSBinding(latest, model, handshakeBinding)
 				}
@@ -1254,6 +1308,11 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				}
 				if err := s.acquireOpenAIRPMForSend(ctx, account); err != nil {
 					return out, nil, err
+				}
+				if s.borrowRoutes != nil {
+					if err := s.borrowRoutes.Check(ctx, account.ID, model, "ws"); err != nil {
+						return out, nil, err
+					}
 				}
 				activePolicyModel.Store(&model)
 				usageMeta.updateFromResponseCreate(out, model, requestModelForThisFrame)
@@ -1301,6 +1360,11 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	}
 	if err := s.acquireOpenAIRPMForSend(ctx, latest); err != nil {
 		return err
+	}
+	if s.borrowRoutes != nil {
+		if err := s.borrowRoutes.Check(ctx, account.ID, capturedSessionModel, "ws"); err != nil {
+			return err
+		}
 	}
 	if err := regionalMeterValidatePayload(ctx, firstClientMessage); err != nil {
 		return err

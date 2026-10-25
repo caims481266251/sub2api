@@ -52,10 +52,10 @@ func TestGPT61SolIdentityAndEffort(t *testing.T) {
 	for _, id := range []string{"gpt-6.1", "gpt-6.1-solitude", "gpt-6.1-sol-preview", "gpt-6-sol"} {
 		require.False(t, IsGPT61SolModelSpelling(id), id)
 	}
-	for _, effort := range []string{"", "low", "medium", "high", "xhigh", "max"} {
+	for _, effort := range []string{"", "none", "low", "medium", "high", "xhigh", "max"} {
 		require.NoError(t, ValidateGPT61SolReasoningEffort("gpt-6.1-sol", effort))
 	}
-	for _, effort := range []string{"none", "minimal"} {
+	for _, effort := range []string{"minimal"} {
 		require.Error(t, ValidateGPT61SolReasoningEffort("gpt-6.1-sol", effort))
 		require.NoError(t, ValidateGPT61SolReasoningEffort("gpt-6-sol", effort))
 	}

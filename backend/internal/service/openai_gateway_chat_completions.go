@@ -81,6 +81,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	defaultMappedModel string,
 	compatPromptCacheTenantIsolated bool,
 ) (*OpenAIForwardResult, error) {
+	ctx = withOpenAIInitialAdmission(ctx)
 	latest, admissionErr := s.admitOpenAITurn(
 		context.WithoutCancel(ctx),
 		c,
@@ -88,10 +89,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		gjson.GetBytes(body, "model").String(),
 	)
 	if admissionErr != nil {
-		if !agentIdentityTaskRecoveryWasTried(ctx) {
-			return nil, markOpenAIInitialAdmissionError(admissionErr)
-		}
-		return nil, admissionErr
+		return nil, markOpenAIInitialAdmissionForContext(ctx, admissionErr)
 	}
 	account = latest
 	if account.IsVMKernel() {
@@ -718,6 +716,7 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 		observer = beginUpstreamResponseModelObservation(c)
 	}
 	observer.Observe(finalResponse.Model, true)
+	observeRecentTerminal(recentRequestResponseContext(c.Request.Context(), resp), finalResponse.Status == "completed" && finalResponse.Error == nil)
 	if finalResponse.Usage != nil && c.Request != nil {
 		raw, _ := json.Marshal(finalResponse)
 		regionalMeterObserveUsage(c.Request.Context(), raw, "json")
@@ -960,6 +959,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			return false
 		}
 		observer.ObserveOpenAI([]byte(payload), event.Type)
+		observeRecentProtocolEvent(recentRequestResponseContext(c.Request.Context(), resp), []byte(payload), event.Type, s.openAITTFTMode(c.Request.Context()))
 		if c.Request != nil {
 			regionalMeterObserveUsage(c.Request.Context(), []byte(payload), event.Type)
 		}
@@ -1220,6 +1220,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	}
 	processFrame := func(frame openAICompatSSEFrame) bool {
 		payload := openAICompatPayloadWithEventType(frame.Data, frame.EventType)
+		BorrowBusinessRecoveryFromContext(c.Request.Context()).ObserveSSE(c.Request.Context(), []byte(payload), frame.EventType)
 		if strings.TrimSpace(payload) == "[DONE]" {
 			return false
 		}

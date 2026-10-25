@@ -2058,3 +2058,22 @@ func TestGPT61SolCacheOptionsAndBreakpointsSurviveChatBridge(t *testing.T) {
 		require.Contains(t, string(out.Input), "prompt_cache_breakpoint")
 	}
 }
+
+func TestGPT61SolNoneUsesHighAcrossConversions(t *testing.T) {
+	for _, model := range []string{"gpt-6.1-sol", "gpt-6-sol"} {
+		want := "none"
+		if model == "gpt-6.1-sol" {
+			want = "high"
+		}
+		chat := &ChatCompletionsRequest{Model: model, ReasoningEffort: "none", Messages: []ChatMessage{{Role: "user", Content: json.RawMessage(`"hello"`)}}}
+		out, err := ChatCompletionsToResponses(chat)
+		require.NoError(t, err)
+		require.Equal(t, want, out.Reasoning.Effort)
+		require.Equal(t, "none", chat.ReasoningEffort)
+		message := &AnthropicRequest{Model: model, MaxTokens: 100, Thinking: &AnthropicThinking{Type: "disabled"}, OutputConfig: &AnthropicOutputConfig{Effort: "max"}, Messages: []AnthropicMessage{{Role: "user", Content: json.RawMessage(`"hello"`)}}}
+		out, err = AnthropicToResponses(message)
+		require.NoError(t, err)
+		require.Equal(t, want, out.Reasoning.Effort)
+		require.Equal(t, "disabled", message.Thinking.Type)
+	}
+}

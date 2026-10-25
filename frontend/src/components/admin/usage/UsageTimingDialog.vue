@@ -31,6 +31,17 @@
           <details class="mt-3 text-xs text-sky-800 dark:text-sky-300"><summary class="cursor-pointer">{{ t('requestTiming.health.thresholdTitle') }}</summary><p class="mt-2 leading-relaxed">{{ t('requestTiming.health.thresholds') }}</p></details>
         </div>
         <p class="text-xs leading-relaxed text-gray-500 dark:text-gray-400">{{ t('requestTiming.scope') }}</p>
+        <section v-if="trace.session_affinity" class="rounded-xl border border-gray-200 p-4 dark:border-dark-600" data-testid="session-affinity">
+          <h4 class="font-semibold">{{ t('requestTiming.affinity.title') }}</h4>
+          <dl class="mt-3 grid gap-3 text-sm sm:grid-cols-2">
+            <div><dt class="text-gray-500">{{ t('requestTiming.affinity.decision') }}</dt><dd>{{ affinityLabel('decisions', trace.session_affinity.decision) }}</dd></div>
+            <div><dt class="text-gray-500">{{ t('requestTiming.affinity.reason') }}</dt><dd>{{ affinityLabel('reasons', trace.session_affinity.reason) }}</dd></div>
+            <div><dt class="text-gray-500">{{ t(trace.session_affinity.owner_pending ? 'requestTiming.affinity.provisionalOwner' : 'requestTiming.affinity.owner') }}</dt><dd>{{ trace.session_affinity.owner_account_id > 0 ? `#${trace.session_affinity.owner_account_id}` : t('requestTiming.missing') }}</dd></div>
+            <div><dt class="text-gray-500">{{ t('requestTiming.affinity.execution') }}</dt><dd>{{ trace.session_affinity.execution_account_id > 0 ? `#${trace.session_affinity.execution_account_id}` : t('requestTiming.missing') }}</dd></div>
+          </dl>
+          <p class="mt-3 text-xs text-gray-500">{{ t(trace.session_affinity.owner_committed ? 'requestTiming.affinity.committed' : 'requestTiming.affinity.notCommitted') }}</p>
+          <p v-if="trace.session_affinity.cache_unavailable" class="mt-2 text-xs text-amber-600">{{ t('requestTiming.affinity.cacheUnavailable') }}</p>
+        </section>
         <p class="text-sm"><strong>{{ t('usage.latencyTps') }} {{ formatUsageOutputTps(record) ?? '—' }}</strong> · {{ t('requestTiming.tpsNote') }}</p>
         <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('requestTiming.health.attemptGuide') }}</p>
         <p v-if="trace.truncated" class="text-amber-600">{{ t('requestTiming.truncated') }}</p>
@@ -48,10 +59,16 @@
             <div class="mt-1 h-2 overflow-hidden rounded bg-gray-100 dark:bg-dark-700"><div class="h-full rounded" :class="TIMING_BAR[spanHealth(span)]" :style="bar(span)" /></div>
           </div>
         </section>
+        <BorrowAttemptDetails :rows="trace.attempts.filter(a => a.kind === 'egress' && !!a.borrow_route_id).map(attempt => ({ attempt, recovery: trace?.borrow_recovery }))" />
         <section v-for="attempt in trace.attempts" :key="attempt.number" class="rounded-xl border border-gray-200 p-4 dark:border-dark-600">
-          <h4 class="font-semibold">{{ attemptTitle(attempt) }} · {{ t('requestTiming.account') }} #{{ attempt.account_id }} · {{ attempt.proxy_id > 0 ? `${t('requestTiming.proxy')} #${attempt.proxy_id}` : t('requestTiming.direct') }}</h4>
+          <h4 class="font-semibold" data-testid="attempt-title">{{ attemptTitle(attempt) }} · {{ t('requestTiming.account') }} #{{ attempt.account_id }} · {{ attemptProxyLabel(attempt) }}</h4>
+          <p class="mt-2 text-xs text-gray-500">{{ t('requestTiming.transportScope') }}</p>
+          <div v-for="span in attemptStageSpans(attempt)" :key="span.name" class="mt-3" data-testid="transport-stage">
+            <div class="flex justify-between gap-2 text-xs"><span>{{ label(span.name) }}</span><span>{{ ms(span.end_ms - span.start_ms) }}</span></div>
+            <div class="mt-1 h-2 overflow-hidden rounded bg-gray-100 dark:bg-dark-700"><div class="h-full rounded bg-sky-500" :style="bar(span)" /></div>
+          </div>
           <div class="mt-3 grid gap-x-8 gap-y-3 text-sm md:grid-cols-2">
-            <div v-for="row in attemptRows(attempt)" :key="row.name" class="flex justify-between gap-4"><span class="text-gray-500">{{ row.name }}</span><span class="text-right font-medium tabular-nums" :class="TIMING_TEXT[row.health]">{{ row.value }}<span v-if="row.health !== 'neutral'" class="mt-0.5 block text-[10px] font-normal">{{ healthLabel(row.health) }}</span></span></div>
+            <div v-for="row in attemptRows(attempt)" :key="row.name" class="flex justify-between gap-4"><span class="text-gray-500">{{ row.name }}</span><span class="min-w-0 break-all text-right font-medium tabular-nums" :class="TIMING_TEXT[row.health]">{{ row.value }}<span v-if="row.health !== 'neutral'" class="mt-0.5 block text-[10px] font-normal">{{ healthLabel(row.health) }}</span></span></div>
           </div>
         </section>
         <div class="break-all text-xs text-gray-500">Trace: {{ trace.trace_id }} · {{ t('requestTiming.retention', { days: retention }) }}</div>
@@ -62,11 +79,13 @@
 <script setup lang="ts">
 import { inject, computed, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import BorrowAttemptDetails from './BorrowAttemptDetails.vue'
 import { useWindowSize } from '@vueuse/core'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import type { AdminUsageLog } from '@/types'
 import { formatDateTime } from '@/utils/format'
 import { formatUsageOutputTps } from '@/utils/usageTps'
+import { attemptStageSpans } from '@/utils/requestTimingStages'
 import { timingHealth, stageScale, TIMING_TEXT, TIMING_SURFACE, TIMING_BAR, type TimingHealth, type TimingScale } from '@/utils/requestTimingHealth'
 import { getUsageTiming, type RequestTiming, type TimingAttempt, type TimingSpan } from '@/api/admin/usageTiming'
 import { observerUsageAPI } from '@/api/observerUsage'
@@ -80,6 +99,7 @@ const traces = ref<RequestTiming[]>([]), selected = ref(0), loading = ref(false)
 let controller: AbortController | undefined
 const trace = computed(() => traces.value[selected.value])
 const label = (name: string) => t(`requestTiming.fields.${name}`)
+const affinityLabel = (kind: 'decisions' | 'reasons', value: string) => value ? t(`requestTiming.affinity.${kind}.${value}`) : t('requestTiming.missing')
 const ms = (value: number | null | undefined) => value == null ? t('requestTiming.missing') : value < 1 ? '<1ms' : value < 1000 ? `${value.toFixed(0)}ms` : `${(value / 1000).toFixed(2)}s`
 const bytes = (value: number) => value < 0 ? t('requestTiming.missing') : `${(value / 1048576).toFixed(3)} MiB`
 const yes = (value: boolean | null) => value == null ? t('requestTiming.missing') : t(value ? 'requestTiming.yes' : 'requestTiming.no')
@@ -145,9 +165,18 @@ function attemptTitle(a: TimingAttempt): string {
   const child = attempts.filter(item => item.kind === 'http' && item.parent === a.parent).findIndex(item => item.number === a.number) + 1
   return `${t('requestTiming.httpAttempt')} #${parent}.${child}`
 }
+function attemptProxyLabel(a: TimingAttempt): string {
+  const mode = a.transport?.proxy_mode
+  if (mode === 'direct') return t('requestTiming.direct')
+  if (mode) return `${t('requestTiming.proxy')} · ${mode}`
+  return a.proxy_id > 0 ? `${t('requestTiming.proxy')} #${a.proxy_id}` : t('requestTiming.missing')
+}
 function attemptRows(a: TimingAttempt): DetailRow[] {
   const e = a.events
   return [
+    ...['kind', 'proxy_mode', 'pool_id', 'fingerprint_id', 'identity_id'].map(name => row(name, a.transport?.[name as keyof NonNullable<TimingAttempt['transport']>] || t('requestTiming.missing'))),
+    row('protocol', a.protocol || t('requestTiming.missing')), row('alpn', a.alpn || t('requestTiming.missing')),
+    row('tls_handshake', a.tls_handshake ? t(`requestTiming.tlsHandshake.${a.tls_handshake}`) : t('requestTiming.missing')),
     timed('attempt_total', a.end_ms == null ? undefined : a.end_ms - a.start_ms, 'neutral'), row('status', a.status > 0 ? String(a.status) : t('requestTiming.missing'), statusHealth(a.status)),
     row('transport_result', a.cleanup_canceled ? t('requestTiming.health.normalClose') : a.error === 'canceled' && !a.terminal ? t('requestTiming.health.legacyCancel') : a.error ? t(`requestTiming.${a.error}`) : t('requestTiming.health.noTransportError'), a.error ? (a.error === 'canceled' ? 'warn' : 'critical') : a.cleanup_canceled ? 'good' : 'neutral'),
     // A new connection and closing after the terminal event without EOF are normal.

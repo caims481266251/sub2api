@@ -20,6 +20,7 @@ type openAIGuardianParentAffinityContextKey struct{}
 type openAIGuardianParentAffinity struct {
 	currentSessionHash string
 	legacySessionHash  string
+	apiKeyID           int64
 }
 
 // WithOpenAIGuardianParentAffinity records a Codex review request's parent
@@ -65,6 +66,7 @@ func WithOpenAIGuardianParentAffinity(ctx context.Context, c *gin.Context, body 
 	return context.WithValue(ctx, openAIGuardianParentAffinityContextKey{}, openAIGuardianParentAffinity{
 		currentSessionHash: currentHash,
 		legacySessionHash:  legacyHash,
+		apiKeyID:           getAPIKeyIDFromContext(c),
 	})
 }
 
@@ -123,6 +125,11 @@ func (s *OpenAIGatewayService) resolveOpenAIGuardianParentAccountID(ctx context.
 	affinity, ok := openAIGuardianParentAffinityFromContext(ctx)
 	if !ok {
 		return 0
+	}
+	if affinity.apiKeyID > 0 {
+		if accountID, err := s.cache.GetSessionAccountID(ctx, derefGroupID(groupID), openAIScopedParentAffinityKey(affinity.apiKeyID, affinity.currentSessionHash)); err == nil && accountID > 0 {
+			return accountID
+		}
 	}
 	lookupCtx := withOpenAILegacySessionHash(ctx, affinity.legacySessionHash)
 	accountID, err := s.getStickySessionAccountID(lookupCtx, groupID, affinity.currentSessionHash)

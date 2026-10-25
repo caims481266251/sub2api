@@ -55,22 +55,25 @@ type AdminUser struct {
 }
 
 type APIKey struct {
-	ID          int64      `json:"id"`
-	UserID      int64      `json:"user_id"`
-	Key         string     `json:"key"`
-	Name        string     `json:"name"`
-	GroupIDs    []int64    `json:"group_ids"`
-	GroupID     *int64     `json:"group_id"`
-	Status      string     `json:"status"`
-	IPWhitelist []string   `json:"ip_whitelist"`
-	IPBlacklist []string   `json:"ip_blacklist"`
-	LastUsedAt  *time.Time `json:"last_used_at"`
-	LastUsedIP  *string    `json:"last_used_ip"`
-	Quota       float64    `json:"quota"`      // Quota limit in USD (0 = unlimited)
-	QuotaUsed   float64    `json:"quota_used"` // Used quota amount in USD
-	ExpiresAt   *time.Time `json:"expires_at"` // Expiration time (nil = never expires)
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
+	RouteMode              string     `json:"route_mode"`
+	HostingPoolID          *int64     `json:"hosting_pool_id"`
+	HostingFallbackGroupID *int64     `json:"hosting_fallback_group_id"`
+	ID                     int64      `json:"id"`
+	UserID                 int64      `json:"user_id"`
+	Key                    string     `json:"key"`
+	Name                   string     `json:"name"`
+	GroupID                *int64     `json:"group_id"`
+	Status                 string     `json:"status"`
+	IPWhitelist            []string   `json:"ip_whitelist"`
+	IPBlacklist            []string   `json:"ip_blacklist"`
+	LastUsedAt             *time.Time `json:"last_used_at"`
+	LastUsedIP             *string    `json:"last_used_ip"`
+	Quota                  float64    `json:"quota"`      // Quota limit in USD (0 = unlimited)
+	QuotaUsed              float64    `json:"quota_used"` // Used quota amount in USD
+	ExpiresAt              *time.Time `json:"expires_at"` // Expiration time (nil = never expires)
+	CreatedAt              time.Time  `json:"created_at"`
+	UpdatedAt              time.Time  `json:"updated_at"`
+	GroupIDs               []int64    `json:"group_ids"`
 	// CurrentConcurrency is the real-time active request count for this API key.
 	CurrentConcurrency int `json:"current_concurrency"`
 
@@ -613,12 +616,16 @@ type BatchUpdateRedeemCodesRequest struct {
 
 // UsageLog 是普通用户接口使用的 usage log DTO（不包含管理员字段）。
 type UsageLog struct {
-	ID        int64  `json:"id"`
-	UserID    int64  `json:"user_id"`
-	APIKeyID  int64  `json:"api_key_id"`
-	AccountID int64  `json:"account_id"`
-	RequestID string `json:"request_id"`
-	Model     string `json:"model"`
+	HostingPoolID         *int64  `json:"hosting_pool_id,omitempty"`
+	HostingPoolName       *string `json:"hosting_pool_name,omitempty"`
+	HostingRoute          *string `json:"hosting_route,omitempty"`
+	HostingFallbackReason *string `json:"hosting_fallback_reason,omitempty"`
+	ID                    int64   `json:"id"`
+	UserID                int64   `json:"user_id"`
+	APIKeyID              int64   `json:"api_key_id"`
+	AccountID             int64   `json:"account_id"`
+	RequestID             string  `json:"request_id"`
+	Model                 string  `json:"model"`
 	// ServiceTier records the OpenAI service tier used for billing, e.g. "priority" / "flex".
 	ServiceTier *string `json:"service_tier,omitempty"`
 	// ReasoningEffort is the client-requested effort (mapping-hidden, like Model).

@@ -110,6 +110,7 @@ const DataTableStub = {
         <slot name="cell-reasoning_effort" :row="row" :value="row.reasoning_effort" />
         <slot name="cell-billing_mode" :row="row" />
         <slot name="cell-tokens" :row="row" />
+        <slot name="cell-group" :row="row" />
         <slot name="cell-latency" :row="row" />
         <slot name="cell-cost" :row="row" />
         <slot name="cell-request_id" :row="row" />
@@ -892,6 +893,7 @@ const DataTableStubWithUser = {
         <slot name="cell-reasoning_effort" :row="row" :value="row.reasoning_effort" />
         <slot name="cell-billing_mode" :row="row" />
         <slot name="cell-tokens" :row="row" />
+        <slot name="cell-group" :row="row" />
         <slot name="cell-cost" :row="row" />
       </div>
     </div>
@@ -1148,5 +1150,36 @@ describe('admin UsageTable latency TPS', () => {
     const shown = mountLatency([cacheHitRow], { cacheRateAudience: 'user' })
     expect(shown.find('[data-testid="latency-cache-rate"]').text()).toBe('98.6%')
     appStoreMocks.cachedPublicSettings = undefined
+  })
+})
+
+
+describe('Hosting usage provenance and charges', () => {
+  const renderHosted = (row: Record<string, unknown>) => mount(UsageTable, {
+    props: { data: [{ ...baseImageRow, ...row } as any], loading: false, columns: [] },
+    global: { stubs: { DataTable: DataTableStub, Icon: true, EmptyState: true, Teleport: true } },
+  })
+  it.each([
+    [{ hosting_pool_id: 0 }, 'hosting.defaultPool'],
+    [{ hosting_pool_id: 31, hosting_pool_name: '工作池' }, '工作池'],
+    [{}, 'hosting.poolNotRecorded'],
+  ])('shows the recorded pool, distinguishing default from unknown: %j', (pool, expected) => {
+    const wrapper = renderHosted({ hosting_route: 'hosted', ...pool })
+    expect(wrapper.get('[data-testid="usage-hosting-pool"]').text()).toContain(expected)
+  })
+  it('keeps the source pool and actual fallback group visible together', () => {
+    const wrapper = renderHosted({ hosting_route: 'fallback', hosting_pool_id: 31, hosting_pool_name: '工作池', group: { name: '备用余额组' } })
+    expect(wrapper.text()).toContain('工作池')
+    expect(wrapper.text()).toContain('备用余额组')
+    expect(wrapper.find('[data-testid="hosted-usage-base"]').exists()).toBe(false)
+  })
+  it.each([[100, 3], [0.01596, 0.0004788]])('shows %s usage and %s wallet debit to eight decimals and exposes the captured calculation', async (base, debit) => {
+    const wrapper = renderHosted({ hosting_route: 'hosted', total_cost: base, actual_cost: debit, rate_multiplier: 0.03 })
+    expect(wrapper.text()).toContain('$' + base.toFixed(8))
+    expect(wrapper.text()).toContain('$' + debit.toFixed(8))
+    await wrapper.get('[data-testid="hosted-usage-base"] button').trigger('mouseenter')
+    expect(wrapper.get('[data-testid="hosting-charge-formula"]').text()).toBe(`$${base.toFixed(8)} × 0.03 = $${debit.toFixed(8)}`)
+    await wrapper.get('[data-testid="hosted-usage-base"] button').trigger('blur')
+    expect(wrapper.find('[data-testid="hosting-charge-formula"]').exists()).toBe(false)
   })
 })

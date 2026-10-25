@@ -20,6 +20,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -1328,6 +1329,7 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 			entry.ClientIP = &clientIP
 		}
 
+		applyOpsFinalRequestOutcome(c, entry, "failed")
 		enqueueOpsErrorLog(ops, entry)
 	}
 }
@@ -1444,6 +1446,7 @@ func logOpsRecoveredUpstream(c *gin.Context, ops *service.OpsService, finalStatu
 		entry.ClientIP = &clientIP
 	}
 	applyOpsLatencyFieldsFromContext(c, entry)
+	applyOpsFinalRequestOutcome(c, entry, "recovered")
 	enqueueOpsErrorLog(ops, entry)
 }
 
@@ -1657,7 +1660,42 @@ func logOpsStreamErrorValue(c *gin.Context, ops *service.OpsService, wireStatus 
 		entry.ClientIP = &clientIP
 	}
 
+	applyOpsFinalRequestOutcome(c, entry, "failed")
 	enqueueOpsErrorLog(ops, entry)
+}
+
+func applyOpsFinalRequestOutcome(c *gin.Context, entry *service.OpsInsertErrorLogInput, state string) {
+	if c == nil || c.Request == nil || entry == nil || len(entry.UpstreamErrors) == 0 || service.GetOpenAIClientTransport(c) == service.OpenAIClientTransportWS {
+		return
+	}
+	ctx := c.Request.Context()
+	if ctx.Err() != nil {
+		state = "canceled"
+	}
+	outcome := &service.OpsUpstreamRequestOutcome{State: state, StatusCode: entry.StatusCode, Attempt: requesttiming.LatestAttempt(ctx)}
+	if outcome.Attempt != nil {
+		outcome.FinalAccountID = outcome.Attempt.AccountID
+	}
+	// Detach before queueing: the same context can also emit a stream error row.
+	entry.UpstreamErrors = append([]*service.OpsUpstreamErrorEvent(nil), entry.UpstreamErrors...)
+	for i := len(entry.UpstreamErrors) - 1; i >= 0; i-- {
+		if event := entry.UpstreamErrors[i]; event != nil {
+			copy := *event
+			copy.RequestOutcome = outcome
+			if recovery := requesttiming.RecoverySnapshot(ctx); recovery != nil {
+				if recovery.StopReason == "" {
+					if state == "canceled" {
+						recovery.StopReason = "client_canceled"
+					} else if state == "failed" && recovery.OutputStarted {
+						recovery.StopReason = "output_started"
+					}
+				}
+				copy.Recovery = recovery
+			}
+			entry.UpstreamErrors[i] = &copy
+			break
+		}
+	}
 }
 
 func applyOpsStreamErrorSnapshot(entry *service.OpsInsertErrorLogInput, streamErr service.OpsStreamError) {

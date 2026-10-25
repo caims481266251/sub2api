@@ -57,6 +57,80 @@ func (_u *AccountUpdate) ClearDeletedAt() *AccountUpdate {
 	return _u
 }
 
+// SetOwnerUserID sets the "owner_user_id" field.
+func (_u *AccountUpdate) SetOwnerUserID(v int64) *AccountUpdate {
+	_u.mutation.ResetOwnerUserID()
+	_u.mutation.SetOwnerUserID(v)
+	return _u
+}
+
+// SetNillableOwnerUserID sets the "owner_user_id" field if the given value is not nil.
+func (_u *AccountUpdate) SetNillableOwnerUserID(v *int64) *AccountUpdate {
+	if v != nil {
+		_u.SetOwnerUserID(*v)
+	}
+	return _u
+}
+
+// AddOwnerUserID adds value to the "owner_user_id" field.
+func (_u *AccountUpdate) AddOwnerUserID(v int64) *AccountUpdate {
+	_u.mutation.AddOwnerUserID(v)
+	return _u
+}
+
+// ClearOwnerUserID clears the value of the "owner_user_id" field.
+func (_u *AccountUpdate) ClearOwnerUserID() *AccountUpdate {
+	_u.mutation.ClearOwnerUserID()
+	return _u
+}
+
+// SetHostingPoolID sets the "hosting_pool_id" field.
+func (_u *AccountUpdate) SetHostingPoolID(v int64) *AccountUpdate {
+	_u.mutation.ResetHostingPoolID()
+	_u.mutation.SetHostingPoolID(v)
+	return _u
+}
+
+// SetNillableHostingPoolID sets the "hosting_pool_id" field if the given value is not nil.
+func (_u *AccountUpdate) SetNillableHostingPoolID(v *int64) *AccountUpdate {
+	if v != nil {
+		_u.SetHostingPoolID(*v)
+	}
+	return _u
+}
+
+// AddHostingPoolID adds value to the "hosting_pool_id" field.
+func (_u *AccountUpdate) AddHostingPoolID(v int64) *AccountUpdate {
+	_u.mutation.AddHostingPoolID(v)
+	return _u
+}
+
+// ClearHostingPoolID clears the value of the "hosting_pool_id" field.
+func (_u *AccountUpdate) ClearHostingPoolID() *AccountUpdate {
+	_u.mutation.ClearHostingPoolID()
+	return _u
+}
+
+// SetHostingIdentity sets the "hosting_identity" field.
+func (_u *AccountUpdate) SetHostingIdentity(v string) *AccountUpdate {
+	_u.mutation.SetHostingIdentity(v)
+	return _u
+}
+
+// SetNillableHostingIdentity sets the "hosting_identity" field if the given value is not nil.
+func (_u *AccountUpdate) SetNillableHostingIdentity(v *string) *AccountUpdate {
+	if v != nil {
+		_u.SetHostingIdentity(*v)
+	}
+	return _u
+}
+
+// ClearHostingIdentity clears the value of the "hosting_identity" field.
+func (_u *AccountUpdate) ClearHostingIdentity() *AccountUpdate {
+	_u.mutation.ClearHostingIdentity()
+	return _u
+}
+
 // SetName sets the "name" field.
 func (_u *AccountUpdate) SetName(v string) *AccountUpdate {
 	_u.mutation.SetName(v)
@@ -792,6 +866,11 @@ func (_u *AccountUpdate) defaults() error {
 
 // check runs all checks and user-defined validators on the builder.
 func (_u *AccountUpdate) check() error {
+	if v, ok := _u.mutation.HostingIdentity(); ok {
+		if err := account.HostingIdentityValidator(v); err != nil {
+			return &ValidationError{Name: "hosting_identity", err: fmt.Errorf(`ent: validator failed for field "Account.hosting_identity": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.Name(); ok {
 		if err := account.NameValidator(v); err != nil {
 			return &ValidationError{Name: "name", err: fmt.Errorf(`ent: validator failed for field "Account.name": %w`, err)}
@@ -850,6 +929,30 @@ func (_u *AccountUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.DeletedAtCleared() {
 		_spec.ClearField(account.FieldDeletedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.OwnerUserID(); ok {
+		_spec.SetField(account.FieldOwnerUserID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedOwnerUserID(); ok {
+		_spec.AddField(account.FieldOwnerUserID, field.TypeInt64, value)
+	}
+	if _u.mutation.OwnerUserIDCleared() {
+		_spec.ClearField(account.FieldOwnerUserID, field.TypeInt64)
+	}
+	if value, ok := _u.mutation.HostingPoolID(); ok {
+		_spec.SetField(account.FieldHostingPoolID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedHostingPoolID(); ok {
+		_spec.AddField(account.FieldHostingPoolID, field.TypeInt64, value)
+	}
+	if _u.mutation.HostingPoolIDCleared() {
+		_spec.ClearField(account.FieldHostingPoolID, field.TypeInt64)
+	}
+	if value, ok := _u.mutation.HostingIdentity(); ok {
+		_spec.SetField(account.FieldHostingIdentity, field.TypeString, value)
+	}
+	if _u.mutation.HostingIdentityCleared() {
+		_spec.ClearField(account.FieldHostingIdentity, field.TypeString)
 	}
 	if value, ok := _u.mutation.Name(); ok {
 		_spec.SetField(account.FieldName, field.TypeString, value)
@@ -1243,6 +1346,80 @@ func (_u *AccountUpdateOne) SetNillableDeletedAt(v *time.Time) *AccountUpdateOne
 // ClearDeletedAt clears the value of the "deleted_at" field.
 func (_u *AccountUpdateOne) ClearDeletedAt() *AccountUpdateOne {
 	_u.mutation.ClearDeletedAt()
+	return _u
+}
+
+// SetOwnerUserID sets the "owner_user_id" field.
+func (_u *AccountUpdateOne) SetOwnerUserID(v int64) *AccountUpdateOne {
+	_u.mutation.ResetOwnerUserID()
+	_u.mutation.SetOwnerUserID(v)
+	return _u
+}
+
+// SetNillableOwnerUserID sets the "owner_user_id" field if the given value is not nil.
+func (_u *AccountUpdateOne) SetNillableOwnerUserID(v *int64) *AccountUpdateOne {
+	if v != nil {
+		_u.SetOwnerUserID(*v)
+	}
+	return _u
+}
+
+// AddOwnerUserID adds value to the "owner_user_id" field.
+func (_u *AccountUpdateOne) AddOwnerUserID(v int64) *AccountUpdateOne {
+	_u.mutation.AddOwnerUserID(v)
+	return _u
+}
+
+// ClearOwnerUserID clears the value of the "owner_user_id" field.
+func (_u *AccountUpdateOne) ClearOwnerUserID() *AccountUpdateOne {
+	_u.mutation.ClearOwnerUserID()
+	return _u
+}
+
+// SetHostingPoolID sets the "hosting_pool_id" field.
+func (_u *AccountUpdateOne) SetHostingPoolID(v int64) *AccountUpdateOne {
+	_u.mutation.ResetHostingPoolID()
+	_u.mutation.SetHostingPoolID(v)
+	return _u
+}
+
+// SetNillableHostingPoolID sets the "hosting_pool_id" field if the given value is not nil.
+func (_u *AccountUpdateOne) SetNillableHostingPoolID(v *int64) *AccountUpdateOne {
+	if v != nil {
+		_u.SetHostingPoolID(*v)
+	}
+	return _u
+}
+
+// AddHostingPoolID adds value to the "hosting_pool_id" field.
+func (_u *AccountUpdateOne) AddHostingPoolID(v int64) *AccountUpdateOne {
+	_u.mutation.AddHostingPoolID(v)
+	return _u
+}
+
+// ClearHostingPoolID clears the value of the "hosting_pool_id" field.
+func (_u *AccountUpdateOne) ClearHostingPoolID() *AccountUpdateOne {
+	_u.mutation.ClearHostingPoolID()
+	return _u
+}
+
+// SetHostingIdentity sets the "hosting_identity" field.
+func (_u *AccountUpdateOne) SetHostingIdentity(v string) *AccountUpdateOne {
+	_u.mutation.SetHostingIdentity(v)
+	return _u
+}
+
+// SetNillableHostingIdentity sets the "hosting_identity" field if the given value is not nil.
+func (_u *AccountUpdateOne) SetNillableHostingIdentity(v *string) *AccountUpdateOne {
+	if v != nil {
+		_u.SetHostingIdentity(*v)
+	}
+	return _u
+}
+
+// ClearHostingIdentity clears the value of the "hosting_identity" field.
+func (_u *AccountUpdateOne) ClearHostingIdentity() *AccountUpdateOne {
+	_u.mutation.ClearHostingIdentity()
 	return _u
 }
 
@@ -1994,6 +2171,11 @@ func (_u *AccountUpdateOne) defaults() error {
 
 // check runs all checks and user-defined validators on the builder.
 func (_u *AccountUpdateOne) check() error {
+	if v, ok := _u.mutation.HostingIdentity(); ok {
+		if err := account.HostingIdentityValidator(v); err != nil {
+			return &ValidationError{Name: "hosting_identity", err: fmt.Errorf(`ent: validator failed for field "Account.hosting_identity": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.Name(); ok {
 		if err := account.NameValidator(v); err != nil {
 			return &ValidationError{Name: "name", err: fmt.Errorf(`ent: validator failed for field "Account.name": %w`, err)}
@@ -2069,6 +2251,30 @@ func (_u *AccountUpdateOne) sqlSave(ctx context.Context) (_node *Account, err er
 	}
 	if _u.mutation.DeletedAtCleared() {
 		_spec.ClearField(account.FieldDeletedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.OwnerUserID(); ok {
+		_spec.SetField(account.FieldOwnerUserID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedOwnerUserID(); ok {
+		_spec.AddField(account.FieldOwnerUserID, field.TypeInt64, value)
+	}
+	if _u.mutation.OwnerUserIDCleared() {
+		_spec.ClearField(account.FieldOwnerUserID, field.TypeInt64)
+	}
+	if value, ok := _u.mutation.HostingPoolID(); ok {
+		_spec.SetField(account.FieldHostingPoolID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedHostingPoolID(); ok {
+		_spec.AddField(account.FieldHostingPoolID, field.TypeInt64, value)
+	}
+	if _u.mutation.HostingPoolIDCleared() {
+		_spec.ClearField(account.FieldHostingPoolID, field.TypeInt64)
+	}
+	if value, ok := _u.mutation.HostingIdentity(); ok {
+		_spec.SetField(account.FieldHostingIdentity, field.TypeString, value)
+	}
+	if _u.mutation.HostingIdentityCleared() {
+		_spec.ClearField(account.FieldHostingIdentity, field.TypeString)
 	}
 	if value, ok := _u.mutation.Name(); ok {
 		_spec.SetField(account.FieldName, field.TypeString, value)

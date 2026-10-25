@@ -192,6 +192,9 @@ func OpenAIPricingAtFromContext(ctx context.Context) time.Time {
 // （门不存在，全部否决点自动放行，既有行为零变化）。ctx 已有同分组门时直接
 // 复用：同一请求的全部 failover 重入共享同一阈值。
 func (s *OpenAIGatewayService) withOpenAIProfitControlGate(ctx context.Context, groupID *int64) context.Context {
+	if hostingPrimary(ctx) {
+		return ctx
+	}
 	if _, suppressed := ctx.Value(openAIProfitControlSuppressCtxKey{}).(struct{}); suppressed {
 		return ctx
 	}
@@ -300,6 +303,9 @@ func ContextWithSelectionProfitGate(ctx context.Context, sel *AccountSelectionRe
 // openAIProfitControlVetoReason 报告利润门是否否决该账号。ctx 中没有门
 // （分组未启用利润控制或本请求跳门）或账号为 nil 时一律放行。
 func openAIProfitControlVetoReason(ctx context.Context, account *Account) (bool, string) {
+	if hostingPrimary(ctx) {
+		return false, ""
+	}
 	gate, _ := ctx.Value(openAIProfitControlGateCtxKey{}).(*openAIProfitControlGate)
 	if gate == nil || account == nil {
 		return false, ""
@@ -364,6 +370,10 @@ func (s *OpenAIGatewayService) BindStickySessionAfterSelection(ctx context.Conte
 // remains sticky and becomes eligible again automatically after its rate
 // recovers.
 func (s *OpenAIGatewayService) BindStickySessionAfterProfitAdmission(ctx context.Context, groupID *int64, sessionHash string, accountID int64) error {
+	if a := managedOpenAISessionAffinity(ctx, groupID, sessionHash); a != nil {
+		s.admitOpenAISessionAffinity(ctx, a, accountID)
+		return nil
+	}
 	if sessionHash == "" || accountID <= 0 {
 		return nil
 	}

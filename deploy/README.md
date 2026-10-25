@@ -13,6 +13,22 @@ This directory contains files for deploying Sub2API on Linux servers and Apple-s
 | **Binary Install** | Production servers, systemd | Web-based wizard |
 | **[Kubernetes / K3s](kubernetes/README.md)** | Request replicas with a shared primary | Pre-provisioned config / Secrets |
 
+## First-start database initialization
+
+The application binary includes all SQL migrations and runs them automatically
+before serving requests. A fresh installation needs an empty PostgreSQL database
+and the configured database credentials; no manual SQL import, existing database
+dump, or separate migration command is required. Initialization creates the
+proxy-pool tables and their initial state as well as the credential and borrowing
+tables they depend on.
+
+An empty proxy pool is valid. With no fixed credential-encryption key configured,
+its page opens normally and offers the encryption setup action. Opening the page
+does not generate a key. The setup action creates the persistent key in the
+application data directory; the standard container configuration persists
+`/app/data`. A read failure on the first page load is an initialization or runtime
+error, not an instruction to migrate data manually.
+
 ## Files
 
 | File | Description |

@@ -37,6 +37,22 @@ describe('OpsErrorDetailModal', () => {
     mocks.listRequestErrorUpstreamErrors.mockResolvedValue({ items: [] })
   })
 
+  it('explains recovered telemetry while keeping the original upstream error', async () => {
+    mocks.getRequestErrorDetail.mockResolvedValue({
+      id: 7, phase: 'upstream', status_code: 200, upstream_status_code: 503,
+      message: 'Recovered upstream error 503: temporary', upstream_error_message: 'temporary',
+      upstream_errors: '[]'
+    })
+    const wrapper = shallowMount(OpsErrorDetailModal, {
+      props: { show: true, errorId: 7 },
+      global: { stubs: { BaseDialog: { template: '<div><slot /></div>' } } }
+    })
+    await flushPromises()
+    expect(wrapper.get('[data-testid="recovered-request"]').text()).toContain('admin.ops.errorLog.recoveredHint')
+    expect(wrapper.text()).toContain('temporary')
+    wrapper.unmount()
+  })
+
   it('prioritizes upstream root cause and deduplicates diagnostic payloads', async () => {
     mocks.getRequestErrorDetail.mockResolvedValue({
       id: 1,

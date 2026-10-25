@@ -31,7 +31,10 @@ type VMKernelSchedulerRevision struct {
 
 type Account struct {
 	VMKernelSchedulerRevision *VMKernelSchedulerRevision `json:"vm_kernel_scheduler_revision,omitempty"`
-	InitialAdmissionPlan      *ScheduledTestPlan         `json:"-"`
+	OwnerUserID               *int64
+	HostingPoolID             *int64
+	HostingIdentity           *string
+	InitialAdmissionPlan      *ScheduledTestPlan `json:"-"`
 	// InitialQualityPlan is internal create-only state, never imported or exported.
 	InitialQualityPlan      *ScheduledTestPlan `json:"-"`
 	ID                      int64

@@ -19,7 +19,7 @@
       @keydown.down.prevent="onTriggerKeyDown"
       @keydown.up.prevent="onTriggerKeyDown"
     >
-      <span class="select-value">
+      <span class="select-value" :title="selectedLabel">
         <slot name="selected" :option="selectedOption">
           {{ selectedLabel }}
         </slot>
@@ -498,6 +498,8 @@ const onDropdownKeyDown = (e: KeyboardEvent) => {
       break
     case 'Escape':
       e.preventDefault()
+      // Close this dropdown before its containing dialog handles Escape.
+      e.stopPropagation()
       isOpen.value = false
       triggerRef.value?.focus()
       break

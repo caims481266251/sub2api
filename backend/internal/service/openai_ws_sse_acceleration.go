@@ -39,6 +39,7 @@ func (s *OpenAIGatewayService) resolveOpenAIHTTPWSSSEDecision(
 		!isOpenAICompatMessagesBridgeBody(body) &&
 		gjson.GetBytes(body, "stream").Type == gjson.True &&
 		strings.TrimSpace(gjson.GetBytes(body, "previous_response_id").String()) == "" &&
+		borrowHTTPContinuationFromContext(c.Request.Context()) == nil &&
 		(s.pluginManager == nil || !s.pluginManager.ShouldRouteOpenAIOAuth(account)) {
 		decision.Reason = openAIOAuthWSSSEAccelerationReason
 		return decision

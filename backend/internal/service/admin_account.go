@@ -262,7 +262,9 @@ func (s *adminServiceImpl) DuplicateAccount(ctx context.Context, id int64, actor
 	if source.IsVMKernel() && (s.cfg == nil || !s.cfg.VMKernel.Enabled) {
 		return nil, infraerrors.BadRequest("VM_KERNEL_DISABLED", "Docker kernel execution is not enabled on this deployment")
 	}
-
+	if source.OwnerUserID != nil {
+		return nil, infraerrors.BadRequest("HOSTING_DUPLICATE_FORBIDDEN", "用户托管账号不能复制到平台账号池")
+	}
 	if source.IsCredentialShadow() {
 		return nil, infraerrors.BadRequest(
 			"ACCOUNT_DUPLICATE_SHADOW_UNSUPPORTED",
@@ -1690,6 +1692,9 @@ func (s *adminServiceImpl) CreateShadow(ctx context.Context, parentID int64, opt
 	}
 	// G6:母账号本身不能是影子,否则会建出二级影子——resolveCredentialAccount 只解一层,
 	// 会解析到无凭据的一级影子,进入坏调度/上游失败。
+	if parent.OwnerUserID != nil {
+		return nil, infraerrors.BadRequest("HOSTING_SHADOW_FORBIDDEN", "用户托管账号不支持创建影子账号")
+	}
 	if parent.IsCredentialShadow() {
 		return nil, infraerrors.New(http.StatusBadRequest, "SPARK_SHADOW_PARENT_IS_SHADOW",
 			"spark shadow parent must be a real account, not another spark shadow")

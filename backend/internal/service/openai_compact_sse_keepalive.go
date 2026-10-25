@@ -2,17 +2,22 @@ package service
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
-// openAICompactSSEKeepaliveKey 存放 body-signal compact 请求的下游 SSE 心跳器。
+// Shared by compact waits and ordinary API-key Responses uploads/header waits.
 const openAICompactSSEKeepaliveKey = "openai_compact_sse_keepalive"
+
+const openAIDownstreamDisconnectedKey = "openai_downstream_disconnected"
 
 // openAICompactSSEKeepalive 在 compact 上游 unary 等待期间向下游写 SSE 注释行
 // 心跳。上游 /responses/compact 在模型处理期间不发送任何字节（大上下文可长达
@@ -29,6 +34,7 @@ type openAICompactSSEKeepalive struct {
 	writer  gin.ResponseWriter
 	started bool
 	stopped bool
+	failed  bool
 	// paused 仅供持续测试流使用：Header 返回可变 map，写回/Flush 前必须暂停心跳。
 	paused bool
 	// bytes 是心跳已写出的注释字节数。心跳不构成语义响应，handler 的
@@ -66,6 +72,21 @@ func startOpenAISSEKeepalive(c *gin.Context, interval time.Duration) func() {
 		writer: originalWriter,
 		stop:   make(chan struct{}),
 	}
+	// Each upstream attempt may have its own header wait. Retire the previous
+	// heartbeat before rearming, retaining all comment bytes and commitment
+	// across failover. Never nest wrappers around a stopped heartbeat.
+	if value, ok := c.Get(openAICompactSSEKeepaliveKey); ok {
+		if previous, ok := value.(*openAICompactSSEKeepalive); ok && previous != nil {
+			previous.mu.Lock()
+			previous.markStoppedLocked()
+			k.bytes, k.started, k.failed = previous.bytes, previous.started, previous.failed
+			previous.mu.Unlock()
+			if wrapped, ok := originalWriter.(*openAICompactKeepaliveWriter); ok && wrapped.k == previous {
+				originalWriter = wrapped.ResponseWriter
+				k.writer = originalWriter
+			}
+		}
+	}
 	c.Set(openAICompactSSEKeepaliveKey, k)
 	wrappedWriter := &openAICompactKeepaliveWriter{ResponseWriter: originalWriter, k: k}
 	c.Writer = wrappedWriter
@@ -101,12 +122,105 @@ func startOpenAISSEKeepalive(c *gin.Context, interval time.Duration) func() {
 	}
 }
 
+// Cover request upload and response-header waiting, before the stream reader
+// can run its own heartbeat. All response construction resumes after stop.
+func (s *OpenAIGatewayService) startOpenAIUpstreamWaitKeepalive(c *gin.Context, stream bool) func() {
+	if s == nil || s.cfg == nil || (!stream && !openAICompactClientWantsStream(c)) {
+		return func() {}
+	}
+	return startOpenAISSEKeepalive(c, time.Duration(s.cfg.Gateway.StreamKeepaliveInterval)*time.Second)
+}
+
+func (s *OpenAIGatewayService) doOpenAIUpstreamWithKeepalive(c *gin.Context, stream bool, req *http.Request, proxyURL string, account *Account) (*http.Response, error) {
+	// The Responses handler owns the cross-attempt SSE boundary for all account
+	// types. Use its timer when installed, keeping the API-key upload fallback
+	// for callers outside that handler and compact requests.
+	if c != nil {
+		if raw, ok := c.Get(openAIHeaderWaitWriterKey); ok {
+			if writer, ok := raw.(*openAIHeaderWaitWriter); ok && writer != nil {
+				stop := s.startOpenAIHeaderWaitKeepalive(c, stream)
+				defer stop()
+				return s.doOpenAIUpstream(req, proxyURL, account)
+			}
+		}
+	}
+	// Cover ordinary API-key Responses uploads. Stateful SDK transports retain
+	// their own response protocol and cancellation lifecycle.
+	if account == nil || !account.IsOpenAIApiKey() || account.IsCopilotSDKEnabled() {
+		return s.doOpenAIUpstream(req, proxyURL, account)
+	}
+	stop := s.startOpenAIUpstreamWaitKeepalive(c, stream)
+	defer stop()
+	return s.doOpenAIUpstream(req, proxyURL, account)
+}
+
+// OpenAIDownstreamDisconnected includes a confirmed write failure even when
+// net/http has not yet canceled the request context. Failover must not send
+// another attempt to a client that can no longer receive it.
+func OpenAIDownstreamDisconnected(c *gin.Context) bool {
+	if c == nil {
+		return false
+	}
+	if c.GetBool(openAIDownstreamDisconnectedKey) || OpenAIHeaderWaitDisconnected(c) {
+		return true
+	}
+	if c.Request != nil && c.Request.Context().Err() != nil && !APIKeySlotLeaseLost(c.Request.Context()) {
+		return true
+	}
+	if value, ok := c.Get(openAICompactSSEKeepaliveKey); ok {
+		if k, ok := value.(*openAICompactSSEKeepalive); ok && k != nil {
+			k.mu.Lock()
+			defer k.mu.Unlock()
+			return k.failed
+		}
+	}
+	return false
+}
+
+// A header-wait heartbeat commits an SSE response. Later local or upstream
+// errors must terminate that stream; appending a JSON document would make it
+// invalid. Before the first heartbeat preserve the original status and JSON.
+func writeOpenAIErrorJSON(c *gin.Context, status int, payload gin.H) {
+	if StopOpenAICompactSSEKeepaliveCommitted(c) {
+		body, _ := json.Marshal(payload)
+		writeOpenAIErrorAfterKeepalive(c, status, body)
+		return
+	}
+	c.JSON(status, payload)
+}
+
+func writeOpenAIErrorBytes(c *gin.Context, status int, contentType string, body []byte) {
+	if StopOpenAICompactSSEKeepaliveCommitted(c) {
+		writeOpenAIErrorAfterKeepalive(c, status, body)
+		return
+	}
+	c.Data(status, contentType, body)
+}
+
+func writeOpenAIErrorAfterKeepalive(c *gin.Context, status int, body []byte) {
+	c.Header("Content-Type", "text/event-stream")
+	code := strings.TrimSpace(gjson.GetBytes(body, "error.code").String())
+	if code == "" {
+		code = strings.TrimSpace(gjson.GetBytes(body, "error.type").String())
+	}
+	if code == "" {
+		code = "upstream_error"
+	}
+	message := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(body)))
+	if message == "" {
+		message = "Upstream request failed"
+	}
+	param := gjson.GetBytes(body, "error.param").String()
+	MarkResponseCommitted(c)
+	writeOpenAICompactSSEFailureMessageParam(c, status, code, message, param)
+}
+
 // beat 在锁内提交（首次）响应头并写出一条 SSE 注释行；返回 false 表示心跳已
 // 停止或下游写入失败，goroutine 应退出。
 func (k *openAICompactSSEKeepalive) beat() bool {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	if k.stopped {
+	if k.stopped || k.failed {
 		return false
 	}
 	if k.paused {
@@ -124,10 +238,12 @@ func (k *openAICompactSSEKeepalive) beat() bool {
 	n, err := k.writer.Write([]byte(": keepalive\n\n"))
 	k.bytes += n
 	if err != nil {
-		k.stopped = true
+		k.failed = true
+		k.markStoppedLocked()
 		return false
 	}
 	if err := FlushGatewayResponse(k.writer); err != nil {
+		k.failed = true
 		k.markStoppedLocked()
 		return false
 	}

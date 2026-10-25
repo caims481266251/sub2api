@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -315,9 +316,9 @@ func TestAstraGatewayAutomaticPrepareAndCooldown(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Gateway.CodexGatewayPin = pinConfig()
 	wrapper := &astraRoutingUpstream{cfg: cfg}
-	calls := 0
+	var calls atomic.Int32
 	wrapper.SetAstraGatewayPreparer(func(_ context.Context, id int64) error {
-		calls++
+		calls.Add(1)
 		p := wrapper.current(t.Context())
 		now := time.Now()
 		if id == 299 {
@@ -327,18 +328,18 @@ func TestAstraGatewayAutomaticPrepareAndCooldown(t *testing.T) {
 		return nil
 	})
 	require.NoError(t, wrapper.PrepareAstraGateway(t.Context()))
-	require.Equal(t, 2, calls)
+	require.Equal(t, int32(2), calls.Load())
 	status := wrapper.AstraGatewaySnapshot(t.Context())
 	require.Zero(t, status.ReadyRoutes, "source success alone is not a target-validated route")
 	require.Equal(t, "source_test_failed", status.Sources[0].Reason)
 	require.NoError(t, wrapper.PrepareAstraGateway(t.Context()))
-	require.Equal(t, 3, calls)
+	require.Equal(t, int32(4), calls.Load())
 	wrapper.pool = nil
-	wrapper.SetAstraGatewayPreparer(func(context.Context, int64) error { calls++; return errors.New("failed") })
+	wrapper.SetAstraGatewayPreparer(func(context.Context, int64) error { calls.Add(1); return errors.New("failed") })
 	require.Error(t, wrapper.PrepareAstraGateway(t.Context()))
-	n := calls
+	n := calls.Load()
 	require.ErrorContains(t, wrapper.PrepareAstraGateway(t.Context()), "cooldown")
-	require.Equal(t, n, calls)
+	require.Equal(t, n, calls.Load())
 }
 func TestAstraGatewayLifetimeConfiguration(t *testing.T) {
 	now := time.Now()
@@ -396,5 +397,62 @@ func TestTrustedSourceAcquisitionDoesNotRequireCandyAnswer(t *testing.T) {
 		} else {
 			require.Nil(t, cookie)
 		}
+	}
+}
+
+func TestAstraGatewayBorrowFromAnotherSourceModel(t *testing.T) {
+	for _, tc := range []struct {
+		name, responseModel string
+		controlled, passed  bool
+	}{
+		{"selected source model", "gpt-5.6-sol", true, true},
+		{"mismatched response model", "gpt-6-astra", true, false},
+		{"ordinary source request", "gpt-5.6-sol", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{}
+			cfg.Gateway.CodexGatewayPin = pinConfig()
+			cfg.Gateway.CodexGatewayPin.SourceAccountModels = map[int64]string{299: "gpt-5.6-sol"}
+			wrapper := &astraRoutingUpstream{cfg: cfg}
+			targetCalls := 0
+			wrapper.delegate = gatewayPinDelegate{call: func(r *http.Request, proxy string, id int64, n int, f *tlsfingerprint.Profile) (*http.Response, error) {
+				if id == 299 {
+					resp := pinResponse("__oailb=sol-route; Path=/; Secure; Max-Age=230")
+					body, err := io.ReadAll(resp.Body)
+					require.NoError(t, err)
+					_ = resp.Body.Close()
+					resp.Body = io.NopCloser(strings.NewReader(strings.ReplaceAll(string(body), "gpt-6-astra", tc.responseModel)))
+					return resp, nil
+				}
+				targetCalls++
+				require.Equal(t, int64(300), id)
+				require.True(t, codexGatewayPinAstra(r), "target probes and business remain Astra")
+				require.Equal(t, "Bearer target", r.Header.Get("Authorization"))
+				require.Equal(t, "__oailb=sol-route", r.Header.Get("Cookie"))
+				return pinResponse(""), nil
+			}}
+			ctx := t.Context()
+			if tc.controlled {
+				ctx = service.WithAstraSourceAcquisition(ctx)
+			}
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", strings.NewReader(`{"model":"gpt-5.6-sol"}`))
+			require.NoError(t, err)
+			resp, err := wrapper.Do(req, "source-proxy", 299, 1)
+			consumeAffinityResponse(t, resp, err)
+			pool := wrapper.current(t.Context())
+			cookie, _ := pool.currentCookie(req.URL.Path, time.Now())
+			if !tc.passed {
+				require.Nil(t, cookie)
+				return
+			}
+			require.NotNil(t, cookie)
+			require.Zero(t, wrapper.AstraGatewaySnapshot(t.Context()).ReadyRoutes, "source model success alone cannot admit targets")
+			target := pinRequest(t)
+			target.Header.Set("Authorization", "Bearer target")
+			resp, err = wrapper.Do(forceAstraProbe(target), "target-proxy", 300, 1)
+			consumeAffinityResponse(t, resp, err)
+			require.Equal(t, 3, targetCalls, "two Astra probe shots then the business request")
+			require.Equal(t, 1, wrapper.AstraGatewaySnapshot(t.Context()).ReadyRoutes)
+		})
 	}
 }

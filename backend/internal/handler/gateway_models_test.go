@@ -106,6 +106,22 @@ func newGatewayModelsHandlerForTest(repo service.AccountRepository, routeRepo ..
 	}
 }
 
+func TestHostedModelsWithoutPublicGroup(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{RouteMode: service.RouteModeHosted})
+	// No public repository is available: hosted discovery must not consult it.
+	(&GatewayHandler{}).Models(c)
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var result gatewayModelsResponseForTest
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &result))
+	require.Len(t, result.Data, len(openai.DefaultModels))
+	for _, model := range result.Data {
+		require.Equal(t, "openai", model.OwnedBy)
+	}
+}
+
 func TestGatewayCompositeRouteModelsAppearInBothCatalogs(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	const groupID int64 = 7784

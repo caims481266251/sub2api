@@ -14,6 +14,16 @@ func (s *OpenAIGatewayService) listSchedulableAccountsForRequest(
 	requireCompact bool, excludedIDs map[int64]struct{},
 ) ([]Account, error) {
 	accounts, err := s.listSchedulableAccounts(ctx, groupID, platform)
+	_, restricted := ctx.Value(borrowSchedulingTierKey{}).(borrowSchedulingTier)
+	if restricted || ctx.Value(openAISessionAffinityOnlyKey{}) != nil || ctx.Value(openAISessionAffinitySkipKey{}) != nil {
+		filtered := make([]Account, 0, len(accounts))
+		for _, account := range accounts {
+			if borrowSchedulingAllowsAccount(ctx, account.ID) {
+				filtered = append(filtered, account)
+			}
+		}
+		accounts = filtered
+	}
 	if err != nil || s.schedulerSnapshot == nil || len(accounts) == 0 {
 		return accounts, err
 	}

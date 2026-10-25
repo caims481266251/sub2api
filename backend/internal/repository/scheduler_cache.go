@@ -642,6 +642,9 @@ func (c *schedulerCache) SetAccount(ctx context.Context, account *service.Accoun
 	if account == nil || account.ID <= 0 {
 		return nil
 	}
+	if account.OwnerUserID != nil {
+		return c.DeleteAccount(ctx, account.ID)
+	}
 	accountIDs, err := c.writeAccountIDs(ctx, []service.Account{*account})
 	if err != nil {
 		return err
@@ -862,6 +865,12 @@ func (c *schedulerCache) writeAccountIDs(ctx context.Context, accounts []service
 	}
 
 	for _, account := range accounts {
+		if account.OwnerUserID != nil {
+			id := strconv.FormatInt(account.ID, 10)
+			pipe.Del(ctx, schedulerAccountKey(id), schedulerAccountMetaKey(id), schedulerLastUsedKey(id))
+			pending++
+			continue
+		}
 		fullPayload, metaPayload, err := marshalSchedulerCacheAccount(account)
 		if err != nil {
 			slog.Warn("scheduler cache skips account with unencodable payload",
@@ -963,6 +972,8 @@ func buildSchedulerMetadataAccount(account service.Account) service.Account {
 	return service.Account{
 		VMKernelSchedulerRevision: service.VMKernelSchedulerProjection(&account),
 		ID:                        account.ID,
+		OwnerUserID:               account.OwnerUserID,
+		HostingIdentity:           account.HostingIdentity,
 		Name:                      account.Name,
 		ExecutionMode:             account.EffectiveExecutionMode(),
 		Platform:                  account.Platform,

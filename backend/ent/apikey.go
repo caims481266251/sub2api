@@ -26,6 +26,12 @@ type APIKey struct {
 	UpdatedAt time.Time `json:"updated_at,omitempty"`
 	// DeletedAt holds the value of the "deleted_at" field.
 	DeletedAt *time.Time `json:"deleted_at,omitempty"`
+	// RouteMode holds the value of the "route_mode" field.
+	RouteMode string `json:"route_mode,omitempty"`
+	// HostingFallbackGroupID holds the value of the "hosting_fallback_group_id" field.
+	HostingFallbackGroupID *int64 `json:"hosting_fallback_group_id,omitempty"`
+	// HostingPoolID holds the value of the "hosting_pool_id" field.
+	HostingPoolID *int64 `json:"hosting_pool_id,omitempty"`
 	// UserID holds the value of the "user_id" field.
 	UserID int64 `json:"user_id,omitempty"`
 	// API key concurrency limit (0 = no additional limit)
@@ -127,9 +133,9 @@ func (*APIKey) scanValues(columns []string) ([]any, error) {
 			values[i] = new([]byte)
 		case apikey.FieldQuota, apikey.FieldQuotaUsed, apikey.FieldRateLimit5h, apikey.FieldRateLimit1d, apikey.FieldRateLimit7d, apikey.FieldUsage5h, apikey.FieldUsage1d, apikey.FieldUsage7d:
 			values[i] = new(sql.NullFloat64)
-		case apikey.FieldID, apikey.FieldUserID, apikey.FieldConcurrencyLimit, apikey.FieldGroupID:
+		case apikey.FieldID, apikey.FieldHostingFallbackGroupID, apikey.FieldHostingPoolID, apikey.FieldUserID, apikey.FieldConcurrencyLimit, apikey.FieldGroupID:
 			values[i] = new(sql.NullInt64)
-		case apikey.FieldKey, apikey.FieldName, apikey.FieldStatus:
+		case apikey.FieldRouteMode, apikey.FieldKey, apikey.FieldName, apikey.FieldStatus:
 			values[i] = new(sql.NullString)
 		case apikey.FieldCreatedAt, apikey.FieldUpdatedAt, apikey.FieldDeletedAt, apikey.FieldLastUsedAt, apikey.FieldExpiresAt, apikey.FieldWindow5hStart, apikey.FieldWindow1dStart, apikey.FieldWindow7dStart:
 			values[i] = new(sql.NullTime)
@@ -172,6 +178,26 @@ func (_m *APIKey) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.DeletedAt = new(time.Time)
 				*_m.DeletedAt = value.Time
+			}
+		case apikey.FieldRouteMode:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field route_mode", values[i])
+			} else if value.Valid {
+				_m.RouteMode = value.String
+			}
+		case apikey.FieldHostingFallbackGroupID:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field hosting_fallback_group_id", values[i])
+			} else if value.Valid {
+				_m.HostingFallbackGroupID = new(int64)
+				*_m.HostingFallbackGroupID = value.Int64
+			}
+		case apikey.FieldHostingPoolID:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field hosting_pool_id", values[i])
+			} else if value.Valid {
+				_m.HostingPoolID = new(int64)
+				*_m.HostingPoolID = value.Int64
 			}
 		case apikey.FieldUserID:
 			if value, ok := values[i].(*sql.NullInt64); !ok {
@@ -369,6 +395,19 @@ func (_m *APIKey) String() string {
 	if v := _m.DeletedAt; v != nil {
 		builder.WriteString("deleted_at=")
 		builder.WriteString(v.Format(time.ANSIC))
+	}
+	builder.WriteString(", ")
+	builder.WriteString("route_mode=")
+	builder.WriteString(_m.RouteMode)
+	builder.WriteString(", ")
+	if v := _m.HostingFallbackGroupID; v != nil {
+		builder.WriteString("hosting_fallback_group_id=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	if v := _m.HostingPoolID; v != nil {
+		builder.WriteString("hosting_pool_id=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
 	}
 	builder.WriteString(", ")
 	builder.WriteString("user_id=")

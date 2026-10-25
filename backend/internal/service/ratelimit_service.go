@@ -1251,7 +1251,7 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 	// OpenAI OAuth stays on the same account for the gateway's bounded retry
 	// window. Persisting a rate-limit reset on the first 429 would make the next
 	// retry ineligible and silently turn same-account recovery into a switch.
-	if account != nil && isOpenAIOAuthAccount(account) && s.runtimeBlocker != nil {
+	if !openAIUpstreamFinalAttempt(ctx) && account != nil && isOpenAIOAuthAccount(account) && s.runtimeBlocker != nil {
 		if checker, ok := s.runtimeBlocker.(interface {
 			ShouldRetryOpenAIOAuth429(*Account, http.Header, []byte) bool
 		}); ok && checker.ShouldRetryOpenAIOAuth429(account, headers, responseBody) {
@@ -1262,8 +1262,8 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 }
 
 // handle429Cooldown persists the shared quota snapshot and blocks scheduling.
-// Callers that do not retry the rejected request (Excel BPS) enter here directly
-// instead of deferring the cooldown for the Codex same-account retry window.
+// Internal final attempts reach this through the normal error policy with
+// openAIUpstreamFinalAttempt set, without starting a business retry window.
 func (s *RateLimitService) handle429Cooldown(ctx context.Context, account *Account, headers http.Header, responseBody []byte) {
 	// Spark 影子：限流/熔断状态 100% 由 QueryUsage(/wham/usage body 的 codex_bengalfox)驱动。
 	// /responses 的 429 携带的 x-codex-*/usage_limit_reached 是 global codex 道(plan/spec §8),

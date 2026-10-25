@@ -18,6 +18,8 @@ import (
 func concurrentAstraWrapper() *astraRoutingUpstream {
 	cfg := &config.Config{}
 	cfg.Gateway.CodexGatewayPin = pinConfig()
+	// One donor isolates shared preparation from multi-donor parallel acquisition.
+	cfg.Gateway.CodexGatewayPin.SourceAccountIDs = []int64{299}
 	return &astraRoutingUpstream{cfg: cfg}
 }
 func seedConcurrentAstraRoute(t *testing.T, s *astraRoutingUpstream, value string) {
@@ -81,7 +83,7 @@ func TestAstraConcurrentPreparationSharesResult(t *testing.T) {
 			if success {
 				require.EqualValues(t, 1, calls.Load())
 			} else {
-				require.EqualValues(t, len(pinConfig().SourceAccountIDs), calls.Load())
+				require.EqualValues(t, len(s.cfg.Gateway.CodexGatewayPin.SourceAccountIDs), calls.Load())
 			}
 		})
 	}

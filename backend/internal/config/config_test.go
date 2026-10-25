@@ -450,6 +450,22 @@ func TestLoadDefaultOpenAIFirstOutputTimeoutsDisabled(t *testing.T) {
 	require.Zero(t, cfg.Gateway.OpenAIHighEffortFirstOutputTimeoutSeconds)
 }
 
+func TestLoadOpenAISessionAffinity(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.True(t, cfg.Gateway.OpenAISessionAffinityEnabled)
+	require.Empty(t, cfg.Gateway.OpenAISessionAffinityGroupIDs)
+	t.Setenv("GATEWAY_OPENAI_SESSION_AFFINITY_ENABLED", "false")
+	viper.Set("gateway.openai_session_affinity_group_ids", []int64{0, 9})
+	cfg, err = Load()
+	require.NoError(t, err)
+	require.False(t, cfg.Gateway.OpenAISessionAffinityEnabled)
+	require.Equal(t, []int64{0, 9}, cfg.Gateway.OpenAISessionAffinityGroupIDs)
+	cfg.Gateway.OpenAISessionAffinityGroupIDs = []int64{-1}
+	require.ErrorContains(t, cfg.Validate(), "openai_session_affinity_group_ids")
+}
+
 func TestLoadOpenAIFirstOutputTimeoutsFromEnv(t *testing.T) {
 	resetViperWithJWTSecret(t)
 	t.Setenv("GATEWAY_OPENAI_FIRST_OUTPUT_TIMEOUT_SECONDS", "90")
@@ -645,6 +661,7 @@ func TestLoadDefaultOpenAIHTTP2Enabled(t *testing.T) {
 	cfg, err := Load()
 	require.NoError(t, err)
 	require.True(t, cfg.Gateway.OpenAIHTTP2.Enabled)
+	require.Empty(t, cfg.Gateway.OpenAIHTTP2.HTTP1Hosts)
 	require.True(t, cfg.Gateway.OpenAIHTTP2.AllowProxyFallbackToHTTP1)
 	require.False(t, cfg.Gateway.OpenAIProxyStreamCircuit.Disabled)
 	require.Equal(t, 2, cfg.Gateway.OpenAIProxyStreamCircuit.FailureThreshold)
@@ -674,6 +691,29 @@ func TestLoadOpenAIHTTP2DisabledFromEnv(t *testing.T) {
 	cfg, err := Load()
 	require.NoError(t, err)
 	require.False(t, cfg.Gateway.OpenAIHTTP2.Enabled)
+}
+
+func TestLoadOpenAIHTTP1HostsFromEnv(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("GATEWAY_OPENAI_HTTP2_HTTP1_HOSTS", "yumitu.com,api.example.test")
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, []string{"yumitu.com", "api.example.test"}, cfg.Gateway.OpenAIHTTP2.HTTP1Hosts)
+	require.True(t, cfg.Gateway.OpenAIHTTP2.Enabled)
+}
+
+func TestOpenAIHTTP1HostsValidation(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+	for _, host := range []string{"https://yumitu.com", "*.yumitu.com", "yumitu.com/v1", "yumitu.com:443", "", "bad host"} {
+		t.Run(host, func(t *testing.T) {
+			cfg.Gateway.OpenAIHTTP2.HTTP1Hosts = []string{host}
+			require.ErrorContains(t, cfg.Validate(), "gateway.openai_http2.http1_hosts")
+		})
+	}
+	cfg.Gateway.OpenAIHTTP2.HTTP1Hosts = []string{" YUMITU.com. ", "api.example.test", "127.0.0.1"}
+	require.NoError(t, cfg.Validate())
 }
 
 func TestLoadDefaultOpenAIResponseHeaderTimeoutUnlimited(t *testing.T) {

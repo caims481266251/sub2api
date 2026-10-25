@@ -697,6 +697,11 @@ func (s *OpenAIGatewayService) dialLiveSideband(ctx context.Context, record *Liv
 	if account == nil || !account.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityLive) {
 		return nil, ErrLiveUnavailable
 	}
+	if s.borrowRoutes != nil {
+		if err := s.borrowRoutes.Check(ctx, account.ID, "", "live"); err != nil {
+			return nil, err
+		}
+	}
 	headers, err := s.liveSidebandHeaders(ctx, account, record)
 	if err != nil {
 		return nil, err

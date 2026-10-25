@@ -395,6 +395,9 @@ func ReadToolRepairResponse(reader io.Reader) (map[string]any, error) {
 		if kind == "" {
 			kind = event
 		}
+		if observer, ok := reader.(interface{ ObserveOpenAIEvent([]byte, string) }); ok {
+			observer.ObserveOpenAIEvent(data, kind)
+		}
 		item, _ := payload["item"].(object)
 		if kind == "response.output_item.done" && isTool(item) {
 			if len(pending) >= 1024 {

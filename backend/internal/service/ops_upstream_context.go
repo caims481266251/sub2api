@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
 	"github.com/Wei-Shaw/sub2api/internal/service/basispoints"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -355,6 +356,25 @@ func snapshotOpsStreamErrorContext(c *gin.Context, streamErr *OpsStreamError) {
 		streamErr.UpstreamDetail, _ = value.(string)
 		streamErr.UpstreamDetail = strings.TrimSpace(streamErr.UpstreamDetail)
 	}
+	if c.Request != nil {
+		if a := requesttiming.LatestAttempt(c.Request.Context()); a != nil && a.Status >= 200 && a.Status < 300 && a.Terminal != "completed" && (a.BorrowRouteID != "" || requesttiming.RecoverySnapshot(c.Request.Context()) != nil) && (streamErr.AccountID == 0 || a.AccountID == streamErr.AccountID) {
+			// A stream failure's semantic 502/503 is not its wire HTTP status.
+			streamErr.UpstreamStatus = a.Status
+			found := false
+			if value, ok := c.Get(OpsUpstreamErrorsKey); ok {
+				if events, ok := value.([]*OpsUpstreamErrorEvent); ok && len(events) > 0 {
+					last := events[len(events)-1]
+					if last != nil && last.Attempt != nil && last.Attempt.Number == a.Number {
+						last.Attempt = a
+						found = true
+					}
+				}
+			}
+			if !found {
+				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{AccountID: a.AccountID, Platform: PlatformOpenAI, Kind: "stream_error", UpstreamStatusCode: a.Status, Message: streamErr.Message, SkipMonitoring: streamErr.SkipMonitoring})
+			}
+		}
+	}
 	if value, ok := c.Get(OpsUpstreamErrorsKey); ok {
 		if events, ok := value.([]*OpsUpstreamErrorEvent); ok {
 			streamErr.UpstreamErrors = make([]*OpsUpstreamErrorEvent, 0, len(events))
@@ -414,6 +434,22 @@ func GetOpsStreamErrors(c *gin.Context) []OpsStreamError {
 		}
 	}
 	if streamErr, ok := GetOpsStreamError(c); ok {
+		// The error can be marked by the parser before its deferred body/lease
+		// cleanup runs. Refresh only the recorded attempt, never a later route.
+		if c.Request != nil && GetOpenAIClientTransport(c) != OpenAIClientTransportWS {
+			streamErr.UpstreamErrors = append([]*OpsUpstreamErrorEvent(nil), streamErr.UpstreamErrors...)
+			for i, ev := range streamErr.UpstreamErrors {
+				if ev == nil || ev.Attempt == nil {
+					continue
+				}
+				a := requesttiming.AttemptByNumber(c.Request.Context(), ev.Attempt.Number)
+				if a != nil && a.AccountID == ev.Attempt.AccountID && a.BorrowRouteID == ev.Attempt.BorrowRouteID {
+					copy := *ev
+					copy.Attempt = a
+					streamErr.UpstreamErrors[i] = &copy
+				}
+			}
+		}
 		return []OpsStreamError{streamErr}
 	}
 	return nil
@@ -447,7 +483,10 @@ func setOpsUpstreamError(c *gin.Context, upstreamStatusCode int, upstreamMessage
 // OpsUpstreamErrorEvent describes one upstream error attempt during a single gateway request.
 // It is stored in ops_error_logs.upstream_errors as a JSON array.
 type OpsUpstreamErrorEvent struct {
-	AtUnixMs int64 `json:"at_unix_ms,omitempty"`
+	Attempt        *requesttiming.Attempt                `json:"attempt,omitempty"`
+	Recovery       *requesttiming.BorrowRecoverySnapshot `json:"borrow_recovery,omitempty"`
+	RequestOutcome *OpsUpstreamRequestOutcome            `json:"request_outcome,omitempty"`
+	AtUnixMs       int64                                 `json:"at_unix_ms,omitempty"`
 
 	// Passthrough 表示本次请求是否命中“原样透传（仅替换认证）”分支。
 	// 该字段用于排障与灰度评估；存入 JSON，不涉及 DB schema 变更。
@@ -498,6 +537,15 @@ type OpsUpstreamErrorEvent struct {
 	SkipMonitoring bool `json:"-"`
 }
 
+// RequestOutcome is separate from the failed provider attempt. A successful
+// fallback must not replace that attempt's account/status in health telemetry.
+type OpsUpstreamRequestOutcome struct {
+	State          string                 `json:"state"`
+	StatusCode     int                    `json:"status_code"`
+	FinalAccountID int64                  `json:"final_account_id,omitempty"`
+	Attempt        *requesttiming.Attempt `json:"attempt,omitempty"`
+}
+
 const (
 	opsProxyNameDirect  = "direct/no_proxy"
 	opsProxyNameUnknown = "unknown"
@@ -509,6 +557,13 @@ const (
 func appendOpsUpstreamError(c *gin.Context, ev OpsUpstreamErrorEvent) {
 	if c == nil {
 		return
+	}
+	if c.Request != nil {
+		a := requesttiming.LatestAttempt(c.Request.Context())
+		if a != nil && a.AccountID == ev.AccountID {
+			ev.Attempt = a
+			ev.Recovery = requesttiming.RecoverySnapshot(c.Request.Context())
+		}
 	}
 	if ev.AtUnixMs <= 0 {
 		ev.AtUnixMs = time.Now().UnixMilli()
@@ -748,4 +803,23 @@ func safeUpstreamURL(rawURL string) string {
 		rawURL = rawURL[:idx]
 	}
 	return rawURL
+}
+
+// Refresh the decision after the handler has consumed the shared retry budget.
+func RefreshBorrowRecoveryError(c *gin.Context) {
+	if c == nil || c.Request == nil {
+		return
+	}
+	value, ok := c.Get(OpsUpstreamErrorsKey)
+	if !ok {
+		return
+	}
+	events, ok := value.([]*OpsUpstreamErrorEvent)
+	if !ok || len(events) == 0 {
+		return
+	}
+	last := events[len(events)-1]
+	if last != nil && last.Attempt != nil {
+		last.Recovery = requesttiming.RecoverySnapshot(c.Request.Context())
+	}
 }

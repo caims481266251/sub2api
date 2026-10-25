@@ -67,6 +67,7 @@ func TestCodex780NativeProbe(t *testing.T) {
 	pair := mint780Pair(time.Now().Add(time.Hour), "unified-88")
 	s.httpUpstream = &harvestProxyUpstream{do: func(req *http.Request, proxy string) (*http.Response, error) {
 		require.Equal(t, "socks5://127.0.0.1:1080", proxy)
+		require.False(t, req.Close, "harvest requests must allow HTTP/2 connection reuse")
 		require.Equal(t, "session", req.Header.Get("session-id"))
 		require.Empty(t, req.Header.Get(responsesLiteHeaderKey))
 		body, _ := io.ReadAll(req.Body)

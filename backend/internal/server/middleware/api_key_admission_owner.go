@@ -32,6 +32,9 @@ func nextWithAPIKeyAdmissionOwner(c *gin.Context, apiKeyService *service.APIKeyS
 			return apiKeyService.PinAPIKeyGroup(ctx, latest, groupID)
 		}
 	}
+	if lookup != nil {
+		lookup = hostedAuthLookup(apiKeyService, lookup)
+	}
 	nextWithAPIKeyAdmissionLookup(c, lookup, credential, trustedClientIP, key, googleStyle)
 }
 
@@ -65,6 +68,33 @@ func nextWithAPIKeyAdmissionLookup(c *gin.Context, lookup func(context.Context, 
 	// return here, while lease loss is distinguishable from normal owner cleanup.
 	if writer != nil {
 		writer.rejectIfLost()
+	}
+}
+
+// newAPIKeyQueueAuthRevalidator re-reads the authenticated key through the
+// existing auth cache (L1, then L2, with at most one database read after an
+// invalidation) and re-applies the same gates as initial authentication,
+// including the captured trusted client IP and the permissions this request
+// actually still needs. The stable key/group identity is captured by value at
+// installation time so a benign group edit (name, pricing, routing, nil vs
+// empty collections) never aborts the wait. A definite rejection stops the
+// queue wait with the same application error the middleware would return; any
+// other failure is classified by the queue as a service error.
+func newAPIKeyQueueAuthRevalidator(apiKeyService *service.APIKeyService, credential string, trustedClientIP string, initial *service.APIKey) service.APIKeyQueueAuthRevalidator {
+	var lookup func(context.Context, string) (*service.APIKey, error)
+	if apiKeyService != nil {
+		lookup = hostedAuthLookup(apiKeyService, apiKeyService.GetByKey)
+	}
+	return newAPIKeyAuthRevalidator(lookup, credential, trustedClientIP, initial)
+}
+
+func hostedAuthLookup(s *service.APIKeyService, lookup func(context.Context, string) (*service.APIKey, error)) func(context.Context, string) (*service.APIKey, error) {
+	return func(ctx context.Context, credential string) (*service.APIKey, error) {
+		key, err := lookup(ctx, credential)
+		if err != nil {
+			return nil, err
+		}
+		return s.HostedAuthorizationView(ctx, key)
 	}
 }
 
@@ -152,6 +182,9 @@ type apiKeyQueueInitialIdentity struct {
 	groupID            *int64
 	platform           string
 	subscriptionType   string
+	routeMode          string
+	fallbackGroupID    *int64
+	hostingPoolID      *int64
 	codexCLIOnly       bool
 	blockSubagents     bool
 	maxReasoningEffort string
@@ -163,6 +196,15 @@ func captureAPIKeyQueueIdentity(initial *service.APIKey) apiKeyQueueInitialIdent
 	identity := apiKeyQueueInitialIdentity{}
 	if initial == nil {
 		return identity
+	}
+	identity.routeMode = initial.RouteMode
+	if initial.HostingPoolID != nil {
+		v := *initial.HostingPoolID
+		identity.hostingPoolID = &v
+	}
+	if initial.HostingFallbackGroupID != nil {
+		v := *initial.HostingFallbackGroupID
+		identity.fallbackGroupID = &v
 	}
 	identity.keyID = initial.ID
 	identity.userID = initial.UserID
@@ -192,6 +234,15 @@ func apiKeyQueueCoreIdentityChanged(initial apiKeyQueueInitialIdentity, latest *
 	}
 	if initial.userID != 0 && latest.UserID != initial.userID {
 		return true
+	}
+	if initial.routeMode != latest.RouteMode {
+		return true
+	}
+	if initial.routeMode == service.RouteModeHosted {
+		if (initial.hostingPoolID == nil) != (latest.HostingPoolID == nil) || (initial.hostingPoolID != nil && *initial.hostingPoolID != *latest.HostingPoolID) {
+			return true
+		}
+		return (initial.fallbackGroupID == nil) != (latest.HostingFallbackGroupID == nil) || (initial.fallbackGroupID != nil && *initial.fallbackGroupID != *latest.HostingFallbackGroupID)
 	}
 	if (initial.groupID == nil) != (latest.GroupID == nil) {
 		return true

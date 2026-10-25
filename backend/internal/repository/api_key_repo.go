@@ -57,6 +57,9 @@ func (r *apiKeyRepository) create(ctx context.Context, key *service.APIKey) erro
 		SetName(key.Name).
 		SetStatus(key.Status).
 		SetNillableGroupID(key.GroupID).
+		SetRouteMode(normalizeRouteMode(key.RouteMode)).
+		SetNillableHostingFallbackGroupID(key.HostingFallbackGroupID).
+		SetNillableHostingPoolID(key.HostingPoolID).
 		SetNillableLastUsedAt(key.LastUsedAt).
 		SetQuota(key.Quota).
 		SetQuotaUsed(key.QuotaUsed).
@@ -142,6 +145,9 @@ func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*se
 			apikey.FieldID,
 			apikey.FieldUserID,
 			apikey.FieldGroupID,
+			apikey.FieldRouteMode,
+			apikey.FieldHostingPoolID,
+			apikey.FieldHostingFallbackGroupID,
 			apikey.FieldName,
 			apikey.FieldStatus,
 			apikey.FieldIPWhitelist,
@@ -319,6 +325,19 @@ func (r *apiKeyRepository) update(ctx context.Context, key *service.APIKey, fiel
 			builder.SetWindow7dStart(*key.Window7dStart)
 		} else {
 			builder.ClearWindow7dStart()
+		}
+	}
+	if fields.HostingRoute {
+		if key.HostingPoolID == nil {
+			builder.ClearHostingPoolID()
+		} else {
+			builder.SetHostingPoolID(*key.HostingPoolID)
+		}
+		builder.SetRouteMode(normalizeRouteMode(key.RouteMode))
+		if key.HostingFallbackGroupID != nil {
+			builder.SetHostingFallbackGroupID(*key.HostingFallbackGroupID)
+		} else {
+			builder.ClearHostingFallbackGroupID()
 		}
 	}
 	if fields.GroupID {
@@ -938,30 +957,33 @@ func apiKeyEntityToService(m *dbent.APIKey) *service.APIKey {
 		return nil
 	}
 	out := &service.APIKey{
-		ID:               m.ID,
-		UserID:           m.UserID,
-		Key:              m.Key,
-		Name:             m.Name,
-		Status:           m.Status,
-		IPWhitelist:      m.IPWhitelist,
-		IPBlacklist:      m.IPBlacklist,
-		LastUsedAt:       m.LastUsedAt,
-		CreatedAt:        m.CreatedAt,
-		UpdatedAt:        m.UpdatedAt,
-		GroupID:          m.GroupID,
-		Quota:            m.Quota,
-		QuotaUsed:        m.QuotaUsed,
-		ExpiresAt:        m.ExpiresAt,
-		RateLimit5h:      m.RateLimit5h,
-		ConcurrencyLimit: m.ConcurrencyLimit,
-		RateLimit1d:      m.RateLimit1d,
-		RateLimit7d:      m.RateLimit7d,
-		Usage5h:          m.Usage5h,
-		Usage1d:          m.Usage1d,
-		Usage7d:          m.Usage7d,
-		Window5hStart:    m.Window5hStart,
-		Window1dStart:    m.Window1dStart,
-		Window7dStart:    m.Window7dStart,
+		ID:                     m.ID,
+		UserID:                 m.UserID,
+		Key:                    m.Key,
+		Name:                   m.Name,
+		Status:                 m.Status,
+		IPWhitelist:            m.IPWhitelist,
+		IPBlacklist:            m.IPBlacklist,
+		LastUsedAt:             m.LastUsedAt,
+		CreatedAt:              m.CreatedAt,
+		UpdatedAt:              m.UpdatedAt,
+		GroupID:                m.GroupID,
+		RouteMode:              m.RouteMode,
+		HostingFallbackGroupID: m.HostingFallbackGroupID,
+		HostingPoolID:          m.HostingPoolID,
+		Quota:                  m.Quota,
+		QuotaUsed:              m.QuotaUsed,
+		ExpiresAt:              m.ExpiresAt,
+		RateLimit5h:            m.RateLimit5h,
+		ConcurrencyLimit:       m.ConcurrencyLimit,
+		RateLimit1d:            m.RateLimit1d,
+		RateLimit7d:            m.RateLimit7d,
+		Usage5h:                m.Usage5h,
+		Usage1d:                m.Usage1d,
+		Usage7d:                m.Usage7d,
+		Window5hStart:          m.Window5hStart,
+		Window1dStart:          m.Window1dStart,
+		Window7dStart:          m.Window7dStart,
 	}
 	if m.Edges.User != nil {
 		out.User = userEntityToService(m.Edges.User)
@@ -1111,4 +1133,11 @@ func derefString(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+func normalizeRouteMode(mode string) string {
+	if mode == service.RouteModeHosted {
+		return mode
+	}
+	return "group"
 }

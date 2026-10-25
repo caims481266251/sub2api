@@ -45,6 +45,19 @@ function mountTable(row: Partial<OpsErrorLog>) {
 }
 
 describe('OpsErrorLogTable user/api-key/account columns', () => {
+  it('marks recovered upstream errors separately from final and in-band failures', () => {
+    for (const phase of ['upstream', 'account_auth'] as const) {
+      const wrapper = mountTable({ phase, status_code: 200, message: 'Recovered upstream error 503: temporary' })
+      expect(wrapper.text()).toContain('admin.ops.errorLog.typeRecovered')
+      expect(wrapper.findAll('tbody td').find(td => td.text().includes('200'))?.text()).not.toContain('error')
+      wrapper.unmount()
+    }
+    for (const status_code of [200, 503]) {
+      const wrapper = mountTable({ status_code, message: 'stream error after output' })
+      expect(wrapper.text()).not.toContain('admin.ops.errorLog.typeRecovered')
+      wrapper.unmount()
+    }
+  })
   // 回归:上游错误行(phase=upstream, owner=provider)以前在单一「用户」列里只显示账号、
   // 丢失用户;现在用户/API Key/账号各占独立列,三者同时可见。
   it('renders user, api key and account in separate columns for an upstream row', () => {
@@ -119,6 +132,8 @@ describe('OpsErrorLogTable i18n keys exist in the errorLog namespace', () => {
       const errorLog = msgs?.admin?.ops?.errorLog
       expect(errorLog?.apiKey).toBeTruthy()
       expect(errorLog?.keyDeletedBadge).toBeTruthy()
+      expect(errorLog?.typeRecovered).toBeTruthy()
+      expect(errorLog?.recoveredHint).toBeTruthy()
     })
   }
 })

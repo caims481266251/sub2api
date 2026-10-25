@@ -479,7 +479,7 @@ func updatedAccountRows(id int64, extra string, modes ...string) *sqlmock.Rows {
 		mode = modes[0]
 	}
 	return sqlmock.NewRows(dbaccount.Columns).AddRow(
-		id, now, now, nil, "test", nil, service.PlatformOpenAI, service.AccountTypeAPIKey, mode,
+		id, now, now, nil, nil, nil, nil, "test", nil, service.PlatformOpenAI, service.AccountTypeAPIKey, mode,
 		[]byte(`{"api_key":"sk-test"}`), []byte(extra), nil, nil, 1, nil, 1, 1.0, 1.0,
 		service.StatusActive, nil, nil, nil, false, true, nil, nil, nil, nil, nil, nil,
 		nil, nil, nil, service.QuotaDimensionGlobal,

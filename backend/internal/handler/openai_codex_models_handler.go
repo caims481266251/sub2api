@@ -25,11 +25,11 @@ func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
 		return
 	}
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
-	if !ok || apiKey.Group == nil {
+	if !ok || apiKey == nil || (apiKey.Group == nil && apiKey.RouteMode != service.RouteModeHosted) {
 		h.errorResponse(c, http.StatusUnauthorized, "invalid_request_error", "API key group is required")
 		return
 	}
-	if apiKey.Group.Platform != service.PlatformOpenAI && apiKey.Group.Platform != service.PlatformComposite {
+	if apiKey.Group != nil && apiKey.Group.Platform != service.PlatformOpenAI && apiKey.Group.Platform != service.PlatformComposite {
 		h.errorResponse(c, http.StatusNotFound, "not_found_error", "Codex models manifest is only available for OpenAI and Composite groups")
 		return
 	}
@@ -45,7 +45,7 @@ func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
 	ifNoneMatch := modelsIfNoneMatch(c)
 	// 固定账号分支：开启后只用选定账号拉取 manifest，不经过调度器；
 	// 全部不可用/全部失败时按 FallbackToScheduler 决定回退调度器或返回错误。
-	if apiKey.Group.Platform == service.PlatformOpenAI &&
+	if apiKey.Group != nil && apiKey.Group.Platform == service.PlatformOpenAI &&
 		apiKey.Group.CodexModelsManifestConfig.Enabled {
 		pinnedManifest, pinnedAccount, pinnedErr := h.gatewayService.FetchPinnedCodexModelsManifest(
 			c.Request.Context(),
@@ -80,7 +80,7 @@ func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
 		}
 	}
 
-	if !apiKey.Group.CodexModelsManifestConfig.Enabled {
+	if apiKey.Group != nil && !apiKey.Group.CodexModelsManifestConfig.Enabled {
 		configuredManifest, configured, err := h.gatewayService.BuildGroupConfiguredCodexModelsManifest(
 			c.Request.Context(),
 			apiKey.Group,

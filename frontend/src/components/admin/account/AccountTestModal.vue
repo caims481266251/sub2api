@@ -6,6 +6,7 @@
     @close="handleClose"
   >
     <div class="space-y-4">
+      <p v-if="diagnosticOnly" class="whitespace-normal text-sm text-gray-500">{{ t('hosting.diagnosticHint') }}</p>
       <div v-if="account?.extra?.openai_excel_bps_authorization_pending === true" role="status" class="text-sm text-amber-700 dark:text-amber-300">
         {{ t('admin.accounts.bpsAuthorizing') }}
         <a href="/admin/token-guard-v2" target="_blank" rel="noopener noreferrer" class="ml-2 underline">{{ t('admin.accounts.openCredentialOperations') }}</a>
@@ -81,7 +82,7 @@
         />
       </div>
 
-      <div v-if="isOpenAIAccount" class="space-y-1.5">
+      <div v-if="isOpenAIAccount && !diagnosticOnly" class="space-y-1.5">
         <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
           {{ t('admin.accounts.openai.testMode') }}
         </label>
@@ -92,7 +93,7 @@
         />
       </div>
 
-      <div v-if="supportsPromptInput" class="space-y-1.5">
+      <div v-if="supportsPromptInput && !diagnosticOnly" class="space-y-1.5">
         <TextArea
           v-model="testPrompt"
           :label="promptInputLabel"
@@ -376,7 +377,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, nextTick } from 'vue'
+import { computed, ref, watch, nextTick, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Select from '@/components/common/Select.vue'
@@ -404,6 +405,9 @@ interface PreviewMedia {
 const props = defineProps<{
   show: boolean
   account: Account | null
+  loadModels?: (id: number) => Promise<ClaudeModel[]>
+  testPath?: string
+  diagnosticOnly?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -665,6 +669,7 @@ const promptInputHint = computed(() => {
 })
 
 const testModeSummary = computed(() => {
+  if (props.diagnosticOnly) return t('hosting.diagnosticPrompt')
   if (isGrokAccount.value) {
     switch (grokTestMode.value) {
       case 'video':
@@ -787,7 +792,7 @@ const loadAvailableModels = async () => {
   availableModels.value = []
   selectedModelId.value = '' // Reset selection before loading
   try {
-    const models = await adminAPI.accounts.getAvailableModels(props.account.id)
+    const models = await (props.loadModels ?? adminAPI.accounts.getAvailableModels)(props.account.id)
     if (generation !== modelLoadGeneration) return
     availableModels.value = props.account.platform === 'gemini' || props.account.platform === 'antigravity'
       ? sortTestModels(models)
@@ -879,7 +884,7 @@ const startTest = async () => {
       audio_data_url?: string
     } = {
       model_id: showModelSelect.value ? selectedModelId.value : '',
-      prompt: supportsPromptInput.value ? testPrompt.value.trim() : ''
+      prompt: props.diagnosticOnly ? 'Reply with OK only.' : supportsPromptInput.value ? testPrompt.value.trim() : ''
     }
     if (isOpenAIAccount.value) {
       requestBody.mode = testMode.value
@@ -905,7 +910,7 @@ const startTest = async () => {
     }
 
     // Use the configured API base; EventSource does not support POST.
-    const url = buildApiUrl(`/admin/accounts/${props.account.id}/test`)
+    const url = buildApiUrl(props.testPath ?? `/admin/accounts/${props.account.id}/test`)
 
     // Use fetch with streaming for SSE since EventSource doesn't support POST
     const response = await fetch(url, {
@@ -913,7 +918,7 @@ const startTest = async () => {
       headers: {
         Authorization: `Bearer ${localStorage.getItem('auth_token')}`,
         'Content-Type': 'application/json',
-        [ADMIN_UI_REQUEST_HEADER]: '1'
+        ...(!props.diagnosticOnly ? { [ADMIN_UI_REQUEST_HEADER]: '1' } : {})
       },
       body: JSON.stringify(requestBody),
       signal: abortController.signal
@@ -1078,6 +1083,7 @@ const copyOutput = () => {
   const text = outputLines.value.map((l) => l.text).join('\n')
   copyToClipboard(text, t('admin.accounts.outputCopied'))
 }
+onMounted(() => { if (props.show && props.account) void loadAvailableModels() })
 </script>
 
 <style>

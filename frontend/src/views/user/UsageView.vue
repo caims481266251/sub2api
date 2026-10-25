@@ -675,6 +675,10 @@ const exportToCSV = async () => {
       'Rate Multiplier',
       'Billed Cost',
       'Original Cost',
+      'Hosting Route',
+      'Hosting Pool',
+      'Fallback Group',
+      'Fallback Reason',
       'First Token (ms)',
       'Duration (ms)',
     ]
@@ -696,6 +700,10 @@ const exportToCSV = async () => {
       log.rate_multiplier,
       log.actual_cost.toFixed(8),
       log.total_cost.toFixed(8),
+      log.hosting_route || '',
+      log.hosting_route ? (log.hosting_pool_id === 0 ? t('hosting.defaultPool') : log.hosting_pool_name || t('hosting.poolNotRecorded')) : '',
+      log.hosting_route === 'fallback' ? log.group?.name || '' : '',
+      log.hosting_fallback_reason || '',
       log.first_token_ms ?? '',
       log.duration_ms ?? '',
     ].map(escapeCSVValue))

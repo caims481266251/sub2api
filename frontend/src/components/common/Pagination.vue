@@ -2,7 +2,7 @@
   <div
     class="flex items-center justify-between border-t border-gray-200 bg-white px-4 py-3 dark:border-dark-700 dark:bg-dark-800 sm:px-6"
   >
-    <div class="flex flex-1 items-center justify-between sm:hidden">
+    <div class="flex flex-1 flex-wrap items-center justify-between gap-y-3 sm:hidden">
       <!-- Mobile pagination -->
       <button
         @click="goToPage(page - 1)"
@@ -21,6 +21,12 @@
       >
         {{ t('pagination.next') }}
       </button>
+      <div v-if="showPageSizeSelector" class="flex w-full items-center justify-end gap-2">
+        <span class="text-sm text-gray-700 dark:text-gray-300">{{ t('pagination.perPage') }}:</span>
+        <div class="w-20">
+          <Select :model-value="pageSize" :options="pageSizeSelectOptions" :aria-label="t('pagination.perPage')" @update:model-value="handlePageSizeChange" />
+        </div>
+      </div>
     </div>
 
     <div class="hidden sm:flex sm:flex-1 sm:items-center sm:justify-between">

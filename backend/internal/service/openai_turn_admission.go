@@ -37,22 +37,22 @@ func IsOpenAITurnAdmissionError(err error) bool {
 	return errors.As(err, &denied)
 }
 
-// markOpenAIInitialAdmissionError is used only at the entry to an HTTP forward,
-// before any upstream work. Later per-send/WS admission failures must stay
-// unmarked: an earlier send may already have executed the request.
+// markOpenAIInitialAdmissionError requires proof that this entire account
+// attempt has not sent a request. A later per-send/WS rejection is insufficient.
 func markOpenAIInitialAdmissionError(err error) error {
 	var denied *OpenAITurnAdmissionError
-	if !errors.As(err, &denied) || denied.Reason != "account_binding_changed" {
+	if !errors.As(err, &denied) || (denied.Reason != "account_binding_changed" && denied.Reason != "borrow_route_unavailable") {
 		return err
 	}
 	copy := *denied
 	copy.initialHTTPForward = true
+	copy.cause = err
 	return &copy
 }
 
-// IsOpenAIInitialAdmissionRejection identifies a route change before this HTTP
-// forward started. Callers must still check cancellation, downstream writes,
-// continuation state and their account-switch budget before reselecting.
+// IsOpenAIInitialAdmissionRejection identifies a local rejection before the
+// first upstream send of this HTTP forward. Callers must still check cancellation,
+// downstream writes, continuation state and their account-switch budget.
 func IsOpenAIInitialAdmissionRejection(err error) bool {
 	var denied *OpenAITurnAdmissionError
 	return errors.As(err, &denied) && denied.initialHTTPForward
@@ -82,7 +82,7 @@ func (s *OpenAIGatewayService) invalidateOpenAIWSTurnStateAfterAdmissionFailure(
 
 	sessionHash = strings.TrimSpace(sessionHash)
 	responseID = strings.TrimSpace(responseID)
-	stateStore := s.getOpenAIWSStateStore()
+	stateStore := s.getOpenAIWSStateStoreForContext(ctx)
 	if stateStore != nil {
 		if responseID != "" {
 			// Delete both routing and connection affinity for the exact response
@@ -317,6 +317,9 @@ func (s *OpenAIGatewayService) latestOpenAITurnAccountForGroup(
 	if latest.Platform != selected.Platform || latest.Type != selected.Type || latest.EffectiveExecutionMode() != selected.EffectiveExecutionMode() {
 		return nil, denyOpenAITurn("account_binding_changed")
 	}
+	if !HostingAccountAllowed(ctx, latest) {
+		return nil, denyOpenAITurn("account_owner_mismatch")
+	}
 	if authoritativeRead && !latest.IsSchedulable() {
 		return nil, denyOpenAITurn("account_ineligible")
 	}
@@ -390,11 +393,19 @@ func (s *OpenAIGatewayService) admitOpenAITurnWithGroup(
 		return nil, &OpenAITurnAdmissionError{Reason: excelOAuthRouteErrorCode, cause: err}
 	}
 	// 会话中途被收窄了分组内的可用模型、或后续 turn 换成了不允许的模型时，要求客户端重连重新选号。
+	if !borrowHTTPContinuationAllowsAccount(ctx, latest.ID) {
+		return nil, denyOpenAITurn("borrow_continuation_target")
+	}
 	if enforceGroup && !latest.IsModelAllowedInGroup(&groupID, outboundModel) {
 		return nil, denyOpenAITurn("model_not_allowed_in_group")
 	}
 	if !latest.IsOpenAI() {
 		return latest, nil
+	}
+	if s.borrowRoutes != nil {
+		if err := s.borrowRoutes.Check(ctx, latest.ID, outboundModel, "http"); err != nil {
+			return nil, borrowAdmissionError(err)
+		}
 	}
 	if openAITurnRouteFingerprint(latest) != openAITurnRouteFingerprint(selected) {
 		return nil, denyOpenAITurn("account_binding_changed")

@@ -1,3 +1,5 @@
+import ticketBorrowing from './ticketBorrowing'
+import proxyPool from './proxyPool'
 import ipAudit from './ipAudit'
 import connections from './connections'
 import securityRecords from './securityRecords'
@@ -24,6 +26,8 @@ import requestTiming from './requestTiming'
 
 import autoConfig from './autoConfig'
 
+import hosting from './hosting'
+
 export default {
   savedTwoFA: {
     manage: 'Add or edit saved login',
@@ -35,6 +39,9 @@ export default {
     states: { queued: 'Waiting to reauthorize', running: 'Reauthorizing', callback_processing: 'Saving authorization', succeeded: 'Reauthorization succeeded', failed: 'Reauthorization failed. Check credentials or proxy and retry manually.' }
   },
 
+  hosting,
+  ticketBorrowing,
+  proxyPool,
   ipAudit,
   connections,
   securityRecords,

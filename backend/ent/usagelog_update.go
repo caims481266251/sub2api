@@ -32,6 +32,93 @@ func (_u *UsageLogUpdate) Where(ps ...predicate.UsageLog) *UsageLogUpdate {
 	return _u
 }
 
+// SetHostingPoolID sets the "hosting_pool_id" field.
+func (_u *UsageLogUpdate) SetHostingPoolID(v int64) *UsageLogUpdate {
+	_u.mutation.ResetHostingPoolID()
+	_u.mutation.SetHostingPoolID(v)
+	return _u
+}
+
+// SetNillableHostingPoolID sets the "hosting_pool_id" field if the given value is not nil.
+func (_u *UsageLogUpdate) SetNillableHostingPoolID(v *int64) *UsageLogUpdate {
+	if v != nil {
+		_u.SetHostingPoolID(*v)
+	}
+	return _u
+}
+
+// AddHostingPoolID adds value to the "hosting_pool_id" field.
+func (_u *UsageLogUpdate) AddHostingPoolID(v int64) *UsageLogUpdate {
+	_u.mutation.AddHostingPoolID(v)
+	return _u
+}
+
+// ClearHostingPoolID clears the value of the "hosting_pool_id" field.
+func (_u *UsageLogUpdate) ClearHostingPoolID() *UsageLogUpdate {
+	_u.mutation.ClearHostingPoolID()
+	return _u
+}
+
+// SetHostingPoolName sets the "hosting_pool_name" field.
+func (_u *UsageLogUpdate) SetHostingPoolName(v string) *UsageLogUpdate {
+	_u.mutation.SetHostingPoolName(v)
+	return _u
+}
+
+// SetNillableHostingPoolName sets the "hosting_pool_name" field if the given value is not nil.
+func (_u *UsageLogUpdate) SetNillableHostingPoolName(v *string) *UsageLogUpdate {
+	if v != nil {
+		_u.SetHostingPoolName(*v)
+	}
+	return _u
+}
+
+// ClearHostingPoolName clears the value of the "hosting_pool_name" field.
+func (_u *UsageLogUpdate) ClearHostingPoolName() *UsageLogUpdate {
+	_u.mutation.ClearHostingPoolName()
+	return _u
+}
+
+// SetHostingRoute sets the "hosting_route" field.
+func (_u *UsageLogUpdate) SetHostingRoute(v string) *UsageLogUpdate {
+	_u.mutation.SetHostingRoute(v)
+	return _u
+}
+
+// SetNillableHostingRoute sets the "hosting_route" field if the given value is not nil.
+func (_u *UsageLogUpdate) SetNillableHostingRoute(v *string) *UsageLogUpdate {
+	if v != nil {
+		_u.SetHostingRoute(*v)
+	}
+	return _u
+}
+
+// ClearHostingRoute clears the value of the "hosting_route" field.
+func (_u *UsageLogUpdate) ClearHostingRoute() *UsageLogUpdate {
+	_u.mutation.ClearHostingRoute()
+	return _u
+}
+
+// SetHostingFallbackReason sets the "hosting_fallback_reason" field.
+func (_u *UsageLogUpdate) SetHostingFallbackReason(v string) *UsageLogUpdate {
+	_u.mutation.SetHostingFallbackReason(v)
+	return _u
+}
+
+// SetNillableHostingFallbackReason sets the "hosting_fallback_reason" field if the given value is not nil.
+func (_u *UsageLogUpdate) SetNillableHostingFallbackReason(v *string) *UsageLogUpdate {
+	if v != nil {
+		_u.SetHostingFallbackReason(*v)
+	}
+	return _u
+}
+
+// ClearHostingFallbackReason clears the value of the "hosting_fallback_reason" field.
+func (_u *UsageLogUpdate) ClearHostingFallbackReason() *UsageLogUpdate {
+	_u.mutation.ClearHostingFallbackReason()
+	return _u
+}
+
 // SetUserID sets the "user_id" field.
 func (_u *UsageLogUpdate) SetUserID(v int64) *UsageLogUpdate {
 	_u.mutation.SetUserID(v)
@@ -1036,6 +1123,16 @@ func (_u *UsageLogUpdate) ExecX(ctx context.Context) {
 
 // check runs all checks and user-defined validators on the builder.
 func (_u *UsageLogUpdate) check() error {
+	if v, ok := _u.mutation.HostingPoolName(); ok {
+		if err := usagelog.HostingPoolNameValidator(v); err != nil {
+			return &ValidationError{Name: "hosting_pool_name", err: fmt.Errorf(`ent: validator failed for field "UsageLog.hosting_pool_name": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.HostingRoute(); ok {
+		if err := usagelog.HostingRouteValidator(v); err != nil {
+			return &ValidationError{Name: "hosting_route", err: fmt.Errorf(`ent: validator failed for field "UsageLog.hosting_route": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.RequestID(); ok {
 		if err := usagelog.RequestIDValidator(v); err != nil {
 			return &ValidationError{Name: "request_id", err: fmt.Errorf(`ent: validator failed for field "UsageLog.request_id": %w`, err)}
@@ -1134,6 +1231,33 @@ func (_u *UsageLogUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 				ps[i](selector)
 			}
 		}
+	}
+	if value, ok := _u.mutation.HostingPoolID(); ok {
+		_spec.SetField(usagelog.FieldHostingPoolID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedHostingPoolID(); ok {
+		_spec.AddField(usagelog.FieldHostingPoolID, field.TypeInt64, value)
+	}
+	if _u.mutation.HostingPoolIDCleared() {
+		_spec.ClearField(usagelog.FieldHostingPoolID, field.TypeInt64)
+	}
+	if value, ok := _u.mutation.HostingPoolName(); ok {
+		_spec.SetField(usagelog.FieldHostingPoolName, field.TypeString, value)
+	}
+	if _u.mutation.HostingPoolNameCleared() {
+		_spec.ClearField(usagelog.FieldHostingPoolName, field.TypeString)
+	}
+	if value, ok := _u.mutation.HostingRoute(); ok {
+		_spec.SetField(usagelog.FieldHostingRoute, field.TypeString, value)
+	}
+	if _u.mutation.HostingRouteCleared() {
+		_spec.ClearField(usagelog.FieldHostingRoute, field.TypeString)
+	}
+	if value, ok := _u.mutation.HostingFallbackReason(); ok {
+		_spec.SetField(usagelog.FieldHostingFallbackReason, field.TypeString, value)
+	}
+	if _u.mutation.HostingFallbackReasonCleared() {
+		_spec.ClearField(usagelog.FieldHostingFallbackReason, field.TypeString)
 	}
 	if value, ok := _u.mutation.RequestID(); ok {
 		_spec.SetField(usagelog.FieldRequestID, field.TypeString, value)
@@ -1544,6 +1668,93 @@ type UsageLogUpdateOne struct {
 	fields   []string
 	hooks    []Hook
 	mutation *UsageLogMutation
+}
+
+// SetHostingPoolID sets the "hosting_pool_id" field.
+func (_u *UsageLogUpdateOne) SetHostingPoolID(v int64) *UsageLogUpdateOne {
+	_u.mutation.ResetHostingPoolID()
+	_u.mutation.SetHostingPoolID(v)
+	return _u
+}
+
+// SetNillableHostingPoolID sets the "hosting_pool_id" field if the given value is not nil.
+func (_u *UsageLogUpdateOne) SetNillableHostingPoolID(v *int64) *UsageLogUpdateOne {
+	if v != nil {
+		_u.SetHostingPoolID(*v)
+	}
+	return _u
+}
+
+// AddHostingPoolID adds value to the "hosting_pool_id" field.
+func (_u *UsageLogUpdateOne) AddHostingPoolID(v int64) *UsageLogUpdateOne {
+	_u.mutation.AddHostingPoolID(v)
+	return _u
+}
+
+// ClearHostingPoolID clears the value of the "hosting_pool_id" field.
+func (_u *UsageLogUpdateOne) ClearHostingPoolID() *UsageLogUpdateOne {
+	_u.mutation.ClearHostingPoolID()
+	return _u
+}
+
+// SetHostingPoolName sets the "hosting_pool_name" field.
+func (_u *UsageLogUpdateOne) SetHostingPoolName(v string) *UsageLogUpdateOne {
+	_u.mutation.SetHostingPoolName(v)
+	return _u
+}
+
+// SetNillableHostingPoolName sets the "hosting_pool_name" field if the given value is not nil.
+func (_u *UsageLogUpdateOne) SetNillableHostingPoolName(v *string) *UsageLogUpdateOne {
+	if v != nil {
+		_u.SetHostingPoolName(*v)
+	}
+	return _u
+}
+
+// ClearHostingPoolName clears the value of the "hosting_pool_name" field.
+func (_u *UsageLogUpdateOne) ClearHostingPoolName() *UsageLogUpdateOne {
+	_u.mutation.ClearHostingPoolName()
+	return _u
+}
+
+// SetHostingRoute sets the "hosting_route" field.
+func (_u *UsageLogUpdateOne) SetHostingRoute(v string) *UsageLogUpdateOne {
+	_u.mutation.SetHostingRoute(v)
+	return _u
+}
+
+// SetNillableHostingRoute sets the "hosting_route" field if the given value is not nil.
+func (_u *UsageLogUpdateOne) SetNillableHostingRoute(v *string) *UsageLogUpdateOne {
+	if v != nil {
+		_u.SetHostingRoute(*v)
+	}
+	return _u
+}
+
+// ClearHostingRoute clears the value of the "hosting_route" field.
+func (_u *UsageLogUpdateOne) ClearHostingRoute() *UsageLogUpdateOne {
+	_u.mutation.ClearHostingRoute()
+	return _u
+}
+
+// SetHostingFallbackReason sets the "hosting_fallback_reason" field.
+func (_u *UsageLogUpdateOne) SetHostingFallbackReason(v string) *UsageLogUpdateOne {
+	_u.mutation.SetHostingFallbackReason(v)
+	return _u
+}
+
+// SetNillableHostingFallbackReason sets the "hosting_fallback_reason" field if the given value is not nil.
+func (_u *UsageLogUpdateOne) SetNillableHostingFallbackReason(v *string) *UsageLogUpdateOne {
+	if v != nil {
+		_u.SetHostingFallbackReason(*v)
+	}
+	return _u
+}
+
+// ClearHostingFallbackReason clears the value of the "hosting_fallback_reason" field.
+func (_u *UsageLogUpdateOne) ClearHostingFallbackReason() *UsageLogUpdateOne {
+	_u.mutation.ClearHostingFallbackReason()
+	return _u
 }
 
 // SetUserID sets the "user_id" field.
@@ -2563,6 +2774,16 @@ func (_u *UsageLogUpdateOne) ExecX(ctx context.Context) {
 
 // check runs all checks and user-defined validators on the builder.
 func (_u *UsageLogUpdateOne) check() error {
+	if v, ok := _u.mutation.HostingPoolName(); ok {
+		if err := usagelog.HostingPoolNameValidator(v); err != nil {
+			return &ValidationError{Name: "hosting_pool_name", err: fmt.Errorf(`ent: validator failed for field "UsageLog.hosting_pool_name": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.HostingRoute(); ok {
+		if err := usagelog.HostingRouteValidator(v); err != nil {
+			return &ValidationError{Name: "hosting_route", err: fmt.Errorf(`ent: validator failed for field "UsageLog.hosting_route": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.RequestID(); ok {
 		if err := usagelog.RequestIDValidator(v); err != nil {
 			return &ValidationError{Name: "request_id", err: fmt.Errorf(`ent: validator failed for field "UsageLog.request_id": %w`, err)}
@@ -2678,6 +2899,33 @@ func (_u *UsageLogUpdateOne) sqlSave(ctx context.Context) (_node *UsageLog, err 
 				ps[i](selector)
 			}
 		}
+	}
+	if value, ok := _u.mutation.HostingPoolID(); ok {
+		_spec.SetField(usagelog.FieldHostingPoolID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedHostingPoolID(); ok {
+		_spec.AddField(usagelog.FieldHostingPoolID, field.TypeInt64, value)
+	}
+	if _u.mutation.HostingPoolIDCleared() {
+		_spec.ClearField(usagelog.FieldHostingPoolID, field.TypeInt64)
+	}
+	if value, ok := _u.mutation.HostingPoolName(); ok {
+		_spec.SetField(usagelog.FieldHostingPoolName, field.TypeString, value)
+	}
+	if _u.mutation.HostingPoolNameCleared() {
+		_spec.ClearField(usagelog.FieldHostingPoolName, field.TypeString)
+	}
+	if value, ok := _u.mutation.HostingRoute(); ok {
+		_spec.SetField(usagelog.FieldHostingRoute, field.TypeString, value)
+	}
+	if _u.mutation.HostingRouteCleared() {
+		_spec.ClearField(usagelog.FieldHostingRoute, field.TypeString)
+	}
+	if value, ok := _u.mutation.HostingFallbackReason(); ok {
+		_spec.SetField(usagelog.FieldHostingFallbackReason, field.TypeString, value)
+	}
+	if _u.mutation.HostingFallbackReasonCleared() {
+		_spec.ClearField(usagelog.FieldHostingFallbackReason, field.TypeString)
 	}
 	if value, ok := _u.mutation.RequestID(); ok {
 		_spec.SetField(usagelog.FieldRequestID, field.TypeString, value)

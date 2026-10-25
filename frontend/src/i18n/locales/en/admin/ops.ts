@@ -285,6 +285,8 @@ export default {
         phase: 'Phase',
         id: 'ID:',
         typeUpstream: 'Upstream',
+        typeRecovered: 'Recovered successfully',
+        recoveredHint: 'The request completed successfully. Earlier upstream failures and the final account are retained for diagnosis; this record does not count toward the request failure rate.',
         typeRequest: 'Request',
         typeAuth: 'Auth',
         typeAccountAuth: 'Account Auth',

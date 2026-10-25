@@ -126,7 +126,7 @@
         <input
           v-model="customModel"
           type="text"
-          class="input flex-1"
+          class="input min-w-0 flex-1"
           :placeholder="t('admin.accounts.enterCustomModelName')"
           @keydown.enter.prevent="handleEnter"
           @compositionstart="isComposing = true"
@@ -135,7 +135,7 @@
         <button
           type="button"
           @click="addCustom"
-          class="rounded-lg bg-primary-50 px-4 py-2 text-sm font-medium text-primary-600 hover:bg-primary-100 dark:bg-primary-900/30 dark:text-primary-400 dark:hover:bg-primary-900/50"
+          class="shrink-0 rounded-lg bg-primary-50 px-4 py-2 text-sm font-medium text-primary-600 hover:bg-primary-100 dark:bg-primary-900/30 dark:text-primary-400 dark:hover:bg-primary-900/50"
         >
           {{ t('admin.accounts.addModel') }}
         </button>
@@ -149,7 +149,7 @@ import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { accountsAPI } from '@/api/admin/accounts'
-import type { SyncUpstreamPreviewParams } from '@/api/admin/accounts'
+import type { SyncUpstreamPreviewParams, SyncUpstreamModelsResult } from '@/api/admin/accounts'
 import { useClipboard } from '@/composables/useClipboard'
 import ModelIcon from '@/components/common/ModelIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
@@ -165,6 +165,7 @@ const props = defineProps<{
   platform?: string
   platforms?: string[]
   accountId?: number
+  syncModels?: () => Promise<SyncUpstreamModelsResult>
   syncCredentials?: SyncUpstreamPreviewParams
 }>()
 
@@ -199,6 +200,7 @@ const normalizedPlatforms = computed(() => {
 })
 
 const canSyncUpstream = computed(() => {
+  if (props.syncModels) return true
   if (props.accountId) {
     if (normalizedPlatforms.value.length === 0) return true
     return normalizedPlatforms.value.some(supportsUpstreamModelSync)
@@ -291,7 +293,9 @@ const syncUpstreamModels = async () => {
   isSyncingUpstream.value = true
   try {
     let result
-    if (props.accountId) {
+    if (props.syncModels) {
+      result = await props.syncModels()
+    } else if (props.accountId) {
       result = await accountsAPI.syncUpstreamModels(props.accountId)
     } else if (props.syncCredentials) {
       result = await accountsAPI.syncUpstreamModelsPreview(props.syncCredentials)

@@ -138,7 +138,7 @@ func TestProbeOpenAICodexStateHealthyWhenContinuationKeepsTicket(t *testing.T) {
 	require.Len(t, upstream.calls, 2)
 	mint, cont := upstream.calls[0], upstream.calls[1]
 	for _, call := range upstream.calls {
-		require.True(t, call.close)
+		require.False(t, call.close)
 		require.Empty(t, call.header.Get(responsesLiteHeaderKey))
 		require.Equal(t, "Bearer tok-7", call.header.Get("Authorization"))
 		require.Equal(t, "acct-7", call.header.Get("chatgpt-account-id"))

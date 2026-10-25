@@ -83,36 +83,43 @@ func APIKeyFromService(k *service.APIKey) *APIKey {
 	if k == nil {
 		return nil
 	}
+	routeMode := k.RouteMode
+	if routeMode == "" {
+		routeMode = "group"
+	}
 	out := &APIKey{
-		ID:                 k.ID,
-		UserID:             k.UserID,
-		Key:                k.Key,
-		Name:               k.Name,
-		GroupIDs:           k.ConfiguredGroupIDs(),
-		GroupID:            k.GroupID,
-		Status:             k.Status,
-		IPWhitelist:        k.IPWhitelist,
-		IPBlacklist:        k.IPBlacklist,
-		LastUsedAt:         k.LastUsedAt,
-		LastUsedIP:         k.LastUsedIP,
-		Quota:              k.Quota,
-		QuotaUsed:          k.QuotaUsed,
-		ExpiresAt:          k.ExpiresAt,
-		CreatedAt:          k.CreatedAt,
-		UpdatedAt:          k.UpdatedAt,
-		CurrentConcurrency: k.CurrentConcurrency,
-		RateLimit5h:        k.RateLimit5h,
-		ConcurrencyLimit:   k.ConcurrencyLimit,
-		RateLimit1d:        k.RateLimit1d,
-		RateLimit7d:        k.RateLimit7d,
-		Usage5h:            k.EffectiveUsage5h(),
-		Usage1d:            k.EffectiveUsage1d(),
-		Usage7d:            k.EffectiveUsage7d(),
-		Window5hStart:      k.Window5hStart,
-		Window1dStart:      k.Window1dStart,
-		Window7dStart:      k.Window7dStart,
-		User:               UserFromServiceShallow(k.User),
-		Group:              GroupFromServiceShallow(k.Group),
+		ID:                     k.ID,
+		UserID:                 k.UserID,
+		Key:                    k.Key,
+		Name:                   k.Name,
+		GroupID:                k.GroupID,
+		RouteMode:              routeMode,
+		HostingFallbackGroupID: k.HostingFallbackGroupID,
+		HostingPoolID:          k.HostingPoolID,
+		Status:                 k.Status,
+		IPWhitelist:            k.IPWhitelist,
+		IPBlacklist:            k.IPBlacklist,
+		LastUsedAt:             k.LastUsedAt,
+		LastUsedIP:             k.LastUsedIP,
+		Quota:                  k.Quota,
+		QuotaUsed:              k.QuotaUsed,
+		ExpiresAt:              k.ExpiresAt,
+		CreatedAt:              k.CreatedAt,
+		UpdatedAt:              k.UpdatedAt,
+		CurrentConcurrency:     k.CurrentConcurrency,
+		RateLimit5h:            k.RateLimit5h,
+		ConcurrencyLimit:       k.ConcurrencyLimit,
+		RateLimit1d:            k.RateLimit1d,
+		RateLimit7d:            k.RateLimit7d,
+		Usage5h:                k.EffectiveUsage5h(),
+		Usage1d:                k.EffectiveUsage1d(),
+		Usage7d:                k.EffectiveUsage7d(),
+		Window5hStart:          k.Window5hStart,
+		Window1dStart:          k.Window1dStart,
+		Window7dStart:          k.Window7dStart,
+		User:                   UserFromServiceShallow(k.User),
+		Group:                  GroupFromServiceShallow(k.Group),
+		GroupIDs:               k.ConfiguredGroupIDs(),
 	}
 	if k.Window5hStart != nil && !service.IsWindowExpired(k.Window5hStart, service.RateLimitWindow5h) {
 		t := k.Window5hStart.Add(service.RateLimitWindow5h)
@@ -717,6 +724,8 @@ func usageLogFromServiceUser(l *service.UsageLog) UsageLog {
 		requestedModel = l.Model
 	}
 	return UsageLog{
+		HostingRoute: l.HostingRoute, HostingFallbackReason: l.HostingFallbackReason,
+		HostingPoolID: l.HostingPoolID, HostingPoolName: l.HostingPoolName,
 		ID:                        l.ID,
 		UserID:                    l.UserID,
 		APIKeyID:                  l.APIKeyID,

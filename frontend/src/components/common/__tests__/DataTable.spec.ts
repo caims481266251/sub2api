@@ -309,6 +309,19 @@ describe('DataTable', () => {
     expect(wrapper.emitted('selectionChange')?.at(-1)?.[0]).toEqual([99, 2])
   })
 
+  it('can keep account rows in a table on mobile without changing the default card layout', async () => {
+    stubMobileMatchMedia()
+    const wrapper = mount(DataTable, {
+      props: { columns: [{ key: 'name', label: 'Name' }], data: [{ id: 1, name: 'Hosted account' }], mobileLayout: 'table' }
+    })
+    expect(wrapper.find('table').exists()).toBe(true)
+    expect(wrapper.get('tbody').text()).toContain('Hosted account')
+    await wrapper.setProps({ mobileLayout: 'cards' })
+    expect(wrapper.find('table').exists()).toBe(false)
+    expect(wrapper.get('[data-field="name"]').text()).toContain('Hosted account')
+    wrapper.unmount()
+  })
+
   it('keeps the single usage field shrinkable in a 320px mobile card', () => {
     stubMobileMatchMedia()
     const viewport = document.createElement('div')

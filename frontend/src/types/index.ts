@@ -763,6 +763,9 @@ export interface CompositeRouteDecision {
 }
 
 export interface ApiKey {
+  route_mode?: 'group' | 'hosted'
+  hosting_pool_id?: number | null
+  hosting_fallback_group_id?: number | null
   id: number
   user_id: number
   key: string
@@ -809,6 +812,10 @@ export interface ApiKeyConcurrencySnapshot {
 }
 
 export interface CreateApiKeyRequest {
+  route_mode?: 'group' | 'hosted'
+  hosting_pool_id?: number | null
+  hosting_fallback_group_id?: number | null
+  hosting_fallback_enabled?: boolean
   name: string
   concurrency_limit?: number // 0 = no additional key limit
   group_id?: number | null
@@ -824,6 +831,10 @@ export interface CreateApiKeyRequest {
 }
 
 export interface UpdateApiKeyRequest {
+  route_mode?: 'group' | 'hosted'
+  hosting_pool_id?: number | null
+  hosting_fallback_group_id?: number | null
+  hosting_fallback_enabled?: boolean
   name?: string
   concurrency_limit?: number // Omitted = no change, 0 = no additional key limit
   group_id?: number | null
@@ -1951,6 +1962,10 @@ export type ImageSizeSource = 'output' | 'input' | 'default' | 'legacy'
 export type ImageSizeBreakdown = Record<string, number>
 
 export interface UsageLog {
+  hosting_route?: 'hosted' | 'fallback' | null
+  hosting_fallback_reason?: string | null
+  hosting_pool_id?: number | null
+  hosting_pool_name?: string | null
   id: number
   user_id: number
   api_key_id: number

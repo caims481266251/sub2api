@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
@@ -63,7 +64,7 @@ func vmKernelStringPointer(value string) *string {
 
 // Output presentation is downstream of the native attempt. It never initiates
 // a second attempt, selects an account, or records usage.
-func vmKernelHTTP(ctx context.Context, runtime *VMKernelService, c *gin.Context, account *Account, ingress, provider string, body []byte, stream bool, model string, gateways ...*OpenAIGatewayService) (*vmkernel.Result, error) {
+func vmKernelHTTP(ctx context.Context, runtime *VMKernelService, c *gin.Context, account *Account, ingress, provider string, body []byte, stream bool, model string, gateways ...*OpenAIGatewayService) (result *vmkernel.Result, resultErr error) {
 	if runtime == nil {
 		return nil, fmt.Errorf("VM kernel runtime is unavailable")
 	}
@@ -79,6 +80,11 @@ func vmKernelHTTP(ctx context.Context, runtime *VMKernelService, c *gin.Context,
 		ctx = vmkernel.WithOnResponseHeaders(ctx, func(headers http.Header) {
 			stageOpenAICodexTurnState(&staged, headers)
 		})
+	}
+	if gateway != nil {
+		defer func() {
+			recordVMKernelRecentRequest(withRecentRequestScope(ctx, account, codexAccountIdentitySource(c, account)), gateway.recentRequests, account, gjson.GetBytes(body, "model").String(), result, resultErr)
+		}()
 	}
 	emit := func(kind string, data []byte) error {
 		if c.Request.Context().Err() != nil {
@@ -148,10 +154,39 @@ func vmKernelHTTP(ctx context.Context, runtime *VMKernelService, c *gin.Context,
 	return result, nil
 }
 
+// KernelClient creates AttemptID immediately before HTTP transport and returns it
+// even on a failed dial. Runtime admission/preparation failures return no attempt.
+// Reuse its strict completion and per-attempt timing instead of replaying events.
+func recordVMKernelRecentRequest(ctx context.Context, cache AccountRecentRequestsCache, account *Account, model string, result *vmkernel.Result, err error) {
+	if result == nil || result.AttemptID == "" {
+		return
+	}
+	a := beginAccountRequestAttempt(ctx, cache, account, model)
+	if a == nil {
+		return
+	}
+	a.started = time.Now().Add(-result.Duration)
+	a.record.AttemptID = recentRequestText(result.AttemptID, 128)
+	a.record.RequestID = recentRequestText(result.RequestID, 128)
+	if result.Model != "" {
+		a.record.Model = recentRequestText(result.Model, 256)
+	}
+	if result.FirstTokenMs != nil {
+		ms := int64(*result.FirstTokenMs)
+		a.record.FirstTokenMs = &ms
+	}
+	if result.Completed {
+		a.observe(false, "completed")
+	} else if result.ProviderHTTPFailure || len(result.ErrorEvent) > 0 || isOpenAICompatResponsesTerminalEvent(result.Terminal) {
+		a.observe(false, "failed")
+	}
+	a.finish(err)
+}
+
 func (s *OpenAIGatewayService) vmKernelResponsesTTFTContext(ctx context.Context) context.Context {
 	mode := s.openAITTFTMode(ctx)
 	return vmkernel.WithFirstTokenPredicate(ctx, func(event vmkernel.Event) bool {
-		return openAIStreamDataStartsTTFT(string(event.Data), event.Type, false, mode)
+		return recentResponseStartsTTFT(string(event.Data), event.Type, mode)
 	})
 }
 

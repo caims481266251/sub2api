@@ -91,12 +91,12 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { Account } from '@/types'
+import type { OpenAIQuotaAccount } from './openAIQuotaTransport'
 import type { OpenAIReferralEligibility } from '@/types/openaiReferrals'
 import { refreshOpenAIReferrals, sendOpenAIReferralInvite } from '@/api/admin/accounts'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 
-const props = defineProps<{ account: Account }>()
+const props = defineProps<{ account: OpenAIQuotaAccount }>()
 const { t } = useI18n()
 const eligibility = ref<OpenAIReferralEligibility | null>(props.account.extra?.codex_referral_snapshot ?? null)
 const show = ref(false)

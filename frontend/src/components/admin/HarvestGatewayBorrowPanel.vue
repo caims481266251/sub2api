@@ -41,9 +41,22 @@
               <Toggle v-model="draft.cookie_pool.enabled" data-testid="cookie-toggle" :aria-label="t(`${p}.cookieTitle`)" />
             </div>
             <p class="mt-3 text-xs text-gray-500">{{ t(`${p}.savedState`) }}：{{ t(saved?.cookie_pool.enabled ? `${p}.enabled` : `${p}.disabled`) }}</p>
+            <div class="mt-4 flex items-start justify-between gap-4 rounded-lg border border-gray-200 p-4 dark:border-dark-600">
+              <div><h3 class="text-sm font-medium">{{ t(`${p}.seamlessTitle`) }}</h3><p class="mt-1 text-xs leading-6 text-gray-500">{{ t(`${p}.seamlessHint`) }}</p></div>
+              <Toggle :model-value="draft.cookie_pool.seamless ?? false" @update:model-value="draft.cookie_pool.seamless = $event" data-testid="seamless-toggle" :aria-label="t(`${p}.seamlessTitle`)" />
+            </div>
             <div class="mt-5 grid gap-4 md:grid-cols-2">
               <AstraAccountPicker v-model="draft.cookie_pool.source_account_ids" :label="t(`${p}.sources`)" :accounts="accounts" :disabled="saving" />
               <AstraAccountPicker v-model="draft.cookie_pool.target_account_ids" :label="t(`${p}.targets`)" :accounts="accounts" :disabled="saving" />
+            </div>
+            <div v-if="draft.cookie_pool.source_account_ids.length" class="mt-4 space-y-3" data-testid="source-models">
+              <p class="text-sm font-medium">{{ t(`${p}.sourceModels`) }}</p>
+              <p class="text-xs leading-6 text-gray-500">{{ t(`${p}.sourceModelsHint`) }}</p>
+              <label v-for="id in draft.cookie_pool.source_account_ids" :key="id" class="grid items-center gap-2 sm:grid-cols-2">
+                <span class="text-sm">{{ accounts.find(account => account.id === id)?.name || `#${id}` }} (#{{ id }})</span>
+                <input :value="draft.cookie_pool.source_account_models?.[id] ?? 'gpt-6-astra'" :data-testid="`source-model-${id}`" :aria-label="t(`${p}.sourceModelFor`, { id })" class="input w-full" type="text" list="astra-source-model-options" maxlength="256" autocomplete="off" required @input="setSourceModel(id, ($event.target as HTMLInputElement).value)" />
+              </label>
+              <datalist id="astra-source-model-options"><option v-for="model in sourceModelOptions" :key="model" :value="model" /></datalist>
             </div>
             <div class="mt-4 flex items-start justify-between gap-4 rounded-lg border border-gray-200 p-4 dark:border-dark-600">
               <div>
@@ -99,6 +112,7 @@ import AstraGatewayRuntime from '@/components/admin/AstraGatewayRuntime.vue'
 import AstraGatewayHistory from '@/components/admin/AstraGatewayHistory.vue'
 import AstraAccountPicker from '@/components/admin/AstraAccountPicker.vue'
 import { list } from '@/api/admin/accounts'
+import { getModelsByPlatform } from '@/composables/useModelWhitelist'
 import { getAstraGateway, saveAstraGateway, normalizeAstraGateway, resolveAstraDependencies, type AstraGatewaySettings } from '@/api/admin/astraGateway'
 const props = defineProps<{ embedded?: boolean }>()
 const embedded = computed(() => props.embedded === true)
@@ -113,10 +127,14 @@ const error = ref('')
 const saved = ref<AstraGatewaySettings>()
 const draft = ref<AstraGatewaySettings>()
 const accounts = ref<{ id: number; name: string }[]>([])
+const sourceModelOptions = getModelsByPlatform('openai').filter(model => !/image|audio|realtime/.test(model))
 const dirty = computed(() => JSON.stringify(draft.value) !== JSON.stringify(saved.value))
 const validation = computed(() => {
   if (!draft.value) return ''
   const value = resolveAstraDependencies(draft.value)
+  if (value.cookie_pool.enabled && value.cookie_pool.seamless && value.cookie_pool.rotate_nodes) return t(`${p}.seamlessFixedEgress`)
+  if (Object.values(value.cookie_pool.source_account_models || {}).some(model => !model || new TextEncoder().encode(model).length > 256 || /[\s*]/u.test(model) || Array.from(model).some(char => { const code = char.codePointAt(0)!; return code < 32 || (code >= 127 && code <= 159) }))) return t(`${p}.sourceModelInvalid`)
+  if (value.account_scheduling && value.scheduling_mode === 'groups' && !value.scheduling_group_ids?.length) return t(`${p}.chooseSchedulingGroups`)
   if (value.cookie_pool.rotate_nodes && (!Number.isInteger(draft.value.cookie_pool.node_cooldown_seconds) || draft.value.cookie_pool.node_cooldown_seconds! < 60 || draft.value.cookie_pool.node_cooldown_seconds! > 86400)) return t(`${p}.nodeCooldownInvalid`)
   if (value.cookie_pool.rotate_nodes && (!Number.isInteger(draft.value.cookie_pool.max_node_attempts) || draft.value.cookie_pool.max_node_attempts! < 1 || draft.value.cookie_pool.max_node_attempts! > 10)) return t(`${p}.nodeAttemptsInvalid`)
   if (!Number.isInteger(value.cookie_pool.ttl_seconds) || value.cookie_pool.ttl_seconds! < 30 || value.cookie_pool.ttl_seconds! > 240 || !Number.isInteger(value.ws_session.ttl_seconds) || value.ws_session.ttl_seconds! < 60 || value.ws_session.ttl_seconds! > 3600) return t(`${p}.ttlInvalid`)
@@ -129,6 +147,12 @@ const validation = computed(() => {
   if (enabledIDs.some(id => !accounts.value.some(a => a.id === id))) return t(`${p}.missingAccounts`)
   return ''
 })
+function setSourceModel(id: number, model: string) {
+  if (!draft.value) return
+  const models = draft.value.cookie_pool.source_account_models ||= {}
+  if (model.trim() === 'gpt-6-astra') delete models[id]
+  else models[id] = model.trim()
+}
 function setAffinity(enabled: boolean) {
   if (!draft.value) return
   draft.value.cookie_pool.ip_affinity = enabled
@@ -163,7 +187,7 @@ async function save() {
     saved.value = normalizeAstraGateway(value); draft.value = normalizeAstraGateway(value); savedMessage.value = true
    } catch (err: unknown) {
     const message = (err as { response?: { data?: { message?: string } }; message?: string }).response?.data?.message || (err as { message?: string }).message || ''
-    error.value = message.startsWith('astra_source_required') ? t(`${p}.chooseBoth`) : message.startsWith('astra_global_ws_disabled') ? t(`${p}.globalBlocked`) : message.startsWith('astra_account_unavailable') ? t(`${p}.missingAccounts`) : t(`${p}.saveError`)
+    error.value = message.startsWith('astra_source_model_invalid') ? t(`${p}.sourceModelInvalid`) : message.startsWith('astra_source_required') ? t(`${p}.chooseBoth`) : message.startsWith('astra_global_ws_disabled') ? t(`${p}.globalBlocked`) : message.startsWith('astra_account_unavailable') ? t(`${p}.missingAccounts`) : t(`${p}.saveError`)
   }
   finally { saving.value = false }
 }

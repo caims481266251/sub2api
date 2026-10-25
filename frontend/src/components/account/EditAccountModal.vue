@@ -2747,6 +2747,8 @@
         </div>
       </div>
 
+      <TicketBorrowAccountSettings v-if="!authStore.isObserver && account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'setup-token') && !account?.parent_account_id" :account-id="account.id" />
+
       <!-- Codex 292 门票状态（仅 OpenAI OAuth） -->
       <div
         v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'setup-token') && codexTurnTickets.length"
@@ -3521,6 +3523,7 @@ import GroupSelector from '@/components/common/GroupSelector.vue'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
 import AccountGroupModelLimits from '@/components/account/AccountGroupModelLimits.vue'
 import AccountAutoBPSSection from '@/components/account/AccountAutoBPSSection.vue'
+import TicketBorrowAccountSettings from '@/components/account/TicketBorrowAccountSettings.vue'
 import {
   buildGroupAllowedModelsPayload,
   groupAllowedModelsFromAccount,

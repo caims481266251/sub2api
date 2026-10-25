@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"crypto/sha256"
 	"errors"
 	"io"
 	"log/slog"
@@ -23,11 +24,13 @@ var errCodexGatewayPinUnavailable = errors.New("codex gateway pin: no qualified 
 // covers account tests. Only __oailb is shared; credentials and turn state stay
 // owned by the selected account. All routes are process-local and bounded.
 type codexGatewayPinUpstream struct {
+	seamless              *astraSeamlessPool
 	rotationCache         *astraRotationCache
 	nodeCursor            int
 	rotationRetryAfter    time.Time
 	targetMu              sync.Mutex
 	targetProbeMu         astraContextMutex
+	targetRecoveryMu      sync.Mutex
 	targetChecks          map[int64]astraTargetValidation
 	delegate              service.HTTPUpstream
 	config                config.CodexGatewayPinConfig
@@ -35,6 +38,8 @@ type codexGatewayPinUpstream struct {
 	routes                map[int64]codexGatewayRoute
 	observations          map[int64]time.Time
 	activeSource          int64
+	rejectedSources       map[int64]time.Time
+	rejectedCookies       map[[32]byte]time.Time
 	statuses              map[int64]service.AstraRouteStatus
 	nodeStore             *AstraNodeStore
 	gateways              map[string]*service.AstraGatewayObservation
@@ -57,7 +62,12 @@ func (s *codexGatewayPinUpstream) Do(req *http.Request, proxy string, accountID 
 func (s *codexGatewayPinUpstream) DoWithTLS(req *http.Request, proxy string, accountID int64, concurrency int, profile *tlsfingerprint.Profile) (*http.Response, error) {
 	source := slices.Contains(s.config.SourceAccountIDs, accountID)
 	target := slices.Contains(s.config.TargetAccountIDs, accountID)
-	if !s.config.Enabled || (!source && !target) || !codexGatewayPinRequest(req) || !codexGatewayPinAstra(req) {
+	if !s.config.Enabled || (!source && !target) || !codexGatewayPinRequest(req) {
+		return s.delegate.DoWithTLS(req, proxy, accountID, concurrency, profile)
+	}
+	acquisition := source && service.IsAstraSourceAcquisition(req.Context())
+	model := codexGatewayPinModel(req)
+	if model == "" || (!acquisition && model != "gpt-6-astra") {
 		return s.delegate.DoWithTLS(req, proxy, accountID, concurrency, profile)
 	}
 	if err := s.config.Validate(); err != nil {
@@ -89,7 +99,7 @@ func (s *codexGatewayPinUpstream) DoWithTLS(req *http.Request, proxy string, acc
 	}
 	started := time.Now()
 	resp, err := s.delegate.DoWithTLS(req, proxy, accountID, concurrency, profile)
-	if source && service.IsAstraSourceAcquisition(req.Context()) {
+	if acquisition {
 		if err != nil || resp == nil || resp.StatusCode < 200 || resp.StatusCode >= 300 || resp.Body == nil {
 			s.recordSourceReason(accountID, started, nil, false, "upstream_http_error")
 		} else {
@@ -109,7 +119,7 @@ func (s *codexGatewayPinUpstream) DoWithTLS(req *http.Request, proxy string, acc
 			// Qualification happens only after the complete SSE response has been read.
 			// A header or response.created event does not prove request success.
 			if contentType := strings.ToLower(resp.Header.Get("Content-Type")); contentType == "" || strings.HasPrefix(contentType, "text/event-stream") {
-				resp.Body = &codexGatewayProbeBody{ReadCloser: resp.Body, onResult: func(ok bool) { s.recordSource(accountID, started, route, ok) }}
+				resp.Body = &codexGatewayProbeBody{ReadCloser: resp.Body, expectedModel: model, onResult: func(ok bool) { s.recordSource(accountID, started, route, ok) }}
 			} else {
 				s.recordSource(accountID, started, nil, false)
 			}
@@ -126,19 +136,26 @@ func codexGatewayPinRequest(req *http.Request) bool {
 }
 
 func codexGatewayPinAstra(req *http.Request) bool {
+	return codexGatewayPinModel(req) == "gpt-6-astra"
+}
+
+func codexGatewayPinModel(req *http.Request) string {
 	// Requests built by the application have GetBody. Never consume a caller's
 	// non-replayable request body just to participate in this experiment.
-	if req.GetBody == nil {
-		return false
+	if req == nil || req.GetBody == nil {
+		return ""
 	}
 	r, err := req.GetBody()
 	if err != nil {
-		return false
+		return ""
 	}
 	defer func() { _ = r.Close() }()
 	const limit = 4 << 20
 	body, err := io.ReadAll(io.LimitReader(r, limit+1))
-	return err == nil && len(body) <= limit && gjson.ValidBytes(body) && gjson.GetBytes(body, "model").String() == "gpt-6-astra"
+	if err != nil || len(body) > limit || !gjson.ValidBytes(body) {
+		return ""
+	}
+	return gjson.GetBytes(body, "model").String()
 }
 
 func codexGatewayCookiePathMatches(path, scope string) bool {
@@ -234,8 +251,16 @@ func (s *codexGatewayPinUpstream) recordSourceReason(id int64, started time.Time
 	if route == nil || !time.Now().Before(route.expires) {
 		return
 	}
+	if s.seamless != nil {
+		s.seamless.record(id, *route, checked)
+	}
 	if s.routes == nil {
 		s.routes = make(map[int64]codexGatewayRoute)
+	}
+	// A fresh acquisition may reuse a donor, but never the rejected Cookie.
+	// Keep rejected fingerprints until their original expiry across refreshes.
+	if !checked.Before(s.rejectedCookies[sha256.Sum256([]byte(route.cookie.Value))]) {
+		delete(s.rejectedSources, id)
 	}
 	// A newly qualified route replaces the prior sample; an identical cookie
 	// must never gain lifetime from being replayed.
@@ -278,6 +303,18 @@ func (s *codexGatewayPinUpstream) currentCookie(path string, now time.Time) (*ht
 			delete(s.routes, id)
 			return nil
 		}
+		if now.Before(s.rejectedSources[id]) || now.Before(s.rejectedCookies[sha256.Sum256([]byte(route.cookie.Value))]) {
+			delete(s.routes, id)
+			status := s.statuses[id]
+			status.AccountID = id
+			status.State = "rejected"
+			status.Reason = "source_passed_target_failed"
+			if s.statuses == nil {
+				s.statuses = make(map[int64]service.AstraRouteStatus)
+			}
+			s.statuses[id] = status
+			return nil
+		}
 		if !codexGatewayCookiePathMatches(path, route.cookie.Path) {
 			return nil
 		}
@@ -316,7 +353,8 @@ func replaceCodexGatewayCookie(req *http.Request, cookie *http.Cookie) {
 // event. Early close, malformed/oversized events, model mismatch and stream errors
 // cannot qualify a route. Model labels are not a capability benchmark.
 type codexGatewayProbeBody struct {
-	mu sync.Mutex
+	expectedModel string
+	mu            sync.Mutex
 	io.ReadCloser
 	pending  string
 	data     string
@@ -390,7 +428,11 @@ func (b *codexGatewayProbeBody) event() {
 	}
 	e := gjson.Parse(data)
 	model := e.Get("response.model").String()
-	if model != "" && model != "gpt-6-astra" {
+	expectedModel := b.expectedModel
+	if expectedModel == "" {
+		expectedModel = "gpt-6-astra"
+	}
+	if model != "" && model != expectedModel {
 		b.mismatch = true
 	}
 	switch e.Get("type").String() {
@@ -407,7 +449,7 @@ func (b *codexGatewayProbeBody) event() {
 				}
 			}
 		}
-		b.finish(!b.mismatch && model == "gpt-6-astra" && e.Get("response.status").String() == "completed" && b.text && !e.Get("response.error").IsObject())
+		b.finish(!b.mismatch && model == expectedModel && e.Get("response.status").String() == "completed" && b.text && !e.Get("response.error").IsObject())
 	}
 }
 

@@ -194,3 +194,42 @@ func TestOpenAIHeaderWaitAdoptsEarlierQueueHeartbeat(t *testing.T) {
 	require.Contains(t, rec.Body.String(), "event: response.failed")
 	require.NotContains(t, rec.Body.String(), "response.completed")
 }
+
+// Exercise the transport entry shared by native and passthrough forwarding.
+// The handler wrapper must retain ownership even for API-key upload callers.
+func TestOpenAIHeaderWaitForwardingIntegration(t *testing.T) {
+	for _, accountType := range []string{AccountTypeAPIKey, AccountTypeOAuth} {
+		t.Run(accountType, func(t *testing.T) {
+			c, rec, w, signal := newHeaderWaitTest(t, nil)
+			svc := &OpenAIGatewayService{
+				cfg: &config.Config{Gateway: config.GatewayConfig{StreamKeepaliveInterval: 1}},
+				httpUpstream: &uploadWaitTestUpstream{do: func(*http.Request) (*http.Response, error) {
+					waitHeaderWaitBeat(t, signal)
+					return &http.Response{StatusCode: http.StatusBadRequest, Body: http.NoBody}, nil
+				}},
+			}
+			account := &Account{ID: 42, Platform: PlatformOpenAI, Type: accountType}
+			resp, err := svc.doOpenAIUpstreamWithKeepalive(c, true, c.Request, "", account)
+			require.NoError(t, err)
+			require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+			require.Same(t, w, c.Writer)
+			value, _ := c.Get(openAICompactSSEKeepaliveKey)
+			require.Nil(t, value, "the header-wait owner must retire the per-attempt timer")
+			require.False(t, openAIStreamClientOutputStarted(c, false))
+			writeOpenAIErrorJSON(c, resp.StatusCode, gin.H{"error": gin.H{"message": "bad request"}})
+			require.Equal(t, http.StatusOK, rec.Code)
+			require.Equal(t, 1, strings.Count(rec.Body.String(), "event: response.failed"))
+		})
+	}
+}
+
+func TestOpenAIUploadKeepaliveFlushFailureIsDisconnected(t *testing.T) {
+	c, _ := newPassthroughKeepaliveTestContext(t)
+	c.Writer = &headerWaitFlushSignalWriter{ResponseWriter: c.Writer, err: errors.New("flush disconnected")}
+	stop := startOpenAISSEKeepalive(c, time.Hour)
+	t.Cleanup(stop)
+	k := c.MustGet(openAICompactSSEKeepaliveKey).(*openAICompactSSEKeepalive)
+	require.False(t, k.beat())
+	stop()
+	require.True(t, OpenAIDownstreamDisconnected(c))
+}

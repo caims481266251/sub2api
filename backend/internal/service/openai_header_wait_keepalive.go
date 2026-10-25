@@ -28,6 +28,11 @@ func WrapOpenAIResponsesHeaderWait(c *gin.Context, enabled bool) func() {
 	c.Set(openAIHeaderWaitWriterKey, w)
 	c.Writer = w
 	return func() {
+		// Preserve transport failure for deferred diagnostics after this wrapper
+		// releases its writer and per-handler state.
+		if w.writeErr != nil {
+			c.Set(openAIDownstreamDisconnectedKey, true)
+		}
 		if c.Writer == w {
 			c.Writer = original
 		}

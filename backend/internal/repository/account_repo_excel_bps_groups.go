@@ -44,6 +44,9 @@ func (r *accountRepository) MoveExcelBPSOn403(ctx context.Context, account *serv
 }
 
 func (r *accountRepository) moveExcelBPSOn403InTx(ctx context.Context, account *service.Account, target int64) (bool, error) {
+	if account.OwnerUserID != nil {
+		return false, nil
+	}
 	client := clientFromContext(ctx, r.client)
 	if target > 0 {
 		rows, err := client.QueryContext(ctx, `SELECT id FROM groups

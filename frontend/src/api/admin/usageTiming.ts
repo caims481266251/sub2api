@@ -1,11 +1,17 @@
 import { apiClient } from '../client'
 export interface TimingSpan { name: string; start_ms: number; end_ms: number; attempt?: number }
+export interface BorrowRecovery { transport_attempts: number; requests_sent: number; recovering: boolean; output_started: boolean; stop_reason?: string }
 export interface TimingAttempt {
-  kind: string; parent?: number; number: number; account_id: number; proxy_id: number; start_ms: number; end_ms: number | null
+  transport?: { kind?: string; proxy_mode?: string; pool_id?: string; fingerprint_id?: string; identity_id?: string }
+  protocol?: string; alpn?: string; tls_handshake?: 'full' | 'resumed'
+ model?: string; reasoning_effort?: string; retry_after_ms?: number; reasoning_events?: number; no_text_long_tail?: boolean
+  kind: string; borrow_route_id?: string; parent?: number; number: number; account_id: number; proxy_id: number; start_ms: number; end_ms: number | null
   status: number; error?: string; terminal?: string; cleanup_canceled?: boolean; reused: boolean | null; request_bytes: number; response_bytes: number
   body_eof: boolean; events: Record<string, number>
 }
 export interface RequestTiming {
+  session_affinity?: { decision: string; reason: string; owner_account_id: number; execution_account_id: number; owner_pending: boolean; success: boolean; owner_committed: boolean; cache_unavailable: boolean }
+ borrow_recovery?: BorrowRecovery
   identity_source?: string
   auth_rejection?: string
   outcome?: string; client_disconnect: boolean; version: number; trace_id: string; started_at: string; total_ms: number; status: number; canceled: boolean

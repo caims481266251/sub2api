@@ -153,7 +153,10 @@ func (r *qualityRecentPlanRepo) ListByAccountID(context.Context, int64) ([]*Sche
 
 func TestQuality5xxDoesNotSkipRecentlyCompletedPlan(t *testing.T) {
 	plan := pelicanPlan()
-	recent, future := time.Now(), time.Now().Add(time.Hour)
+	// Some clocks return the same tick for consecutive Now calls. The fixture
+	// requires a completed run strictly before the new 5xx observation.
+	observedAt := time.Now()
+	recent, future := observedAt.Add(-time.Second), observedAt.Add(time.Hour)
 	plan.LastRunAt, plan.NextRunAt = &recent, &future
 	plan.PelicanConfig = stateProbePlanConfig()
 	plan.PelicanConfig.Quality = &QualityPolicy{Action: "disable_scheduling", TriggerOnUpstream5xx: true}
@@ -162,7 +165,7 @@ func TestQuality5xxDoesNotSkipRecentlyCompletedPlan(t *testing.T) {
 	runner.runPelican = func(context.Context, int64, string, *PelicanTestConfig) (*ScheduledTestResult, error) {
 		return &ScheduledTestResult{Status: "success", QualityJudgment: &QualityJudgment{Verdict: "correct"}}, nil
 	}
-	require.NoError(t, runner.runQualityTriggeredAccount(context.Background(), plan.AccountID, time.Now()))
+	require.NoError(t, runner.runQualityTriggeredAccount(context.Background(), plan.AccountID, observedAt))
 	require.Len(t, results.results, 1)
 	require.True(t, future.Equal(plans.next), "event test must keep the future cron")
 }

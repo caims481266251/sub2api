@@ -195,3 +195,15 @@ func (c *astraRotationCache) sourceSearchPaused(target int64, now time.Time) boo
 	c.prune(now)
 	return now.Before(c.blocked[astraRotationCacheKey{target: target, kind: "source_search"}])
 }
+
+func (p *codexGatewayPinUpstream) rememberTargetFailure(id int64, check astraTargetValidation) {
+	if !p.config.RotateNodes || p.rotationCache == nil || check.node.Identity == "" {
+		return
+	}
+	seconds := p.config.NodeCooldownSeconds
+	if seconds == 0 {
+		seconds = 3600
+	}
+	now := time.Now()
+	p.rotationCache.reject(id, check.node.Identity, check.gateway, now.Add(time.Duration(seconds)*time.Second), now)
+}

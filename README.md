@@ -1,3 +1,5 @@
+> 本分支发布仓库：**[caims481266251/sub2api](https://github.com/caims481266251/sub2api)**。安装与在线更新说明见 [GitHub 发布与在线更新](docs/github-release.md)。
+
 <div align="center">
 
 <img src="assets/logo-icon.png" alt="Sub2API Logo" width="128" />

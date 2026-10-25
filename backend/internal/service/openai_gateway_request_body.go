@@ -1386,18 +1386,46 @@ func normalizeGPT6ResponsesSampling(body []byte, model string) ([]byte, bool, er
 	return out, changed, nil
 }
 
+// Normalize only the unsupported explicit none value, after resolving the
+// upstream model. Other efforts, absent preferences and user content are kept.
+func normalizeGPT61SolReasoningBody(body []byte, model string) ([]byte, bool, error) {
+	if !openai.IsGPT61SolModelSpelling(model) {
+		return body, false, nil
+	}
+	out := body
+	changed := false
+	for _, path := range []string{"reasoning.effort", "reasoning_effort", "output_config.effort"} {
+		value := gjson.GetBytes(out, path)
+		if value.Type != gjson.String || !strings.EqualFold(strings.TrimSpace(value.String()), "none") {
+			continue
+		}
+		var err error
+		out, err = sjson.SetBytes(out, path, "high")
+		if err != nil {
+			return body, false, fmt.Errorf("normalize gpt-6.1-sol reasoning effort: %w", err)
+		}
+		changed = true
+	}
+	return out, changed, nil
+}
+
 func normalizeOpenAIResponsesReasoningMode(body []byte, model string) ([]byte, bool, error) {
 	if len(body) == 0 {
 		return body, false, nil
 	}
 	// GPT-6 treats reasoning.mode and reasoning.effort as independent
-	// official fields. Preserve both verbatim; earlier models retain the
+	// official fields. Preserve both except the Sol 6.1 none fallback; earlier models retain the
 	// established mode stripping and pro-to-max compatibility behavior.
 	if model == "" {
 		model = gjson.GetBytes(body, "model").String()
 	}
 	if isOpenAIGPT6Model(model) {
-		return normalizeGPT6ResponsesSampling(body, model)
+		normalized, changed, err := normalizeGPT61SolReasoningBody(body, model)
+		if err != nil {
+			return body, false, err
+		}
+		normalized, samplingChanged, err := normalizeGPT6ResponsesSampling(normalized, model)
+		return normalized, changed || samplingChanged, err
 	}
 	mode := gjson.GetBytes(body, "reasoning.mode")
 	if !mode.Exists() || mode.Type != gjson.String {
@@ -1478,6 +1506,12 @@ func normalizeOpenAIResponsesCompatibilityBodyWithOptions(body []byte, account *
 		if err != nil {
 			return body, false, err
 		}
+	}
+	if next, effortChanged, err := normalizeGPT61SolReasoningBody(normalized, account.GetMappedModel(gjson.GetBytes(normalized, "model").String())); err != nil {
+		return body, false, err
+	} else if effortChanged {
+		normalized = next
+		changed = true
 	}
 	if next, normalizedReasoningContent, err := normalizeOpenAIResponsesReasoningContentReplay(normalized); err != nil {
 		return body, false, err
@@ -2589,6 +2623,7 @@ func normalizeOpenAIReasoningEffort(raw string) string {
 }
 
 func normalizeOpenAIReasoningEffortForModel(raw, model string) string {
+	raw = openai.NormalizeGPT61SolReasoningEffort(model, raw)
 	if strings.EqualFold(strings.TrimSpace(raw), "none") && openai.IsGPT6SolOrLunaModelSpelling(model) {
 		return "none"
 	}

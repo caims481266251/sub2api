@@ -34,7 +34,12 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	attempt int,
 	lastFailureReason string,
 	agentTaskRecoveryTried *bool,
-) (*OpenAIForwardResult, error) {
+) (recentResult *OpenAIForwardResult, recentErr error) {
+	var recentAttempt *accountRequestAttempt
+	defer func() { recentAttempt.finish(recentErr) }()
+	// HTTP ingress can use WS internally and later fall back to HTTP. A local
+	// rejection on that later path must not claim the whole forward was unsent.
+	claimOpenAIInitialUpstreamAttempt(ctx)
 	if anchor := codexWSAnchorFromContext(ctx); anchor != nil {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithDeadline(ctx, anchor.expires)
@@ -124,7 +129,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		)
 	}
 
-	stateStore := s.getOpenAIWSStateStore()
+	stateStore := s.getOpenAIWSStateStoreForContext(ctx)
 	groupID, enforceGroup := openAITurnAdmissionGroupFromContext(c)
 	sessionHash := s.GenerateSessionHash(c, nil)
 	if sessionHash == "" {
@@ -257,10 +262,12 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		anchorScope = anchor.scope
 	}
 	lease, err := s.getOpenAIWSConnPool().Acquire(acquireCtx, openAIWSAcquireRequest{
-		AnchorScope: anchorScope,
-		Account:     account,
-		WSURL:       wsURL,
-		Headers:     wsHeaders,
+		Model: mappedModel, PreviousResponseID: previousResponseID,
+		LifetimeContext: ctx,
+		AnchorScope:     anchorScope,
+		Account:         account,
+		WSURL:           wsURL,
+		Headers:         wsHeaders,
 		HeadersFactory: func(factoryCtx context.Context, headers http.Header) (http.Header, error) {
 			latest, err := s.admitOpenAITurnForGroup(factoryCtx, groupID, enforceGroup, account, mappedModel)
 			if err != nil {
@@ -505,6 +512,8 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		if err := controlledSubmission(ctx, "native_ws"); err != nil {
 			return err
 		}
+		recentAttempt.finish(nil)
+		recentAttempt = beginAccountRequestAttempt(withRecentRequestScope(ctx, account, codexAccountIdentitySource(c, account)), s.recentRequests, account, mappedModel)
 		if err := lease.WriteJSONWithContextTimeout(ctx, value, s.openAIWSWriteTimeout()); err != nil {
 			lease.MarkBroken()
 			logOpenAIWSModeInfo(
@@ -796,6 +805,7 @@ readLoop:
 			continue
 		}
 		responseModelObserver.ObserveOpenAI(message, eventType)
+		observeRecentWSEvent(recentAttempt, message, eventType, s.openAITTFTMode(ctx))
 		eventCount++
 		if firstEventType == "" {
 			firstEventType = eventType

@@ -17,6 +17,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyurl"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyutil"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/upstreamroute"
 	openaiwsv2 "github.com/Wei-Shaw/sub2api/internal/service/openai_ws_v2"
 	coderws "github.com/coder/websocket"
@@ -173,7 +174,13 @@ func (d *coderOpenAIWSClientDialer) Dial(
 			rewriteRequestTimezoneHeaders(opts.HTTPHeader, wrapped.requestTimezone)
 		}
 	}
-	if proxy := strings.TrimSpace(proxyURL); proxy != "" {
+	if profile, ok := ctx.Value(borrowWSFingerprintKey{}).(*tlsfingerprint.Profile); ok {
+		client, err := d.borrowFingerprintHTTPClient(proxyURL, profile)
+		if err != nil {
+			return nil, 0, nil, err
+		}
+		opts.HTTPClient = client
+	} else if proxy := strings.TrimSpace(proxyURL); proxy != "" {
 		proxyClient, err := d.proxyHTTPClient(proxy)
 		if err != nil {
 			if region != "" {

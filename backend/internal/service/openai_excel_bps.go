@@ -185,7 +185,7 @@ func newExcelBPSRequest(ctx context.Context, body []byte, token, accountID strin
 }
 
 func newExcelBPSRequestTo(ctx context.Context, targetURL, accept string, body []byte, token, accountID string) (*http.Request, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(withRecentRequestModel(ctx, body), http.MethodPost, targetURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -468,6 +468,7 @@ func (s *OpenAIGatewayService) forwardExcelBPS(ctx context.Context, c *gin.Conte
 		}
 	}
 	requestCtx := WithHTTPUpstreamRedirectsDisabled(WithHTTPUpstreamProfile(ctx, HTTPUpstreamProfileExcelBPS))
+	requestCtx = withRecentRequestScope(requestCtx, account, codexAccountIdentitySource(c, account))
 
 	if imagePolicy.split > 0 {
 		logger.LegacyPrintf("service.openai_excel_bps", "image policy auto compact: account_id=%d history_images=%d new_images=%d limit=%d", account.ID, basispoints.CountInlineImages(imagePolicy.history.Input[:imagePolicy.split]), basispoints.CountInlineImages(imagePolicy.history.Input[imagePolicy.split:]), imageSettings.Limits.MaxImages)
@@ -507,7 +508,11 @@ func (s *OpenAIGatewayService) forwardExcelBPS(ctx context.Context, c *gin.Conte
 		}
 		s.UpdateCodexUsageSnapshotFromHeaders(ctx, account.ID, cr.Header)
 		compactEffort = bridge.Effort
-		compactResponse, compactErr := basispoints.ReadImageCompaction(cr.Body, func(payload []byte) { s.parseSSEUsageBytes(payload, &compactUsage) })
+		compactResponse, compactErr := basispoints.ReadImageCompaction(cr.Body, func(payload []byte) {
+			s.parseSSEUsageBytes(payload, &compactUsage)
+			observeRecentProtocolEvent(recentRequestResponseContext(ctx, cr), payload, gjson.GetBytes(payload, "type").String(), s.openAITTFTMode(ctx))
+		})
+		recentRequestFailed(recentRequestResponseContext(ctx, cr), compactErr)
 		_ = cr.Body.Close()
 		if compactResponse != nil {
 			encoded, _ := json.Marshal(map[string]any{"type": "response.completed", "response": compactResponse})
@@ -589,7 +594,7 @@ func (s *OpenAIGatewayService) forwardExcelBPS(ctx context.Context, c *gin.Conte
 			logger.LegacyPrintf("service.openai_excel_bps", "retrying invalid encrypted reasoning once: account_id=%d", account.ID)
 			c.Set("excel_bps_upstream_attempt", c.GetInt("excel_bps_upstream_attempt")+1)
 			// Do not re-enter proxy acquisition or transport retries after sending.
-			resp, err = s.httpUpstream.Do(retryReq, proxyURL, account.ID, account.Concurrency)
+			resp, err = s.doRecentHTTP(retryReq, proxyURL, account)
 			if err == nil {
 				s.guardExcelBPSProgress(requestCtx, resp)
 			}
@@ -684,7 +689,8 @@ func (s *OpenAIGatewayService) forwardExcelBPS(ctx context.Context, c *gin.Conte
 	// BPS and Codex share quota. Refresh at the HTTP boundary even if the client
 	// disconnects or a later stream/protocol error prevents normal completion.
 	s.UpdateCodexUsageSnapshotFromHeaders(ctx, account.ID, resp.Header)
-	converted := bridge.StreamWithRepairs(requestCtx, resp.Body, func(repairCtx context.Context, failed map[string]any, validation error) (map[string]any, error) {
+	recentReader := &recentOpenAIEventReader{ReadCloser: resp.Body, ctx: recentRequestResponseContext(ctx, resp), mode: s.openAITTFTMode(ctx)}
+	converted := bridge.StreamWithRepairs(requestCtx, recentReader, func(repairCtx context.Context, failed map[string]any, validation error) (map[string]any, error) {
 		if isControlledExperiment(ctx) {
 			return nil, errors.New("controlled experiment disables BPS tool repair submissions")
 		}
@@ -696,7 +702,7 @@ func (s *OpenAIGatewayService) forwardExcelBPS(ctx context.Context, c *gin.Conte
 		if err != nil {
 			return nil, err
 		}
-		repairResp, err := s.httpUpstream.Do(repairReq, proxyURL, account.ID, account.Concurrency)
+		repairResp, err := s.doRecentHTTP(repairReq, proxyURL, account)
 		if err == nil {
 			s.guardExcelBPSProgress(repairCtx, repairResp)
 		}
@@ -732,7 +738,10 @@ func (s *OpenAIGatewayService) forwardExcelBPS(ctx context.Context, c *gin.Conte
 		}
 		s.UpdateCodexUsageSnapshotFromHeaders(repairCtx, account.ID, repairResp.Header)
 		upstreamBody = correctedBody
-		return basispoints.ReadToolRepairResponse(repairResp.Body)
+		repairReader := &recentOpenAIEventReader{ReadCloser: repairResp.Body, ctx: recentRequestResponseContext(repairCtx, repairResp), mode: s.openAITTFTMode(repairCtx)}
+		fixed, repairErr := basispoints.ReadToolRepairResponse(repairReader)
+		recentRequestFailed(repairReader.ctx, repairErr)
+		return fixed, repairErr
 	}, func(repairCtx context.Context) (io.ReadCloser, error) {
 		repairBody, err := basispoints.RepairRequest(upstreamBody)
 		if err != nil {
@@ -745,7 +754,7 @@ func (s *OpenAIGatewayService) forwardExcelBPS(ctx context.Context, c *gin.Conte
 		if isControlledExperiment(ctx) {
 			return nil, errors.New("controlled experiment disables BPS correction submissions")
 		}
-		repaired, err := s.httpUpstream.Do(retry, proxyURL, account.ID, account.Concurrency)
+		repaired, err := s.doRecentHTTP(retry, proxyURL, account)
 		if err == nil {
 			s.guardExcelBPSProgress(repairCtx, repaired)
 		}
@@ -774,7 +783,7 @@ func (s *OpenAIGatewayService) forwardExcelBPS(ctx context.Context, c *gin.Conte
 			return nil, fmt.Errorf("excel BPS tool correction returned HTTP %d", repaired.StatusCode)
 		}
 		s.UpdateCodexUsageSnapshotFromHeaders(repairCtx, account.ID, repaired.Header)
-		return repaired.Body, nil
+		return &recentOpenAIEventReader{ReadCloser: repaired.Body, ctx: recentRequestResponseContext(repairCtx, repaired), mode: s.openAITTFTMode(repairCtx)}, nil
 	})
 	if len(compactOutput) > 0 {
 		converted = basispoints.WithCompactedWindow(requestCtx, converted, compactOutput, compactUsageWire)

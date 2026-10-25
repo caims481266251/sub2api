@@ -309,6 +309,8 @@ func ProvideAccountTestService(
 	openAIGatewayService *OpenAIGatewayService,
 	settingService *SettingService,
 	pluginManager *PluginManager,
+	borrowRepo TicketBorrowRepository,
+	borrowOAuth *OpenAIOAuthService,
 ) *AccountTestService {
 	service := NewAccountTestService(
 		accountRepo,
@@ -322,8 +324,18 @@ func ProvideAccountTestService(
 	)
 	service.agentIdentityWS = openAIGatewayService
 	service.SetOpenAIGatewayService(openAIGatewayService)
+	service.SetRecentRequests(openAIGatewayService.recentRequests)
 	service.SetSettingService(settingService)
 	service.SetPluginManager(pluginManager)
+	borrowing := NewTicketBorrowService(borrowRepo, service, borrowOAuth)
+	service.TicketBorrow = borrowing
+	openAIGatewayService.borrowRoutes = borrowing
+	if p, ok := httpUpstream.(interface{ SetTicketBorrowService(*TicketBorrowService) }); ok {
+		p.SetTicketBorrowService(borrowing)
+	}
+	if cfg.RunsBackgroundJobs() {
+		borrowing.Start()
+	}
 	if p, ok := httpUpstream.(AstraGatewayRuntimeProvider); ok {
 		p.SetAstraGatewayPreparer(service.prepareAstraGatewaySource)
 	}
@@ -343,7 +355,10 @@ func ProvideAccountTestService(
 		}
 	}
 	stopScheduling := service.startAstraAccountScheduling()
+	stopSeamless := service.startAstraSeamlessMaintenance()
 	openAIGatewayService.stopAstraSetup = func() {
+		borrowing.Stop()
+		stopSeamless()
 		stopScheduling()
 		service.StopAstraAutomaticSetup()
 	}
@@ -776,8 +791,10 @@ func ProvideScheduledTestRunnerService(
 	rdb *redis.Client,
 	groupTests *PelicanGroupTestService,
 	monitor *ChannelMonitorV2Service,
+	accountQualityMonitor *AccountQualityMonitorService,
 ) *ScheduledTestRunnerService {
 	svc := NewScheduledTestRunnerService(planRepo, scheduledSvc, accountTestSvc, rateLimitSvc, cfg)
+	svc.SetAccountQualityMonitor(accountQualityMonitor)
 	if rdb != nil {
 		svc.qualityTrigger = &quality5xxTrigger{queue: qualityqueue.NewRedis(rdb)}
 	}
@@ -994,6 +1011,7 @@ func ProvideAPIKeyService(
 
 // ProviderSet is the Wire provider set for all services
 var ProviderSet = wire.NewSet(
+	NewHostingService,
 	ProvideRequestCaptureManager,
 	// Core services
 	ProvideAuthService,
@@ -1006,6 +1024,7 @@ var ProviderSet = wire.NewSet(
 	NewGroupService,
 	NewCompositeRouteResolver,
 	NewAccountService,
+	NewAccountQualityMonitorService,
 	NewProxyService,
 	NewRedeemService,
 	NewPromoService,

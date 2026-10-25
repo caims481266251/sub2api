@@ -1,0 +1,128 @@
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
+import { mount, flushPromises } from '@vue/test-utils'
+import TicketBorrowAccountSettings from '../TicketBorrowAccountSettings.vue'
+import BorrowProbePolicy from '@/components/admin/BorrowProbePolicy.vue'
+const mock=vi.hoisted(()=>({target:vi.fn(),setTarget:vi.fn()}))
+vi.mock('@/api/admin/ticketBorrowing',()=>({ticketBorrowing:mock}))
+vi.mock('vue-i18n',()=>({useI18n:()=>({t:(key:string,args?:Record<string,unknown>)=>key+(args ? JSON.stringify(args) : ''),te:()=>true})}))
+const start=Date.parse('2026-10-10T00:00:00Z')
+function status(){return {acquisition_identity:'self' as 'self' | 'source',acquisition_revision:1,account_id:11,name:'target',enabled:true,revision:2,ready:true,phase:'verifying',reason:'target_probe_inconclusive',server_now:new Date(start).toISOString(),expires_at:new Date(start+750).toISOString()}}
+beforeEach(()=>{vi.useFakeTimers();vi.setSystemTime(start);vi.resetAllMocks();mock.target.mockResolvedValue(status())})
+afterEach(()=>vi.useRealTimers())
+describe('borrowing target settings',()=>{
+ it('keeps subsecond routes usable during replacement verification until actual expiry',async()=>{
+  const w=mount(TicketBorrowAccountSettings,{props:{accountId:11}});await flushPromises()
+  expect(w.text()).toContain('ticketBorrowing.ready');expect(w.text()).toContain('ticketBorrowing.underSecond')
+  await vi.advanceTimersByTimeAsync(750);expect(w.text()).toContain('ticketBorrowing.waiting');w.unmount()
+ })
+ it('saves enabled state immediately with the authoritative revision',async()=>{
+  mock.setTarget.mockResolvedValue({...status(),enabled:false,revision:3,ready:false})
+  const w=mount(TicketBorrowAccountSettings,{props:{accountId:11}});await flushPromises();await w.get('input[type="checkbox"]').setValue(false);await flushPromises()
+  expect(mock.setTarget).toHaveBeenCalledWith(11,false,2);expect((w.get('input').element as HTMLInputElement).checked).toBe(false);w.unmount()
+ })
+ it('keeps the confirmed switch after a failed write',async()=>{
+  mock.setTarget.mockRejectedValue({reason:'borrow_configuration_conflict'})
+  const w=mount(TicketBorrowAccountSettings,{props:{accountId:11}});await flushPromises();await w.get('input').setValue(false);await flushPromises()
+  expect(w.get('[role="alert"]').text()).toContain('borrow_configuration_conflict');expect((w.get('input').element as HTMLInputElement).checked).toBe(true);w.unmount()
+ })
+})
+
+function deferred<T>() {
+ let resolve!: (value: T) => void
+ const promise = new Promise<T>(done => { resolve = done })
+ return { promise, resolve }
+}
+const identitySelector = '[data-testid="acquisition-identity"]'
+describe('account editor acquisition identity', () => {
+ it('shows the saved source identity and hides the choice while borrowing is disabled', async () => {
+  mock.target.mockResolvedValue({...status(),acquisition_identity:'source'})
+  const w=mount(TicketBorrowAccountSettings,{props:{accountId:11}});await flushPromises()
+  expect((w.get(identitySelector).element as HTMLSelectElement).value).toBe('source')
+  expect(w.get(identitySelector).findAll('option').map(option=>option.attributes('value'))).toEqual(['self','source'])
+  mock.setTarget.mockResolvedValue({...status(),enabled:false,revision:3,acquisition_identity:'source'})
+  await w.get('input[type="checkbox"]').setValue(false);await flushPromises()
+  expect(w.find(identitySelector).exists()).toBe(false)
+  w.unmount()
+ })
+ it('shows the choice immediately after enabling borrowing and preserves the existing identity', async () => {
+  mock.target.mockResolvedValue({...status(),enabled:false,acquisition_identity:'source'})
+  mock.setTarget.mockResolvedValue({...status(),revision:3,acquisition_identity:'source'})
+  const w=mount(TicketBorrowAccountSettings,{props:{accountId:11}});await flushPromises()
+  expect(w.find(identitySelector).exists()).toBe(false)
+  await w.get('input[type="checkbox"]').setValue(true);await flushPromises()
+  expect((w.get(identitySelector).element as HTMLSelectElement).value).toBe('source')
+  expect(mock.setTarget).toHaveBeenCalledWith(11,true,2)
+  w.unmount()
+ })
+ it('saves both modes with current revisions and rejects stale poll and policy snapshots', async () => {
+  const saved={...status(),acquisition_identity:'source' as const,acquisition_revision:2}
+  mock.setTarget.mockResolvedValueOnce(saved).mockResolvedValueOnce({...status(),acquisition_revision:3})
+  const w=mount(TicketBorrowAccountSettings,{props:{accountId:11}});await flushPromises()
+  await w.get(identitySelector).setValue('source');await flushPromises()
+  expect(mock.setTarget).toHaveBeenNthCalledWith(1,11,true,2,'source',1)
+  await vi.advanceTimersByTimeAsync(5000);await flushPromises()
+  expect((w.get(identitySelector).element as HTMLSelectElement).value).toBe('source')
+  w.findComponent(BorrowProbePolicy).vm.$emit('saved',{...status(),probe_policy:{revision:2,concurrency:3,renew_before_seconds:0}})
+  await flushPromises()
+  expect((w.get(identitySelector).element as HTMLSelectElement).value).toBe('source')
+  await w.get(identitySelector).setValue('self');await flushPromises()
+  expect(mock.setTarget).toHaveBeenNthCalledWith(2,11,true,2,'self',2)
+  expect((w.get(identitySelector).element as HTMLSelectElement).value).toBe('self')
+  w.unmount()
+ })
+ it.each(['borrow_configuration_conflict','network_error'])('restores the saved mode when saving fails: %s', async reason => {
+  mock.setTarget.mockRejectedValueOnce({reason})
+  const w=mount(TicketBorrowAccountSettings,{props:{accountId:11}});await flushPromises()
+  await w.get(identitySelector).setValue('source');await flushPromises()
+  expect((w.get(identitySelector).element as HTMLSelectElement).value).toBe('self')
+  expect(w.get('[role="alert"]').text()).toContain(reason)
+  mock.target.mockResolvedValue({...status(),acquisition_identity:'source',acquisition_revision:2})
+  await w.findAll('button').find(button=>button.text()==='ticketBorrowing.refresh')!.trigger('click');await flushPromises()
+  expect((w.get(identitySelector).element as HTMLSelectElement).value).toBe('source')
+  expect(w.find('[role="alert"]').exists()).toBe(false)
+  w.unmount()
+ })
+ it('blocks duplicate writes and ignores polling responses started before the mode save', async () => {
+  const poll=deferred<ReturnType<typeof status>>()
+  const save=deferred<ReturnType<typeof status>>()
+  const w=mount(TicketBorrowAccountSettings,{props:{accountId:11}});await flushPromises()
+  mock.target.mockReturnValueOnce(poll.promise)
+  await vi.advanceTimersByTimeAsync(5000)
+  mock.setTarget.mockReturnValueOnce(save.promise)
+  await w.get(identitySelector).setValue('source')
+  expect((w.get(identitySelector).element as HTMLSelectElement).disabled).toBe(true)
+  expect((w.get('input[type="checkbox"]').element as HTMLInputElement).disabled).toBe(true)
+  await vi.advanceTimersByTimeAsync(5000)
+  expect(mock.target).toHaveBeenCalledTimes(2)
+  save.resolve({...status(),acquisition_identity:'source',acquisition_revision:2});await flushPromises()
+  poll.resolve(status());await flushPromises()
+  expect((w.get(identitySelector).element as HTMLSelectElement).value).toBe('source')
+  expect(mock.setTarget).toHaveBeenCalledTimes(1)
+  w.unmount()
+ })
+ it('ignores writes from a previously selected account without unlocking the new account save', async () => {
+  const oldSave=deferred<ReturnType<typeof status>>()
+  const newSave=deferred<ReturnType<typeof status>>()
+  mock.setTarget.mockReturnValueOnce(oldSave.promise).mockReturnValueOnce(newSave.promise)
+  const w=mount(TicketBorrowAccountSettings,{props:{accountId:11}});await flushPromises()
+  await w.get(identitySelector).setValue('source')
+  mock.target.mockResolvedValue({...status(),account_id:22})
+  await w.setProps({accountId:22});await flushPromises()
+  await w.get(identitySelector).setValue('source')
+  oldSave.resolve({...status(),acquisition_identity:'source',acquisition_revision:2});await flushPromises()
+  expect((w.get(identitySelector).element as HTMLSelectElement).disabled).toBe(true)
+  newSave.resolve({...status(),account_id:22,acquisition_identity:'source',acquisition_revision:2});await flushPromises()
+  expect(mock.setTarget).toHaveBeenNthCalledWith(2,22,true,2,'source',1)
+  expect((w.get(identitySelector).element as HTMLSelectElement).disabled).toBe(false)
+  w.unmount()
+ })
+ it('prevents mode and enabled changes while probe policy is saving', async () => {
+  const w=mount(TicketBorrowAccountSettings,{props:{accountId:11}});await flushPromises()
+  w.findComponent(BorrowProbePolicy).vm.$emit('saving',true);await flushPromises()
+  expect((w.get(identitySelector).element as HTMLSelectElement).disabled).toBe(true)
+  expect((w.get('input[type="checkbox"]').element as HTMLInputElement).disabled).toBe(true)
+  w.findComponent(BorrowProbePolicy).vm.$emit('saving',false);await flushPromises()
+  expect((w.get(identitySelector).element as HTMLSelectElement).disabled).toBe(false)
+  w.unmount()
+ })
+})

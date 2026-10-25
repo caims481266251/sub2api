@@ -35,8 +35,8 @@ func TestCodexTicketProbeBypassesPluginDuringWiring(t *testing.T) {
 	var calls atomic.Int64
 	upstream := &codexTicketFuncUpstream{do: func(req *http.Request) (*http.Response, error) {
 		calls.Add(1)
-		if HTTPUpstreamProfileFromContext(req.Context()) != HTTPUpstreamProfileOpenAIHarvest || !req.Close {
-			return nil, errors.New("missing no-reuse transport profile")
+		if HTTPUpstreamProfileFromContext(req.Context()) != HTTPUpstreamProfileOpenAIHarvest || req.Close {
+			return nil, errors.New("missing reusable harvest transport profile")
 		}
 		return codexTicketResponse(), nil
 	}}

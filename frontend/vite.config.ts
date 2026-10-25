@@ -164,6 +164,17 @@ export default defineConfig(({ mode }) => {
         },
         '/v1': {
           target: backendUrl,
+          changeOrigin: true,
+          ws: true
+        },
+        // Keep the backend's unversioned Codex routes available to existing clients.
+        '^/responses(?:/|$|\\?)': {
+          target: backendUrl,
+          changeOrigin: true,
+          ws: true
+        },
+        '^/models(?:/|$|\\?)': {
+          target: backendUrl,
           changeOrigin: true
         },
         '/setup': {

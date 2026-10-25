@@ -70,6 +70,11 @@ func (e *openAIWSDialError) Unwrap() error {
 }
 
 type openAIWSAcquireRequest struct {
+	Model, PreviousResponseID string
+	borrowRoute               *BorrowRoute
+	// LifetimeContext owns the admitted business turn/session. Acquisition uses
+	// its own shorter deadline; this context must never enter pool snapshots.
+	LifetimeContext context.Context
 	timezoneBinding *requestTimezoneBinding
 	timezoneMode    string
 	// Private experiment connections must never serve a different client scope.
@@ -92,6 +97,7 @@ type openAIWSAcquireRequest struct {
 }
 
 type openAIWSHandshakeCompatibilityKey struct {
+	borrowRouteID       string
 	timezoneMode        string
 	timezoneHeaders     [3]string
 	anchorScope         string
@@ -106,6 +112,7 @@ type openAIWSHandshakeCompatibilityKey struct {
 }
 
 type openAIWSConnLease struct {
+	borrow     *borrowWSUse
 	pool       *openAIWSConnPool
 	accountID  int64
 	conn       *openAIWSConn
@@ -206,7 +213,22 @@ func (l *openAIWSConnLease) MarkPrewarmed() {
 	l.conn.markPrewarmed()
 }
 
+func (l *openAIWSConnLease) checkBorrowWrite(ctx context.Context, value any) error {
+	if l.borrow != nil {
+		return l.borrow.check(ctx, value)
+	}
+	if l.pool != nil && l.pool.borrowRoutes != nil {
+		return l.pool.borrowRoutes.checkWSRoute(ctx, l.accountID, nil)
+	}
+	return nil
+}
+
 func (l *openAIWSConnLease) WriteJSON(value any, timeout time.Duration) error {
+	if l != nil {
+		if err := l.checkBorrowWrite(context.Background(), value); err != nil {
+			return err
+		}
+	}
 	conn, err := l.activeConn()
 	if err != nil {
 		return err
@@ -215,6 +237,11 @@ func (l *openAIWSConnLease) WriteJSON(value any, timeout time.Duration) error {
 }
 
 func (l *openAIWSConnLease) WriteJSONWithContextTimeout(ctx context.Context, value any, timeout time.Duration) error {
+	if l != nil {
+		if err := l.checkBorrowWrite(ctx, value); err != nil {
+			return err
+		}
+	}
 	conn, err := l.activeConn()
 	if err != nil {
 		return err
@@ -223,6 +250,11 @@ func (l *openAIWSConnLease) WriteJSONWithContextTimeout(ctx context.Context, val
 }
 
 func (l *openAIWSConnLease) WriteJSONContext(ctx context.Context, value any) error {
+	if l != nil {
+		if err := l.checkBorrowWrite(ctx, value); err != nil {
+			return err
+		}
+	}
 	conn, err := l.activeConn()
 	if err != nil {
 		return err
@@ -235,7 +267,9 @@ func (l *openAIWSConnLease) ReadMessage(timeout time.Duration) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return conn.readMessageWithTimeout(timeout)
+	raw, err := conn.readMessageWithTimeout(timeout)
+	l.borrow.observe(raw)
+	return raw, err
 }
 
 func (l *openAIWSConnLease) ReadMessageContext(ctx context.Context) ([]byte, error) {
@@ -243,7 +277,7 @@ func (l *openAIWSConnLease) ReadMessageContext(ctx context.Context) ([]byte, err
 	if err != nil {
 		return nil, err
 	}
-	return captureWSLeaseRead(ctx, func() ([]byte, error) { return conn.readMessage(ctx) })
+	return captureWSLeaseRead(ctx, func() ([]byte, error) { raw, err := conn.readMessage(ctx); l.borrow.observe(raw); return raw, err })
 }
 
 func (l *openAIWSConnLease) ReadMessageWithContextTimeout(ctx context.Context, timeout time.Duration) ([]byte, error) {
@@ -251,7 +285,11 @@ func (l *openAIWSConnLease) ReadMessageWithContextTimeout(ctx context.Context, t
 	if err != nil {
 		return nil, err
 	}
-	return captureWSLeaseRead(ctx, func() ([]byte, error) { return conn.readMessageWithContextTimeout(ctx, timeout) })
+	return captureWSLeaseRead(ctx, func() ([]byte, error) {
+		raw, err := conn.readMessageWithContextTimeout(ctx, timeout)
+		l.borrow.observe(raw)
+		return raw, err
+	})
 }
 
 func (l *openAIWSConnLease) PingWithTimeout(timeout time.Duration) error {
@@ -283,6 +321,12 @@ func (l *openAIWSConnLease) Release() {
 	}
 	if !l.released.CompareAndSwap(false, true) {
 		return
+	}
+	if l.borrow != nil {
+		l.borrow.use.bodyMu.Lock()
+		l.borrow.use.body = nil
+		l.borrow.use.bodyMu.Unlock()
+		l.borrow.finish()
 	}
 	l.conn.release()
 	if l.pool != nil {
@@ -861,7 +905,8 @@ type openAIWSPoolMetrics struct {
 }
 
 type openAIWSConnPool struct {
-	cfg *config.Config
+	borrowRoutes *TicketBorrowService
+	cfg          *config.Config
 	// 通过接口解耦底层 WS 客户端实现，默认使用 coder/websocket。
 	clientDialer openAIWSClientDialer
 
@@ -1120,7 +1165,38 @@ type openAIWSAcquireQueueWait struct {
 	total   time.Duration
 }
 
-func (p *openAIWSConnPool) Acquire(ctx context.Context, req openAIWSAcquireRequest) (*openAIWSConnLease, error) {
+func (p *openAIWSConnPool) Acquire(ctx context.Context, req openAIWSAcquireRequest) (result *openAIWSConnLease, resultErr error) {
+	var borrowing *borrowWSUse
+	if p != nil && p.borrowRoutes != nil && req.Account != nil {
+		lifetime := req.LifetimeContext
+		if lifetime == nil {
+			lifetime = ctx
+		}
+		var err error
+		borrowing, err = p.borrowRoutes.reserveWS(ctx, lifetime, req.Account, req.WSURL, req.Model, req.PreviousResponseID, req.Headers)
+		if err != nil {
+			return nil, err
+		}
+		if borrowing != nil {
+			req = cloneOpenAIWSAcquireRequest(req)
+			req.borrowRoute = borrowing.route
+			injectBorrowWSCookie(req.Headers, borrowing.route)
+			// Lease loss also stops acquisition, without extending its deadline or
+			// letting acquisition cancellation end the admitted business response.
+			var cancelAcquire context.CancelFunc
+			ctx, cancelAcquire = context.WithCancel(ctx)
+			stop := context.AfterFunc(borrowing.use.ctx, cancelAcquire)
+			defer func() { stop(); cancelAcquire() }()
+			defer func() {
+				if resultErr != nil || result == nil {
+					borrowing.finish()
+					return
+				}
+				result.borrow = borrowing
+				borrowing.use.attach(borrowWSCloseFunc(func() { result.MarkBroken() }))
+			}()
+		}
+	}
 	if ctx != nil {
 		req.timezoneBinding, _ = ctx.Value(requestTimezoneEgressKey{}).(*requestTimezoneBinding)
 	}
@@ -2167,8 +2243,18 @@ func (p *openAIWSConnPool) dialConn(ctx context.Context, req openAIWSAcquireRequ
 			return nil, err
 		}
 	}
+	if p.borrowRoutes != nil && req.Account != nil {
+		if err := p.borrowRoutes.checkWSRoute(ctx, req.Account.ID, req.borrowRoute); err != nil {
+			return nil, err
+		}
+		injectBorrowWSCookie(headers, req.borrowRoute)
+	}
 	if req.Account != nil {
 		ctx = upstreamroute.WithAccountID(ctx, req.Account.ID)
+	}
+	ctx, err = prepareBorrowWSDial(ctx, headers, req.borrowRoute, req.Model)
+	if err != nil {
+		return nil, err
 	}
 	if req.timezoneBinding != nil {
 		ctx = context.WithValue(ctx, requestTimezoneEgressKey{}, req.timezoneBinding)
@@ -2185,6 +2271,9 @@ func (p *openAIWSConnPool) dialConn(ctx context.Context, req openAIWSAcquireRequ
 	}
 	finishCapture(status, handshakeHeaders, captureErr)
 	if err != nil {
+		if p.borrowRoutes != nil {
+			_ = p.borrowRoutes.observeWSHandshake(ctx, req.borrowRoute, handshakeHeaders, status)
+		}
 		var handshakeErr *openAIWSHandshakeError
 		var responseBody []byte
 		if errors.As(err, &handshakeErr) && handshakeErr != nil {
@@ -2203,6 +2292,12 @@ func (p *openAIWSConnPool) dialConn(ctx context.Context, req openAIWSAcquireRequ
 			StatusCode:      status,
 			ResponseHeaders: cloneHeader(handshakeHeaders),
 			Err:             errors.New("openai ws dialer returned nil connection"),
+		}
+	}
+	if p.borrowRoutes != nil {
+		if err := p.borrowRoutes.observeWSHandshake(ctx, req.borrowRoute, handshakeHeaders, status); err != nil {
+			_ = conn.Close()
+			return nil, err
 		}
 	}
 	id := p.nextConnID(req.Account.ID)
@@ -2380,12 +2475,16 @@ func openAIWSAcquireCompatibility(req openAIWSAcquireRequest) openAIWSHandshakeC
 	key := normalizeOpenAIWSHandshakeCompatibility(req.Account, req.Headers)
 	key.proxyURL = stringsTrim(req.ProxyURL)
 	key.anchorScope = req.AnchorScope
+	if req.borrowRoute != nil {
+		key.borrowRouteID = req.borrowRoute.ID
+	}
 	key.timezoneMode = req.timezoneMode
 	return key
 }
 
 func cloneOpenAIWSAcquireRequest(req openAIWSAcquireRequest) openAIWSAcquireRequest {
 	copied := req
+	copied.LifetimeContext = nil
 	copied.Headers = cloneHeader(req.Headers)
 	copied.WSURL = stringsTrim(req.WSURL)
 	copied.ProxyURL = stringsTrim(req.ProxyURL)
@@ -2404,7 +2503,7 @@ func cloneOpenAIWSAcquireRequestPtr(req *openAIWSAcquireRequest) *openAIWSAcquir
 func sameOpenAIWSPrewarmTarget(a, b openAIWSAcquireRequest) bool {
 	return a.timezoneMode == b.timezoneMode && stringsTrim(a.WSURL) == stringsTrim(b.WSURL) &&
 		stringsTrim(a.ProxyURL) == stringsTrim(b.ProxyURL) &&
-		normalizeOpenAIWSHandshakeCompatibility(a.Account, a.Headers) == normalizeOpenAIWSHandshakeCompatibility(b.Account, b.Headers)
+		openAIWSAcquireCompatibility(a) == openAIWSAcquireCompatibility(b)
 }
 
 func normalizeOpenAIWSBetaFeatures(headers http.Header) string {

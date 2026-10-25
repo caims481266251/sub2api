@@ -21,6 +21,12 @@ const (
 	FieldUpdatedAt = "updated_at"
 	// FieldDeletedAt holds the string denoting the deleted_at field in the database.
 	FieldDeletedAt = "deleted_at"
+	// FieldRouteMode holds the string denoting the route_mode field in the database.
+	FieldRouteMode = "route_mode"
+	// FieldHostingFallbackGroupID holds the string denoting the hosting_fallback_group_id field in the database.
+	FieldHostingFallbackGroupID = "hosting_fallback_group_id"
+	// FieldHostingPoolID holds the string denoting the hosting_pool_id field in the database.
+	FieldHostingPoolID = "hosting_pool_id"
 	// FieldUserID holds the string denoting the user_id field in the database.
 	FieldUserID = "user_id"
 	// FieldConcurrencyLimit holds the string denoting the concurrency_limit field in the database.
@@ -100,6 +106,9 @@ var Columns = []string{
 	FieldCreatedAt,
 	FieldUpdatedAt,
 	FieldDeletedAt,
+	FieldRouteMode,
+	FieldHostingFallbackGroupID,
+	FieldHostingPoolID,
 	FieldUserID,
 	FieldConcurrencyLimit,
 	FieldKey,
@@ -147,6 +156,10 @@ var (
 	DefaultUpdatedAt func() time.Time
 	// UpdateDefaultUpdatedAt holds the default value on update for the "updated_at" field.
 	UpdateDefaultUpdatedAt func() time.Time
+	// DefaultRouteMode holds the default value on creation for the "route_mode" field.
+	DefaultRouteMode string
+	// RouteModeValidator is a validator for the "route_mode" field. It is called by the builders before save.
+	RouteModeValidator func(string) error
 	// DefaultConcurrencyLimit holds the default value on creation for the "concurrency_limit" field.
 	DefaultConcurrencyLimit int
 	// ConcurrencyLimitValidator is a validator for the "concurrency_limit" field. It is called by the builders before save.
@@ -198,6 +211,21 @@ func ByUpdatedAt(opts ...sql.OrderTermOption) OrderOption {
 // ByDeletedAt orders the results by the deleted_at field.
 func ByDeletedAt(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldDeletedAt, opts...).ToFunc()
+}
+
+// ByRouteMode orders the results by the route_mode field.
+func ByRouteMode(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldRouteMode, opts...).ToFunc()
+}
+
+// ByHostingFallbackGroupID orders the results by the hosting_fallback_group_id field.
+func ByHostingFallbackGroupID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldHostingFallbackGroupID, opts...).ToFunc()
+}
+
+// ByHostingPoolID orders the results by the hosting_pool_id field.
+func ByHostingPoolID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldHostingPoolID, opts...).ToFunc()
 }
 
 // ByUserID orders the results by the user_id field.

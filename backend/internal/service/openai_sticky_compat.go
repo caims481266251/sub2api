@@ -118,6 +118,9 @@ func (s *OpenAIGatewayService) openAISessionCacheKey(sessionHash string) string 
 }
 
 func (s *OpenAIGatewayService) openAILegacySessionCacheKey(ctx context.Context, sessionHash string) string {
+	if hostingKeyFromContext(ctx) != nil {
+		return ""
+	}
 	legacyHash := openAILegacySessionHashFromContext(ctx)
 	if legacyHash == "" {
 		return ""
@@ -141,11 +144,17 @@ func (s *OpenAIGatewayService) openAIStickyLegacyTTL(ttl time.Duration) time.Dur
 }
 
 func (s *OpenAIGatewayService) getStickySessionAccountID(ctx context.Context, groupID *int64, sessionHash string) (int64, error) {
+	if a := managedOpenAISessionAffinity(ctx, groupID, sessionHash); a != nil {
+		if b := a.snapshot(); b != nil {
+			return b.AccountID, nil
+		}
+		return 0, ErrStickySessionNotFound
+	}
 	if s == nil || s.cache == nil {
 		return 0, nil
 	}
 
-	primaryKey := s.openAISessionCacheKey(sessionHash)
+	primaryKey := s.openAISessionCacheKey(scopeHostingSessionHash(ctx, sessionHash))
 	if primaryKey == "" {
 		return 0, nil
 	}
@@ -173,10 +182,16 @@ func (s *OpenAIGatewayService) getStickySessionAccountID(ctx context.Context, gr
 }
 
 func (s *OpenAIGatewayService) setStickySessionAccountID(ctx context.Context, groupID *int64, sessionHash string, accountID int64, ttl time.Duration) error {
+	if managedOpenAISessionAffinity(ctx, groupID, sessionHash) != nil {
+		return nil
+	}
+	if borrowPreferredPass(ctx) {
+		return nil // Commit only an acquired preferred result; normal scheduling keeps its binding rules.
+	}
 	if s == nil || s.cache == nil || accountID <= 0 {
 		return nil
 	}
-	primaryKey := s.openAISessionCacheKey(sessionHash)
+	primaryKey := s.openAISessionCacheKey(scopeHostingSessionHash(ctx, sessionHash))
 	if primaryKey == "" {
 		return nil
 	}
@@ -200,10 +215,13 @@ func (s *OpenAIGatewayService) setStickySessionAccountID(ctx context.Context, gr
 }
 
 func (s *OpenAIGatewayService) refreshStickySessionTTL(ctx context.Context, groupID *int64, sessionHash string, ttl time.Duration) error {
+	if managedOpenAISessionAffinity(ctx, groupID, sessionHash) != nil {
+		return nil
+	}
 	if s == nil || s.cache == nil {
 		return nil
 	}
-	primaryKey := s.openAISessionCacheKey(sessionHash)
+	primaryKey := s.openAISessionCacheKey(scopeHostingSessionHash(ctx, sessionHash))
 	if primaryKey == "" {
 		return nil
 	}
@@ -221,10 +239,16 @@ func (s *OpenAIGatewayService) refreshStickySessionTTL(ctx context.Context, grou
 }
 
 func (s *OpenAIGatewayService) deleteStickySessionAccountID(ctx context.Context, groupID *int64, sessionHash string) error {
+	if managedOpenAISessionAffinity(ctx, groupID, sessionHash) != nil {
+		return nil
+	}
+	if borrowPreferredPass(ctx) {
+		return nil // A speculative preference pass must not erase existing affinity.
+	}
 	if s == nil || s.cache == nil {
 		return nil
 	}
-	primaryKey := s.openAISessionCacheKey(sessionHash)
+	primaryKey := s.openAISessionCacheKey(scopeHostingSessionHash(ctx, sessionHash))
 	if primaryKey == "" {
 		return nil
 	}

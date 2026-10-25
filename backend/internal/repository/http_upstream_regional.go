@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/upstreamroute"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -15,7 +16,7 @@ import (
 
 func (s *httpUpstreamService) useRegionalEgress(proxy string, accountID int64, profile service.HTTPUpstreamProfile) bool {
 	return (s.upstreamRoutes != nil || s.upstreamRoutesErr != nil) && strings.TrimSpace(proxy) == "" && accountID > 0 &&
-		profile != service.HTTPUpstreamProfileOpenAIHarvest && profile != service.HTTPUpstreamProfileExcelBPS
+		profile != service.HTTPUpstreamProfileOpenAIHarvest && profile != service.HTTPUpstreamProfileBorrowProbe && profile != service.HTTPUpstreamProfileExcelBPS
 }
 
 // Use one outer Client.Do to retain net/http's redirect credential policy.
@@ -27,7 +28,9 @@ func (s *httpUpstreamService) doRegionalEgress(req *http.Request, accountID int6
 	}
 	client := &http.Client{Transport: &regionalUpstreamTransport{s, accountID, concurrency, profile, fingerprint}, CheckRedirect: s.redirectChecker}
 	client = s.httpClientForUpstreamRequest(client, req)
-	client = httpClientWithGrokAccessDeniedFallback(client)
+	if !service.BorrowBusinessRecoveryFromContext(req.Context()).Active() {
+		client = httpClientWithGrokAccessDeniedFallback(client)
+	}
 	// Regional routing adds no replay/failover or transparent direct fallback.
 	return doUpstreamRequest(client, req)
 }
@@ -51,11 +54,13 @@ func (t *regionalUpstreamTransport) RoundTrip(req *http.Request) (*http.Response
 	}
 	var entry *upstreamClientEntry
 	var err error
+	acquireDone := requesttiming.TransportStage(req.Context(), "client_acquire")
 	if t.fingerprint != nil && req.URL.Scheme == "https" {
 		entry, err = t.service.acquireClientWithTLS(proxy, t.accountID, t.concurrency, t.fingerprint, t.profile)
 	} else {
 		entry, err = t.service.acquireClientWithProfile(proxy, t.accountID, t.concurrency, t.profile)
 	}
+	acquireDone()
 	if err != nil {
 		return nil, upstreamroute.TransportError(err)
 	}
@@ -64,6 +69,7 @@ func (t *regionalUpstreamTransport) RoundTrip(req *http.Request) (*http.Response
 		atomic.StoreInt64(&entry.lastUsed, time.Now().UnixNano())
 	}
 	start := time.Now()
+	req = observeUpstreamTransport(req, entry)
 	resp, err := entry.client.Transport.RoundTrip(req)
 	if region != "" {
 		status := 0

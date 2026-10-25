@@ -162,6 +162,8 @@ import { formatDateTime } from '@/utils/format'
 const props = defineProps<{
   show: boolean
   account: Account | null
+  loadStatus?: (id: number) => Promise<TempUnschedulableStatus>
+  recoverAccount?: (id: number) => Promise<Account>
 }>()
 
 const emit = defineEmits<{
@@ -241,7 +243,7 @@ const loadStatus = async () => {
   status.value = null
   loading.value = true
   try {
-    const result = await adminAPI.accounts.getTempUnschedulableStatus(props.account.id)
+    const result = await (props.loadStatus ?? adminAPI.accounts.getTempUnschedulableStatus)(props.account.id)
     if (version === requestVersion) status.value = result
   } catch (error: any) {
     if (version !== requestVersion) return
@@ -260,7 +262,7 @@ const handleReset = async () => {
   if (!props.account) return
   resetting.value = true
   try {
-    const updated = await adminAPI.accounts.recoverState(props.account.id)
+    const updated = await (props.recoverAccount ?? adminAPI.accounts.recoverState)(props.account.id)
     appStore.showSuccess(t('admin.accounts.recoverStateSuccess'))
     emit('reset', updated)
     handleClose()
@@ -280,6 +282,7 @@ watch(
       return
     }
     status.value = null
-  }
+  },
+  { immediate: true }
 )
 </script>

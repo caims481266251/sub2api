@@ -214,6 +214,22 @@ describe('ModelWhitelistSelector', () => {
     expect(copyToClipboard).not.toHaveBeenCalled()
   })
 
+  it('uses the owner-scoped sync callback without calling admin endpoints', async () => {
+    const syncModels = vi.fn().mockResolvedValue({ models: ['gpt-hosted'] })
+    const wrapper = mountSelector({ accountId: 25, syncModels })
+    const syncButton = wrapper.findAll('button')
+      .find(button => button.text() === 'admin.accounts.syncUpstreamModels')
+
+    expect(syncButton).toBeDefined()
+    await syncButton!.trigger('click')
+    await flushPromises()
+
+    expect(syncModels).toHaveBeenCalledOnce()
+    expect(syncUpstreamModels).not.toHaveBeenCalled()
+    expect(syncUpstreamModelsPreview).not.toHaveBeenCalled()
+    expect(wrapper.emitted('update:modelValue')).toEqual([[['gpt-hosted']]])
+  })
+
   it('warns when model IDs sync but capability metadata is incomplete', async () => {
     syncUpstreamModels.mockResolvedValue({
       models: ['x-preview-f-free'],

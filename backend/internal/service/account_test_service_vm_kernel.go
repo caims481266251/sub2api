@@ -14,7 +14,7 @@ import (
 // Management probes use the same guest boundary as public requests, while
 // retaining the existing payloads, stream parser and quality/admission outcome
 // handling. A disabled business scheduler is not permission to use host egress.
-func (s *AccountTestService) testVMKernelConnection(c *gin.Context, account *Account, requestedModel, prompt string) error {
+func (s *AccountTestService) testVMKernelConnection(c *gin.Context, account *Account, requestedModel, prompt string) (resultErr error) {
 	runtime := LookupVMKernelService(account.Platform)
 	if runtime == nil {
 		return s.sendErrorAndEnd(c, "VM kernel runtime is unavailable")
@@ -34,7 +34,11 @@ func (s *AccountTestService) testVMKernelConnection(c *gin.Context, account *Acc
 	// become a successful admission/quality sample. The bound is the same as
 	// ordinary VM presentation; scheduled output retains its existing limits.
 	var stream bytes.Buffer
-	result, err := runtime.ExecuteProbe(c.Request.Context(), account, protocol, body, func(event vmkernel.Event) error {
+	probeCtx := c.Request.Context()
+	if protocol == "responses" && s.openaiGatewayService != nil {
+		probeCtx = s.openaiGatewayService.vmKernelResponsesTTFTContext(probeCtx)
+	}
+	result, err := runtime.ExecuteProbe(probeCtx, account, protocol, body, func(event vmkernel.Event) error {
 		var data bytes.Buffer
 		if err := json.Compact(&data, event.Data); err != nil {
 			return err
@@ -47,6 +51,9 @@ func (s *AccountTestService) testVMKernelConnection(c *gin.Context, account *Acc
 		stream.WriteString("\n\n")
 		return nil
 	})
+	defer func() {
+		recordVMKernelRecentRequest(c.Request.Context(), s.recentRequests, account, upstreamModel, result, resultErr)
+	}()
 	if account.Platform == PlatformOpenAI && s.openaiGatewayService != nil && !IsAstraSourceAcquisition(c.Request.Context()) {
 		s.openaiGatewayService.observeVMKernelOpenAIResult(c.Request.Context(), c, account, upstreamModel, result)
 	}

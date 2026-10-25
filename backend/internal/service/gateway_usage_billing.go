@@ -99,6 +99,9 @@ func simpleModeKeyRateLimitBillingEnabled(cfg *config.Config, apiKey *APIKey) bo
 // apiKey 为 nil 或 Group 信息缺失时返回空串（调用方据此 short-circuit quota 累加）。
 // 导出供 handler 层调用。
 func PlatformFromAPIKey(apiKey *APIKey) string {
+	if apiKey != nil && apiKey.RouteMode == RouteModeHosted {
+		return PlatformOpenAI
+	}
 	if apiKey == nil || apiKey.Group == nil {
 		return ""
 	}

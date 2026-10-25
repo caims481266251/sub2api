@@ -14,6 +14,46 @@ function value() { return { cookie_pool: { enabled: false, source_account_ids: [
 function render() { const wrapper = mount(HarvestGatewayBorrowPanel, { global: { stubs: { RouterLink: { template: '<a><slot /></a>' } } } }); void wrapper.get('[data-testid="expand-borrow"]').trigger('click'); return wrapper }
 beforeEach(() => { vi.clearAllMocks(); mocks.get.mockResolvedValue(value()); mocks.list.mockResolvedValue({ items: [{ id: 299, name: 'source' }, { id: 300, name: 'target' }], pages: 1 }); mocks.save.mockImplementation(v => Promise.resolve({ ...v, revision: 'two' })) })
 describe('Astra gateway configuration', () => {
+  it('persists continuous borrowing and rejects simultaneous node rotation', async () => {
+    const data = normalizeAstraGateway(value()); data.cookie_pool.enabled = true
+    mocks.get.mockResolvedValue(data)
+    const w = render(); await flushPromises()
+    await w.get('[data-testid="seamless-toggle"]').trigger('click')
+    await w.get('form').trigger('submit'); await flushPromises()
+    expect(mocks.save).toHaveBeenLastCalledWith(expect.objectContaining({ cookie_pool: expect.objectContaining({ seamless: true }) }))
+    await w.get('[data-testid="rotation-toggle"]').trigger('click')
+    expect(w.get('[data-testid="save"]').attributes('disabled')).toBeDefined()
+    expect(w.text()).toContain('admin.astraGateway.seamlessFixedEgress')
+    w.unmount()
+  })
+
+  it('lets each selected source choose a model and saves it independently from targets', async () => {
+    const data = value(); data.cookie_pool.source_account_ids = [299, 298]
+    mocks.get.mockResolvedValue(data)
+    mocks.list.mockResolvedValue({ items: [{ id: 299, name: 'source' }, { id: 298, name: 'backup' }, { id: 300, name: 'target' }], pages: 1 })
+    const w = render(); await flushPromises()
+    expect(w.get('[data-testid="source-model-299"]').element).toHaveProperty('value', 'gpt-6-astra')
+    expect(w.get('[data-testid="source-model-298"]').element).toHaveProperty('value', 'gpt-6-astra')
+    expect(w.find('[data-testid="source-model-300"]').exists()).toBe(false)
+    await w.get('[data-testid="source-model-299"]').setValue('gpt-5.6-sol')
+    await w.get('[data-testid="source-model-298"]').setValue('source-alias')
+    await w.get('form').trigger('submit'); await flushPromises()
+    expect(mocks.save).toHaveBeenLastCalledWith(expect.objectContaining({ cookie_pool: expect.objectContaining({ source_account_models: { 299: 'gpt-5.6-sol', 298: 'source-alias' }, target_account_ids: [300] }) }))
+    expect(w.get('[data-testid="source-model-299"]').element).toHaveProperty('value', 'gpt-5.6-sol')
+    await w.get('[data-testid="source-model-299"]').setValue('')
+    expect(w.get('[data-testid="save"]').attributes('disabled')).toBeDefined()
+    await w.get('[data-testid="source-model-299"]').setValue('gpt-*')
+    await w.get('form').trigger('submit'); await flushPromises()
+    expect(mocks.save).toHaveBeenCalledTimes(1)
+    w.unmount()
+  })
+  it('clones source models and removes settings for deselected sources', () => {
+    const data = { ...value(), cookie_pool: { ...value().cookie_pool, source_account_models: { 299: 'gpt-5.6-sol', 298: 'gpt-6-sol' } } }
+    const cloned = normalizeAstraGateway(data)
+    expect(cloned.cookie_pool.source_account_models).toEqual({ 299: 'gpt-5.6-sol' })
+    cloned.cookie_pool.source_account_models![299] = 'gpt-6-astra'
+    expect(data.cookie_pool.source_account_models[299]).toBe('gpt-5.6-sol')
+  })
   it('renders as a section without a second card when embedded in harvest controls', async () => {
     const w = mount(HarvestGatewayBorrowPanel, { props: { embedded: true }, global: { stubs: { RouterLink: true } } })
     await flushPromises()

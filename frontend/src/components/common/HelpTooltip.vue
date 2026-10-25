@@ -53,6 +53,16 @@ function onTooltipLeave(event: MouseEvent) {
   closeTooltip()
 }
 
+function onFocusIn() {
+  if (props.trigger === 'hover' && !touchInteraction.value) openTooltip()
+}
+
+function onFocusOut(event: FocusEvent) {
+  if (props.trigger !== 'hover' || touchInteraction.value) return
+  if (isInside(triggerRef.value, event.relatedTarget) || isInside(tooltipRef.value, event.relatedTarget)) return
+  closeTooltip()
+}
+
 function onClick(event: MouseEvent) {
   if (props.trigger !== 'click' && !touchInteraction.value) return
   event.stopPropagation()
@@ -131,6 +141,8 @@ onBeforeUnmount(() => {
     @mouseenter="onEnter"
     @mouseleave="onLeave"
     @click="onClick"
+    @focusin="onFocusIn"
+    @focusout="onFocusOut"
   >
     <!-- Trigger Icon -->
     <slot name="trigger">

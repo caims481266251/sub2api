@@ -422,6 +422,7 @@ func (s *OpenAIGatewayService) proxyVMKernelWebSocket(ctx context.Context, c *gi
 		if result != nil && turnErr != nil {
 			result.streamReadIncomplete = true
 		}
+		recordVMKernelRecentRequest(withRecentRequestScope(ctx, account, codexAccountIdentitySource(c, account)), s.recentRequests, account, model, finished.result, turnErr)
 		if hooks != nil && hooks.AfterTurn != nil {
 			hooks.AfterTurn(turn, result, turnErr)
 		}

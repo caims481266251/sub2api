@@ -29,12 +29,21 @@ func TestAstraRotationCacheSurvivesSaveAndSuppressesNetwork(t *testing.T) {
 	require.ErrorContains(t, err, "astra_rotation_exhausted")
 	require.Len(t, *calls, 9)
 	require.Zero(t, *leases)
-	// Target failure cache is intentionally not persisted; a new revision retries the route.
+	// Any new revision drops Cookies but must keep retry decisions.
 	s.cfg.Gateway.CodexGatewayPin.TTLSeconds = 200
+	_, err = s.Do(rotationTarget(t), "target", 300, 1)
+	require.ErrorContains(t, err, "astra_rotation_cooling")
+	require.Len(t, *calls, 9)
+	require.Zero(t, *leases)
+	// Expiry allows retry without deleting durable history or resetting account state.
+	s.rotationCache.mu.Lock()
+	for key := range s.rotationCache.blocked {
+		s.rotationCache.blocked[key] = time.Now().Add(-time.Second)
+	}
+	s.rotationCache.mu.Unlock()
 	_, err = s.Do(rotationTarget(t), "target", 300, 1)
 	require.ErrorContains(t, err, "astra_rotation_exhausted")
 	require.Len(t, *calls, 18)
-	require.Zero(t, *leases)
 }
 func TestAstraRotationCacheFiltersWithoutSpendingAttemptBudget(t *testing.T) {
 	s, calls, leases := rotationFixture(t, 1, "good")

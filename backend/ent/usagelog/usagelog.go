@@ -14,6 +14,14 @@ const (
 	Label = "usage_log"
 	// FieldID holds the string denoting the id field in the database.
 	FieldID = "id"
+	// FieldHostingPoolID holds the string denoting the hosting_pool_id field in the database.
+	FieldHostingPoolID = "hosting_pool_id"
+	// FieldHostingPoolName holds the string denoting the hosting_pool_name field in the database.
+	FieldHostingPoolName = "hosting_pool_name"
+	// FieldHostingRoute holds the string denoting the hosting_route field in the database.
+	FieldHostingRoute = "hosting_route"
+	// FieldHostingFallbackReason holds the string denoting the hosting_fallback_reason field in the database.
+	FieldHostingFallbackReason = "hosting_fallback_reason"
 	// FieldUserID holds the string denoting the user_id field in the database.
 	FieldUserID = "user_id"
 	// FieldAPIKeyID holds the string denoting the api_key_id field in the database.
@@ -160,6 +168,10 @@ const (
 // Columns holds all SQL columns for usagelog fields.
 var Columns = []string{
 	FieldID,
+	FieldHostingPoolID,
+	FieldHostingPoolName,
+	FieldHostingRoute,
+	FieldHostingFallbackReason,
 	FieldUserID,
 	FieldAPIKeyID,
 	FieldAccountID,
@@ -220,6 +232,10 @@ func ValidColumn(column string) bool {
 }
 
 var (
+	// HostingPoolNameValidator is a validator for the "hosting_pool_name" field. It is called by the builders before save.
+	HostingPoolNameValidator func(string) error
+	// HostingRouteValidator is a validator for the "hosting_route" field. It is called by the builders before save.
+	HostingRouteValidator func(string) error
 	// RequestIDValidator is a validator for the "request_id" field. It is called by the builders before save.
 	RequestIDValidator func(string) error
 	// ModelValidator is a validator for the "model" field. It is called by the builders before save.
@@ -298,6 +314,26 @@ type OrderOption func(*sql.Selector)
 // ByID orders the results by the id field.
 func ByID(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldID, opts...).ToFunc()
+}
+
+// ByHostingPoolID orders the results by the hosting_pool_id field.
+func ByHostingPoolID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldHostingPoolID, opts...).ToFunc()
+}
+
+// ByHostingPoolName orders the results by the hosting_pool_name field.
+func ByHostingPoolName(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldHostingPoolName, opts...).ToFunc()
+}
+
+// ByHostingRoute orders the results by the hosting_route field.
+func ByHostingRoute(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldHostingRoute, opts...).ToFunc()
+}
+
+// ByHostingFallbackReason orders the results by the hosting_fallback_reason field.
+func ByHostingFallbackReason(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldHostingFallbackReason, opts...).ToFunc()
 }
 
 // ByUserID orders the results by the user_id field.

@@ -67,6 +67,48 @@ func (_c *AccountCreate) SetNillableDeletedAt(v *time.Time) *AccountCreate {
 	return _c
 }
 
+// SetOwnerUserID sets the "owner_user_id" field.
+func (_c *AccountCreate) SetOwnerUserID(v int64) *AccountCreate {
+	_c.mutation.SetOwnerUserID(v)
+	return _c
+}
+
+// SetNillableOwnerUserID sets the "owner_user_id" field if the given value is not nil.
+func (_c *AccountCreate) SetNillableOwnerUserID(v *int64) *AccountCreate {
+	if v != nil {
+		_c.SetOwnerUserID(*v)
+	}
+	return _c
+}
+
+// SetHostingPoolID sets the "hosting_pool_id" field.
+func (_c *AccountCreate) SetHostingPoolID(v int64) *AccountCreate {
+	_c.mutation.SetHostingPoolID(v)
+	return _c
+}
+
+// SetNillableHostingPoolID sets the "hosting_pool_id" field if the given value is not nil.
+func (_c *AccountCreate) SetNillableHostingPoolID(v *int64) *AccountCreate {
+	if v != nil {
+		_c.SetHostingPoolID(*v)
+	}
+	return _c
+}
+
+// SetHostingIdentity sets the "hosting_identity" field.
+func (_c *AccountCreate) SetHostingIdentity(v string) *AccountCreate {
+	_c.mutation.SetHostingIdentity(v)
+	return _c
+}
+
+// SetNillableHostingIdentity sets the "hosting_identity" field if the given value is not nil.
+func (_c *AccountCreate) SetNillableHostingIdentity(v *string) *AccountCreate {
+	if v != nil {
+		_c.SetHostingIdentity(*v)
+	}
+	return _c
+}
+
 // SetName sets the "name" field.
 func (_c *AccountCreate) SetName(v string) *AccountCreate {
 	_c.mutation.SetName(v)
@@ -628,6 +670,11 @@ func (_c *AccountCreate) check() error {
 	if _, ok := _c.mutation.UpdatedAt(); !ok {
 		return &ValidationError{Name: "updated_at", err: errors.New(`ent: missing required field "Account.updated_at"`)}
 	}
+	if v, ok := _c.mutation.HostingIdentity(); ok {
+		if err := account.HostingIdentityValidator(v); err != nil {
+			return &ValidationError{Name: "hosting_identity", err: fmt.Errorf(`ent: validator failed for field "Account.hosting_identity": %w`, err)}
+		}
+	}
 	if _, ok := _c.mutation.Name(); !ok {
 		return &ValidationError{Name: "name", err: errors.New(`ent: missing required field "Account.name"`)}
 	}
@@ -743,6 +790,18 @@ func (_c *AccountCreate) createSpec() (*Account, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.DeletedAt(); ok {
 		_spec.SetField(account.FieldDeletedAt, field.TypeTime, value)
 		_node.DeletedAt = &value
+	}
+	if value, ok := _c.mutation.OwnerUserID(); ok {
+		_spec.SetField(account.FieldOwnerUserID, field.TypeInt64, value)
+		_node.OwnerUserID = &value
+	}
+	if value, ok := _c.mutation.HostingPoolID(); ok {
+		_spec.SetField(account.FieldHostingPoolID, field.TypeInt64, value)
+		_node.HostingPoolID = &value
+	}
+	if value, ok := _c.mutation.HostingIdentity(); ok {
+		_spec.SetField(account.FieldHostingIdentity, field.TypeString, value)
+		_node.HostingIdentity = &value
 	}
 	if value, ok := _c.mutation.Name(); ok {
 		_spec.SetField(account.FieldName, field.TypeString, value)
@@ -1021,6 +1080,72 @@ func (u *AccountUpsert) UpdateDeletedAt() *AccountUpsert {
 // ClearDeletedAt clears the value of the "deleted_at" field.
 func (u *AccountUpsert) ClearDeletedAt() *AccountUpsert {
 	u.SetNull(account.FieldDeletedAt)
+	return u
+}
+
+// SetOwnerUserID sets the "owner_user_id" field.
+func (u *AccountUpsert) SetOwnerUserID(v int64) *AccountUpsert {
+	u.Set(account.FieldOwnerUserID, v)
+	return u
+}
+
+// UpdateOwnerUserID sets the "owner_user_id" field to the value that was provided on create.
+func (u *AccountUpsert) UpdateOwnerUserID() *AccountUpsert {
+	u.SetExcluded(account.FieldOwnerUserID)
+	return u
+}
+
+// AddOwnerUserID adds v to the "owner_user_id" field.
+func (u *AccountUpsert) AddOwnerUserID(v int64) *AccountUpsert {
+	u.Add(account.FieldOwnerUserID, v)
+	return u
+}
+
+// ClearOwnerUserID clears the value of the "owner_user_id" field.
+func (u *AccountUpsert) ClearOwnerUserID() *AccountUpsert {
+	u.SetNull(account.FieldOwnerUserID)
+	return u
+}
+
+// SetHostingPoolID sets the "hosting_pool_id" field.
+func (u *AccountUpsert) SetHostingPoolID(v int64) *AccountUpsert {
+	u.Set(account.FieldHostingPoolID, v)
+	return u
+}
+
+// UpdateHostingPoolID sets the "hosting_pool_id" field to the value that was provided on create.
+func (u *AccountUpsert) UpdateHostingPoolID() *AccountUpsert {
+	u.SetExcluded(account.FieldHostingPoolID)
+	return u
+}
+
+// AddHostingPoolID adds v to the "hosting_pool_id" field.
+func (u *AccountUpsert) AddHostingPoolID(v int64) *AccountUpsert {
+	u.Add(account.FieldHostingPoolID, v)
+	return u
+}
+
+// ClearHostingPoolID clears the value of the "hosting_pool_id" field.
+func (u *AccountUpsert) ClearHostingPoolID() *AccountUpsert {
+	u.SetNull(account.FieldHostingPoolID)
+	return u
+}
+
+// SetHostingIdentity sets the "hosting_identity" field.
+func (u *AccountUpsert) SetHostingIdentity(v string) *AccountUpsert {
+	u.Set(account.FieldHostingIdentity, v)
+	return u
+}
+
+// UpdateHostingIdentity sets the "hosting_identity" field to the value that was provided on create.
+func (u *AccountUpsert) UpdateHostingIdentity() *AccountUpsert {
+	u.SetExcluded(account.FieldHostingIdentity)
+	return u
+}
+
+// ClearHostingIdentity clears the value of the "hosting_identity" field.
+func (u *AccountUpsert) ClearHostingIdentity() *AccountUpsert {
+	u.SetNull(account.FieldHostingIdentity)
 	return u
 }
 
@@ -1593,6 +1718,83 @@ func (u *AccountUpsertOne) UpdateDeletedAt() *AccountUpsertOne {
 func (u *AccountUpsertOne) ClearDeletedAt() *AccountUpsertOne {
 	return u.Update(func(s *AccountUpsert) {
 		s.ClearDeletedAt()
+	})
+}
+
+// SetOwnerUserID sets the "owner_user_id" field.
+func (u *AccountUpsertOne) SetOwnerUserID(v int64) *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetOwnerUserID(v)
+	})
+}
+
+// AddOwnerUserID adds v to the "owner_user_id" field.
+func (u *AccountUpsertOne) AddOwnerUserID(v int64) *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.AddOwnerUserID(v)
+	})
+}
+
+// UpdateOwnerUserID sets the "owner_user_id" field to the value that was provided on create.
+func (u *AccountUpsertOne) UpdateOwnerUserID() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateOwnerUserID()
+	})
+}
+
+// ClearOwnerUserID clears the value of the "owner_user_id" field.
+func (u *AccountUpsertOne) ClearOwnerUserID() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.ClearOwnerUserID()
+	})
+}
+
+// SetHostingPoolID sets the "hosting_pool_id" field.
+func (u *AccountUpsertOne) SetHostingPoolID(v int64) *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetHostingPoolID(v)
+	})
+}
+
+// AddHostingPoolID adds v to the "hosting_pool_id" field.
+func (u *AccountUpsertOne) AddHostingPoolID(v int64) *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.AddHostingPoolID(v)
+	})
+}
+
+// UpdateHostingPoolID sets the "hosting_pool_id" field to the value that was provided on create.
+func (u *AccountUpsertOne) UpdateHostingPoolID() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateHostingPoolID()
+	})
+}
+
+// ClearHostingPoolID clears the value of the "hosting_pool_id" field.
+func (u *AccountUpsertOne) ClearHostingPoolID() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.ClearHostingPoolID()
+	})
+}
+
+// SetHostingIdentity sets the "hosting_identity" field.
+func (u *AccountUpsertOne) SetHostingIdentity(v string) *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetHostingIdentity(v)
+	})
+}
+
+// UpdateHostingIdentity sets the "hosting_identity" field to the value that was provided on create.
+func (u *AccountUpsertOne) UpdateHostingIdentity() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateHostingIdentity()
+	})
+}
+
+// ClearHostingIdentity clears the value of the "hosting_identity" field.
+func (u *AccountUpsertOne) ClearHostingIdentity() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.ClearHostingIdentity()
 	})
 }
 
@@ -2413,6 +2615,83 @@ func (u *AccountUpsertBulk) UpdateDeletedAt() *AccountUpsertBulk {
 func (u *AccountUpsertBulk) ClearDeletedAt() *AccountUpsertBulk {
 	return u.Update(func(s *AccountUpsert) {
 		s.ClearDeletedAt()
+	})
+}
+
+// SetOwnerUserID sets the "owner_user_id" field.
+func (u *AccountUpsertBulk) SetOwnerUserID(v int64) *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetOwnerUserID(v)
+	})
+}
+
+// AddOwnerUserID adds v to the "owner_user_id" field.
+func (u *AccountUpsertBulk) AddOwnerUserID(v int64) *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.AddOwnerUserID(v)
+	})
+}
+
+// UpdateOwnerUserID sets the "owner_user_id" field to the value that was provided on create.
+func (u *AccountUpsertBulk) UpdateOwnerUserID() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateOwnerUserID()
+	})
+}
+
+// ClearOwnerUserID clears the value of the "owner_user_id" field.
+func (u *AccountUpsertBulk) ClearOwnerUserID() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.ClearOwnerUserID()
+	})
+}
+
+// SetHostingPoolID sets the "hosting_pool_id" field.
+func (u *AccountUpsertBulk) SetHostingPoolID(v int64) *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetHostingPoolID(v)
+	})
+}
+
+// AddHostingPoolID adds v to the "hosting_pool_id" field.
+func (u *AccountUpsertBulk) AddHostingPoolID(v int64) *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.AddHostingPoolID(v)
+	})
+}
+
+// UpdateHostingPoolID sets the "hosting_pool_id" field to the value that was provided on create.
+func (u *AccountUpsertBulk) UpdateHostingPoolID() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateHostingPoolID()
+	})
+}
+
+// ClearHostingPoolID clears the value of the "hosting_pool_id" field.
+func (u *AccountUpsertBulk) ClearHostingPoolID() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.ClearHostingPoolID()
+	})
+}
+
+// SetHostingIdentity sets the "hosting_identity" field.
+func (u *AccountUpsertBulk) SetHostingIdentity(v string) *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetHostingIdentity(v)
+	})
+}
+
+// UpdateHostingIdentity sets the "hosting_identity" field to the value that was provided on create.
+func (u *AccountUpsertBulk) UpdateHostingIdentity() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateHostingIdentity()
+	})
+}
+
+// ClearHostingIdentity clears the value of the "hosting_identity" field.
+func (u *AccountUpsertBulk) ClearHostingIdentity() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.ClearHostingIdentity()
 	})
 }
 

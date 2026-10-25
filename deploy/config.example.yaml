@@ -266,6 +266,13 @@ gateway:
   # Grok text Responses first-byte timeout (seconds, 0=disabled; default 120)
   # Grok 文本 Responses 首字节超时时间（秒，0=禁用；默认 120）
   grok_response_header_timeout: 120
+  # Borrowing-target HTTP business recovery: initial attempt + at most one recovery.
+  # 明确失败后 15 秒内可发起一次恢复（含 429），选路/排队/发送前等待最多 30 秒。
+  # 已进入 HTTP 写入后解除恢复等待计时；同目标/共享限制遵守 Retry-After。
+  # true restores legacy retry scheduling.
+  borrow_business_recovery_disabled: false
+  borrow_business_retry_window_seconds: 15 # 1-60; 0 uses default 15
+  borrow_business_recovery_timeout_seconds: 30 # 30-120; 0 uses default 30
   # Native OpenAI HTTP Responses first semantic output timeout (seconds, 0=disabled)
   # Includes response-header wait; does not apply to passthrough or WebSocket transports.
   # A timed-out request may already have incurred upstream usage; account failover can therefore duplicate upstream billing.
@@ -273,6 +280,11 @@ gateway:
   # Pre-output attempt staging is capped at 8 MiB; overflow fails over without exposing partial SSE data.
   # 首次输出前的单次尝试暂存上限为 8 MiB；溢出时切号且不暴露不完整 SSE 数据。
   openai_first_output_timeout_seconds: 0
+  # HTTP 文本会话优先复用健康归属帐号；临时满载分流不改归属，成功接管后不自动切回借票。
+  # 设为 false 恢复原选号策略，不删除响应续接记录。有效期沿用 openai_ws.sticky_session_ttl_seconds。
+  openai_session_affinity_enabled: true
+  # 灰度分组 ID；空列表对所有分组生效，0 表示无分组。
+  openai_session_affinity_group_ids: []
   # Opt-in HTTP upload/submission deadline shared across account/proxy retries.
   # accounts.extra.openai_upload_timeout_seconds overrides it (0 disables).
   openai_upload_timeout_seconds: 0
@@ -515,6 +527,10 @@ gateway:
   # OpenAI HTTP 上游协议策略（默认 HTTP/2；代理明确不兼容时可临时回退 HTTP/1.1）。
   openai_http2:
     enabled: true
+    # Exact upstream hostnames that should use HTTP/1.1. Empty keeps HTTP/2.
+    # 单独验证某个普通上游时可设置 ["yumitu.com"]，不影响其他域名。
+    # 不匹配子域名或 URL；仅影响共享 HTTP 传输，插件/区域出口保留自身协议。
+    http1_hosts: []
     allow_proxy_fallback_to_http1: true
     fallback_error_threshold: 2
     fallback_window_seconds: 60

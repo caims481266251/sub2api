@@ -17,18 +17,38 @@ import (
 
 // Public runtime DTOs intentionally contain no cookie, credential, response ID,
 // client session identity or generated content.
+type AstraVerifiedRouteStatus struct {
+	Role             string    `json:"role"`
+	SourceAccountID  int64     `json:"source_account_id"`
+	Gateway          string    `json:"gateway"`
+	ExpiresAt        time.Time `json:"expires_at"`
+	CheckedAt        time.Time `json:"checked_at"`
+	RemainingSeconds int64     `json:"remaining_seconds"`
+}
+type AstraMaintenanceStatus struct {
+	Phase          string     `json:"phase"`
+	Reason         string     `json:"reason,omitempty"`
+	Failure        string     `json:"failure,omitempty"`
+	MintStatus     int        `json:"mint_status,omitempty"`
+	ContinueStatus int        `json:"continue_status,omitempty"`
+	Retries        int        `json:"retries"`
+	Running        bool       `json:"running"`
+	NextAttempt    *time.Time `json:"next_attempt,omitempty"`
+}
 type AstraRouteStatus struct {
-	ProxyNode        string     `json:"proxy_node,omitempty"`
-	ProxyCountry     string     `json:"proxy_country,omitempty"`
-	Answer           string     `json:"answer,omitempty"`
-	AccountID        int64      `json:"account_id"`
-	State            string     `json:"state"`
-	Reason           string     `json:"reason"`
-	CheckedAt        *time.Time `json:"checked_at,omitempty"`
-	ExpiresAt        *time.Time `json:"expires_at,omitempty"`
-	RemainingSeconds int64      `json:"remaining_seconds"`
-	Gateway          string     `json:"gateway,omitempty"`
-	Active           bool       `json:"active"`
+	Routes           []AstraVerifiedRouteStatus `json:"routes,omitempty"`
+	Maintenance      *AstraMaintenanceStatus    `json:"maintenance,omitempty"`
+	ProxyNode        string                     `json:"proxy_node,omitempty"`
+	ProxyCountry     string                     `json:"proxy_country,omitempty"`
+	Answer           string                     `json:"answer,omitempty"`
+	AccountID        int64                      `json:"account_id"`
+	State            string                     `json:"state"`
+	Reason           string                     `json:"reason"`
+	CheckedAt        *time.Time                 `json:"checked_at,omitempty"`
+	ExpiresAt        *time.Time                 `json:"expires_at,omitempty"`
+	RemainingSeconds int64                      `json:"remaining_seconds"`
+	Gateway          string                     `json:"gateway,omitempty"`
+	Active           bool                       `json:"active"`
 }
 type AstraWSStatus struct {
 	AccountID        int64      `json:"account_id"`
@@ -96,7 +116,7 @@ func (s *AccountTestService) prepareAstraGatewaySource(ctx context.Context, id i
 	if err != nil || account == nil || !account.IsOpenAIOAuthLike() || account.Status != StatusActive {
 		return errors.New("source_account_unavailable")
 	}
-	question := astraQuestion{Prompt: "Reply with OK only."}
+	question := astraQuestion{Model: s.cfg.AstraRouting(ctx).CookiePool.SourceModel(id), Prompt: "Reply with OK only."}
 	_, err = s.runAstraQuestionHTTP(WithAstraSourceAcquisition(ctx), id, question)
 	return err
 }
@@ -254,32 +274,16 @@ func (s *AccountTestService) verifyAstraGatewayTarget(ctx context.Context, id in
 	if !ok || s.accountRepo == nil || s.openaiGatewayService == nil {
 		return errors.New("runtime_unavailable")
 	}
-	account, err := s.accountRepo.GetByID(ctx, id)
-	if err != nil || account == nil || !account.IsOpenAIOAuthLike() || account.Status != StatusActive {
-		return errors.New("account_unavailable")
-	}
-	if openAICodexStateProbeUnsupportedReason(account, "gpt-6-astra", false) != "" {
-		return errors.New("target_probe_unsupported")
+	req, proxy, concurrency, err := s.astraTargetTemplate(ctx, id)
+	if err != nil {
+		return err
 	}
 	release, ok := s.beginOpenAICodexStateProbe(id)
 	if !ok {
 		return errors.New("target_validation_in_progress")
 	}
 	defer release()
-	token, _, err := s.openaiGatewayService.GetAccessToken(ctx, account)
-	if err != nil || strings.TrimSpace(token) == "" {
-		return errors.New("account_unavailable")
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, chatgptCodexURL, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	if err = resolveAndSetOpenAIChatGPTAccountHeaders(ctx, s.accountRepo, req.Header, account); err != nil {
-		return errors.New("account_unavailable")
-	}
-	applyOpenAICodexTicketHarvestIdentity(req.Header, "gpt-6-astra")
-	return verifier.VerifyAstraGatewayTarget(ctx, req, openAIAccountProxyURL(account), id, account.Concurrency)
+	return verifier.VerifyAstraGatewayTarget(ctx, req, proxy, id, concurrency)
 }
 
 func (s *AccountTestService) testAstraWS(ctx context.Context, id, adminID int64, question astraQuestion) (string, error) {
@@ -378,10 +382,14 @@ func (s *AccountTestService) runAstraQuestionHTTP(ctx context.Context, id int64,
 	w := &pelicanRecorder{ResponseRecorder: httptest.NewRecorder(), cancel: cancel}
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodPost, "/astra-test", nil).WithContext(ctx)
-	err = s.TestPelicanAccountConnection(c, id, "gpt-6-astra", q.Prompt, "medium")
+	model := q.Model
+	if model == "" {
+		model = "gpt-6-astra"
+	}
+	err = s.TestPelicanAccountConnection(c, id, model, q.Prompt, "medium")
 	output, msg := parseTestSSEOutput(w.Body.String())
 	if err != nil || msg != "" {
-		for _, code := range []string{"astra_rotation_cooling", "astra_rotation_unavailable", "astra_rotation_use_once", "astra_rotation_no_nodes", "astra_rotation_node_unavailable", "astra_rotation_exhausted", "target_probe_degraded", "target_route_changed", "target_probe_failed", "target_validation_in_progress", "preparation_in_progress", "source_probe_cooldown", "no_qualified_source_route", "configuration_changed"} {
+		for _, code := range []string{"astra_request_budget", "astra_route_warming", "astra_identity_changed", "astra_identity_capacity", "astra_rotation_cooling", "astra_rotation_unavailable", "astra_rotation_use_once", "astra_rotation_no_nodes", "astra_rotation_node_unavailable", "astra_rotation_exhausted", "target_probe_degraded", "target_route_changed", "target_probe_failed", "target_validation_in_progress", "preparation_in_progress", "source_probe_cooldown", "no_qualified_source_route", "configuration_changed"} {
 			if strings.Contains(msg, code) || (err != nil && strings.Contains(err.Error(), code)) {
 				answer := ""
 				if provider, ok := s.httpUpstream.(AstraGatewayRuntimeProvider); ok {

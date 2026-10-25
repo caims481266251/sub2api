@@ -23,6 +23,7 @@
         {{ errorMessage }}
       </div>
 
+      <TicketBorrowMigrationCard />
       <HarvestPolicyPanel @saved="fetchFlow" />
       <HarvestControlsPanel
         :refresh-key="snapshot?.generated_at"
@@ -235,6 +236,7 @@
 </template>
 
 <script setup lang="ts">
+import TicketBorrowMigrationCard from '@/components/admin/TicketBorrowMigrationCard.vue'
 import HarvestCoverageCard from '@/components/admin/HarvestCoverageCard.vue'
 import HarvestAccountCoverage from '@/components/admin/HarvestAccountCoverage.vue'
 import HarvestPolicyPanel from '@/components/admin/HarvestPolicyPanel.vue'

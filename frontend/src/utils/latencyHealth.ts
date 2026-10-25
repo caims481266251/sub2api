@@ -56,6 +56,13 @@ export const LATENCY_TEXT_CLASSES: Record<LatencySeverity, string> = {
   critical: 'text-red-600 dark:text-red-400',
 }
 
+export const LATENCY_BACKGROUND_CLASSES: Record<LatencySeverity, string> = {
+  good: 'bg-emerald-500',
+  warn: 'bg-amber-400',
+  slow: 'bg-orange-500',
+  critical: 'bg-red-500',
+}
+
 /**
  * 渐变色条上端（首字档）；与 VIA/TO 组合成上中下三段渐变，避免硬切割裂感。
  * 某段缺数据（无首字 / 无 TPS）时由调用方沿用总耗时档，全部同档即为纯色。

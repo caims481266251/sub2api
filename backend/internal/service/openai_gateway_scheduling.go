@@ -178,6 +178,9 @@ func (s *OpenAIGatewayService) GenerateExplicitSessionHash(c *gin.Context, body 
 
 	currentHash, legacyHash := deriveOpenAIRequestSessionHashes(c, sessionID)
 	attachOpenAILegacySessionHashToGin(c, legacyHash)
+	if c != nil {
+		return scopeHostingSessionHash(c.Request.Context(), currentHash)
+	}
 	return currentHash
 }
 
@@ -214,6 +217,9 @@ func (s *OpenAIGatewayService) GenerateSessionHash(c *gin.Context, body []byte) 
 
 	currentHash, legacyHash := deriveOpenAIRequestSessionHashes(c, sessionID)
 	attachOpenAILegacySessionHashToGin(c, legacyHash)
+	if c != nil {
+		return scopeHostingSessionHash(c.Request.Context(), currentHash)
+	}
 	return currentHash
 }
 
@@ -250,6 +256,9 @@ func (s *OpenAIGatewayService) GenerateSessionHashWithFallback(c *gin.Context, b
 
 	currentHash, legacyHash := deriveOpenAIRequestSessionHashes(c, seed)
 	attachOpenAILegacySessionHashToGin(c, legacyHash)
+	if c != nil {
+		return scopeHostingSessionHash(c.Request.Context(), currentHash)
+	}
 	return currentHash
 }
 
@@ -425,6 +434,9 @@ func isOpenAICompatibleAccountEligibleForRequestBeforeProfit(ctx context.Context
 
 func openAICompatibleAccountEligibilityFailureReasonBeforeProfit(ctx context.Context, account *Account, groupID *int64, platform string, requestedModel string, requireCompact bool, requiredCapability OpenAIEndpointCapability) string {
 	platform = NormalizeOpenAICompatiblePlatform(platform)
+	if !HostingAccountAllowed(ctx, account) {
+		return "account_owner_mismatch"
+	}
 	if account == nil {
 		return "account_nil"
 	}
@@ -1702,6 +1714,22 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 
 func (s *OpenAIGatewayService) listSchedulableAccounts(ctx context.Context, groupID *int64, platform string) ([]Account, error) {
 	platform = NormalizeOpenAICompatiblePlatform(platform)
+	if key := hostingKeyFromContext(ctx); key != nil && !key.HostingFallback {
+		if s.hostingService == nil {
+			return nil, ErrHostingDisabled
+		}
+		accounts, err := s.hostingService.Accounts(ctx, key.UserID)
+		if err != nil {
+			return nil, err
+		}
+		selected := make([]Account, 0, len(accounts))
+		for _, account := range accounts {
+			if HostingAccountAllowed(ctx, &account) {
+				selected = append(selected, account)
+			}
+		}
+		return s.filterOpenAIAccountsBySchedulingThreshold(ctx, selected), nil
+	}
 	if s.schedulerSnapshot != nil {
 		accounts, _, err := s.schedulerSnapshot.ListSchedulableAccounts(ctx, groupID, platform, false)
 		if err != nil {
@@ -1818,6 +1846,18 @@ func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDB(ctx context.Co
 func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDBBeforeProfit(ctx context.Context, account *Account, groupID *int64, platform string, requestedModel string, requireCompact bool, requiredCapability OpenAIEndpointCapability, ticketCompactOverride ...bool) *Account {
 	if account == nil {
 		return nil
+	}
+	if !borrowSchedulingAllowsAccount(ctx, account.ID) {
+		return nil
+	}
+	if !borrowHTTPContinuationAllowsAccount(ctx, account.ID) {
+		return nil
+	}
+	if s.borrowRoutes != nil && account.IsOpenAI() {
+		if err := s.borrowRoutes.Check(ctx, account.ID, s.openAICodexTicketOutboundModel(account, requestedModel, requireCompact), "http"); err != nil {
+			observeBorrowSelectionFailure(ctx, err)
+			return nil
+		}
 	}
 	platform = NormalizeOpenAICompatiblePlatform(platform)
 	if s.schedulerSnapshot == nil || s.accountRepo == nil {

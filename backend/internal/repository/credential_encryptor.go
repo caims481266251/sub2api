@@ -44,7 +44,11 @@ func NewOpenAICredentialEncryptor(cfg *config.Config, fallback service.SecretEnc
 		err := db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM openai_oauth_reauth_configs
 			WHERE COALESCE(length(password_ciphertext), 0) > 0
 			OR COALESCE(length(totp_secret_ciphertext), 0) > 0
-			OR COALESCE(length(otp_url_ciphertext), 0) > 0)`).Scan(&exists)
+			OR COALESCE(length(otp_url_ciphertext), 0) > 0)
+ OR EXISTS(SELECT 1 FROM ticket_borrow_sources WHERE length(secret)>0)
+ OR EXISTS(SELECT 1 FROM ticket_borrow_routes WHERE length(secret)>0)
+ OR EXISTS(SELECT 1 FROM proxy_pool_entries WHERE length(credential_ciphertext)>0)
+ OR EXISTS(SELECT 1 FROM accounts WHERE owner_user_id IS NOT NULL AND credentials->>'refresh_token' LIKE 'hosted-token:v1:%')`).Scan(&exists)
 		return exists, err
 	}}
 }

@@ -70,6 +70,21 @@ func DeletedAt(v time.Time) predicate.APIKey {
 	return predicate.APIKey(sql.FieldEQ(FieldDeletedAt, v))
 }
 
+// RouteMode applies equality check predicate on the "route_mode" field. It's identical to RouteModeEQ.
+func RouteMode(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldRouteMode, v))
+}
+
+// HostingFallbackGroupID applies equality check predicate on the "hosting_fallback_group_id" field. It's identical to HostingFallbackGroupIDEQ.
+func HostingFallbackGroupID(v int64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldHostingFallbackGroupID, v))
+}
+
+// HostingPoolID applies equality check predicate on the "hosting_pool_id" field. It's identical to HostingPoolIDEQ.
+func HostingPoolID(v int64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldHostingPoolID, v))
+}
+
 // UserID applies equality check predicate on the "user_id" field. It's identical to UserIDEQ.
 func UserID(v int64) predicate.APIKey {
 	return predicate.APIKey(sql.FieldEQ(FieldUserID, v))
@@ -293,6 +308,171 @@ func DeletedAtIsNil() predicate.APIKey {
 // DeletedAtNotNil applies the NotNil predicate on the "deleted_at" field.
 func DeletedAtNotNil() predicate.APIKey {
 	return predicate.APIKey(sql.FieldNotNull(FieldDeletedAt))
+}
+
+// RouteModeEQ applies the EQ predicate on the "route_mode" field.
+func RouteModeEQ(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldRouteMode, v))
+}
+
+// RouteModeNEQ applies the NEQ predicate on the "route_mode" field.
+func RouteModeNEQ(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNEQ(FieldRouteMode, v))
+}
+
+// RouteModeIn applies the In predicate on the "route_mode" field.
+func RouteModeIn(vs ...string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldIn(FieldRouteMode, vs...))
+}
+
+// RouteModeNotIn applies the NotIn predicate on the "route_mode" field.
+func RouteModeNotIn(vs ...string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotIn(FieldRouteMode, vs...))
+}
+
+// RouteModeGT applies the GT predicate on the "route_mode" field.
+func RouteModeGT(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGT(FieldRouteMode, v))
+}
+
+// RouteModeGTE applies the GTE predicate on the "route_mode" field.
+func RouteModeGTE(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGTE(FieldRouteMode, v))
+}
+
+// RouteModeLT applies the LT predicate on the "route_mode" field.
+func RouteModeLT(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLT(FieldRouteMode, v))
+}
+
+// RouteModeLTE applies the LTE predicate on the "route_mode" field.
+func RouteModeLTE(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLTE(FieldRouteMode, v))
+}
+
+// RouteModeContains applies the Contains predicate on the "route_mode" field.
+func RouteModeContains(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldContains(FieldRouteMode, v))
+}
+
+// RouteModeHasPrefix applies the HasPrefix predicate on the "route_mode" field.
+func RouteModeHasPrefix(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldHasPrefix(FieldRouteMode, v))
+}
+
+// RouteModeHasSuffix applies the HasSuffix predicate on the "route_mode" field.
+func RouteModeHasSuffix(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldHasSuffix(FieldRouteMode, v))
+}
+
+// RouteModeEqualFold applies the EqualFold predicate on the "route_mode" field.
+func RouteModeEqualFold(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEqualFold(FieldRouteMode, v))
+}
+
+// RouteModeContainsFold applies the ContainsFold predicate on the "route_mode" field.
+func RouteModeContainsFold(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldContainsFold(FieldRouteMode, v))
+}
+
+// HostingFallbackGroupIDEQ applies the EQ predicate on the "hosting_fallback_group_id" field.
+func HostingFallbackGroupIDEQ(v int64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldHostingFallbackGroupID, v))
+}
+
+// HostingFallbackGroupIDNEQ applies the NEQ predicate on the "hosting_fallback_group_id" field.
+func HostingFallbackGroupIDNEQ(v int64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNEQ(FieldHostingFallbackGroupID, v))
+}
+
+// HostingFallbackGroupIDIn applies the In predicate on the "hosting_fallback_group_id" field.
+func HostingFallbackGroupIDIn(vs ...int64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldIn(FieldHostingFallbackGroupID, vs...))
+}
+
+// HostingFallbackGroupIDNotIn applies the NotIn predicate on the "hosting_fallback_group_id" field.
+func HostingFallbackGroupIDNotIn(vs ...int64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotIn(FieldHostingFallbackGroupID, vs...))
+}
+
+// HostingFallbackGroupIDGT applies the GT predicate on the "hosting_fallback_group_id" field.
+func HostingFallbackGroupIDGT(v int64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGT(FieldHostingFallbackGroupID, v))
+}
+
+// HostingFallbackGroupIDGTE applies the GTE predicate on the "hosting_fallback_group_id" field.
+func HostingFallbackGroupIDGTE(v int64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGTE(FieldHostingFallbackGroupID, v))
+}
+
+// HostingFallbackGroupIDLT applies the LT predicate on the "hosting_fallback_group_id" field.
+func HostingFallbackGroupIDLT(v int64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLT(FieldHostingFallbackGroupID, v))
+}
+
+// HostingFallbackGroupIDLTE applies the LTE predicate on the "hosting_fallback_group_id" field.
+func HostingFallbackGroupIDLTE(v int64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLTE(FieldHostingFallbackGroupID, v))
+}
+
+// HostingFallbackGroupIDIsNil applies the IsNil predicate on the "hosting_fallback_group_id" field.
+func HostingFallbackGroupIDIsNil() predicate.APIKey {
+	return predicate.APIKey(sql.FieldIsNull(FieldHostingFallbackGroupID))
+}
+
+// HostingFallbackGroupIDNotNil applies the NotNil predicate on the "hosting_fallback_group_id" field.
+func HostingFallbackGroupIDNotNil() predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotNull(FieldHostingFallbackGroupID))
+}
+
+// HostingPoolIDEQ applies the EQ predicate on the "hosting_pool_id" field.
+func HostingPoolIDEQ(v int64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldHostingPoolID, v))
+}
+
+// HostingPoolIDNEQ applies the NEQ predicate on the "hosting_pool_id" field.
+func HostingPoolIDNEQ(v int64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNEQ(FieldHostingPoolID, v))
+}
+
+// HostingPoolIDIn applies the In predicate on the "hosting_pool_id" field.
+func HostingPoolIDIn(vs ...int64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldIn(FieldHostingPoolID, vs...))
+}
+
+// HostingPoolIDNotIn applies the NotIn predicate on the "hosting_pool_id" field.
+func HostingPoolIDNotIn(vs ...int64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotIn(FieldHostingPoolID, vs...))
+}
+
+// HostingPoolIDGT applies the GT predicate on the "hosting_pool_id" field.
+func HostingPoolIDGT(v int64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGT(FieldHostingPoolID, v))
+}
+
+// HostingPoolIDGTE applies the GTE predicate on the "hosting_pool_id" field.
+func HostingPoolIDGTE(v int64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGTE(FieldHostingPoolID, v))
+}
+
+// HostingPoolIDLT applies the LT predicate on the "hosting_pool_id" field.
+func HostingPoolIDLT(v int64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLT(FieldHostingPoolID, v))
+}
+
+// HostingPoolIDLTE applies the LTE predicate on the "hosting_pool_id" field.
+func HostingPoolIDLTE(v int64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLTE(FieldHostingPoolID, v))
+}
+
+// HostingPoolIDIsNil applies the IsNil predicate on the "hosting_pool_id" field.
+func HostingPoolIDIsNil() predicate.APIKey {
+	return predicate.APIKey(sql.FieldIsNull(FieldHostingPoolID))
+}
+
+// HostingPoolIDNotNil applies the NotNil predicate on the "hosting_pool_id" field.
+func HostingPoolIDNotNil() predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotNull(FieldHostingPoolID))
 }
 
 // UserIDEQ applies the EQ predicate on the "user_id" field.

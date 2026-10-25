@@ -5,6 +5,11 @@ import { defineComponent } from 'vue'
 import AccountsView from '../AccountsView.vue'
 import UpstreamBillingRateCell from '@/components/account/UpstreamBillingRateCell.vue'
 import AccountActionMenu from '@/components/admin/account/AccountActionMenu.vue'
+import VMKernelStatusBadge from '@/components/account/VMKernelStatusBadge.vue'
+import OpenAIAccountActivity from '@/components/account/OpenAIAccountActivity.vue'
+import AccountQualityMonitorDialog from '@/components/account/AccountQualityMonitorDialog.vue'
+
+vi.mock('@/api/admin/accountActivity', () => ({ getAccountActivity: vi.fn().mockResolvedValue([]) }))
 
 const {
   listAccounts,
@@ -76,6 +81,8 @@ const DataTableStub = defineComponent({
   template: `
     <div>
       <div v-for="row in data" :key="row.id" :data-account-name="row.name">
+        <slot name="cell-name" :row="row" :value="row.name" />
+        <slot name="cell-status" :row="row" />
         <slot name="cell-groups" :row="row" />
         <slot name="cell-capacity" :row="row" />
         <slot name="cell-upstream_billing_rate" :row="row" />
@@ -123,6 +130,10 @@ function mountView(stubActionMenu = true) {
         ReAuthAccountModal: true,
         AccountTestModal: AccountTestModalStub,
         AccountStatsModal: AccountStatsModalStub,
+        AccountQualityMonitorDialog: true,
+        OpenAIAccountActivity: true,
+        VMKernelStatusBadge: true,
+        TicketBorrowStatusBadge: true,
         ScheduledTestsPanel: true,
         SyncFromCrsModal: true,
         TempUnschedStatusModal: true,
@@ -189,6 +200,23 @@ describe('admin AccountsView lite account list', () => {
   afterEach(() => {
     vi.useRealTimers()
     vi.restoreAllMocks()
+  })
+
+  it('keeps Docker runtime status and opens account quality details on the same row', async () => {
+    const row = { ...listRow, execution_mode: 'docker_kernel', vm_kernel: { phase: 'kernel_ready', ready: true, actual_accelerator: 'docker', capacity: 2 } }
+    listAccounts.mockResolvedValue({ items: [row], total: 1, page: 1, page_size: 20, pages: 1 })
+    const wrapper = mountView()
+    await flushPromises()
+    expect(wrapper.getComponent(VMKernelStatusBadge).props('status')).toEqual(row.vm_kernel)
+    const activity = wrapper.getComponent(OpenAIAccountActivity)
+    expect(activity.exists()).toBe(true)
+    activity.vm.$emit('open-quality')
+    await flushPromises()
+    const dialog = wrapper.getComponent(AccountQualityMonitorDialog)
+    expect(dialog.props('show')).toBe(true)
+    expect(dialog.props('account')).toMatchObject({ id: row.id, name: row.name })
+    expect(wrapper.getComponent(VMKernelStatusBadge).exists()).toBe(true)
+    wrapper.unmount()
   })
 
   it('refreshes the saved cost after probing even with unchanged snapshot and default sorting', async () => {

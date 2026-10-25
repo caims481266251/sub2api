@@ -10,7 +10,19 @@
         @click.stop
       >
         <div class="py-1">
-          <template v-if="account">
+          <template v-if="hostingAccount">
+            <button v-if="allowHostingIQTest" :disabled="disabled" class="flex w-full items-center gap-2 px-4 py-2 text-sm text-amber-700 hover:bg-amber-50 disabled:opacity-50 dark:text-amber-300 dark:hover:bg-amber-900/20" @click="emit('iq-test'); emit('close')"><Icon name="brain" size="sm" class="text-amber-500" />{{ t('admin.accounts.pelicanTest.menu') }}</button>
+            <button :disabled="disabled" class="flex w-full items-center gap-2 px-4 py-2 text-sm hover:bg-gray-100 disabled:opacity-50 dark:hover:bg-dark-700" @click="emit('test'); emit('close')"><Icon name="play" size="sm" class="text-green-500" />{{ t('admin.accounts.testConnection') }}</button>
+            <button :disabled="disabled" class="flex w-full items-center gap-2 px-4 py-2 text-sm text-purple-600 hover:bg-gray-100 disabled:opacity-50 dark:hover:bg-dark-700" @click="emit('refresh-token'); emit('close')"><Icon name="refresh" size="sm" />{{ t('admin.accounts.refreshToken') }}</button>
+            <button :disabled="disabled" class="flex w-full items-center gap-2 px-4 py-2 text-sm text-emerald-600 hover:bg-gray-100 disabled:opacity-50 dark:hover:bg-dark-700" @click="emit('set-privacy'); emit('close')"><Icon name="shield" size="sm" />{{ t('admin.accounts.setPrivacy') }}</button>
+            <button v-if="hostingRecoverable" :disabled="disabled" class="flex w-full items-center gap-2 px-4 py-2 text-sm text-emerald-600 hover:bg-gray-100 disabled:opacity-50 dark:hover:bg-dark-700" @click="emit('recover-state'); emit('close')"><Icon name="sync" size="sm" />{{ t('admin.accounts.recoverState') }}</button>
+            <button :disabled="disabled" class="flex w-full items-center gap-2 px-4 py-2 text-sm hover:bg-gray-100 disabled:opacity-50 dark:hover:bg-dark-700" @click="emit('stats'); emit('close')"><Icon name="chart" size="sm" class="text-indigo-500" />{{ t('admin.accounts.viewStats') }}</button>
+            <button v-if="allowHostingReauth" :disabled="disabled" class="flex w-full items-center gap-2 px-4 py-2 text-sm text-blue-600 hover:bg-gray-100 disabled:opacity-50 dark:hover:bg-dark-700" @click="emit('reauth'); emit('close')"><Icon name="link" size="sm" />{{ t('hosting.reauthorize') }}</button>
+            <button :disabled="disabled" class="flex w-full items-center gap-2 px-4 py-2 text-sm hover:bg-gray-100 disabled:opacity-50 dark:hover:bg-dark-700" @click="emit('refresh-usage'); emit('close')"><Icon name="refresh" size="sm" />{{ t('hosting.queryUsage') }}</button>
+            <button v-if="hostingAccount.state !== 'login_required'" :disabled="disabled" class="flex w-full items-center gap-2 px-4 py-2 text-sm hover:bg-gray-100 disabled:opacity-50 dark:hover:bg-dark-700" @click="emit('toggle-hosting'); emit('close')"><Icon :name="hostingAccount.state === 'paused' ? 'play' : 'clock'" size="sm" />{{ t(hostingAccount.state === 'paused' ? 'hosting.resume' : 'hosting.pause') }}</button>
+            <button v-if="showHostingPolicy" :disabled="disabled" class="flex w-full items-center gap-2 px-4 py-2 text-sm hover:bg-gray-100 disabled:opacity-50 dark:hover:bg-dark-700" @click="emit('hosting-policy'); emit('close')"><Icon name="user" size="sm" />{{ t('hosting.adminUsersNav') }}</button>
+          </template>
+          <template v-else-if="account">
             <button @click="$emit('test', account); $emit('close')" class="flex w-full items-center gap-2 px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-dark-700">
               <Icon name="play" size="sm" class="text-green-500" :stroke-width="2" />
               {{ t('admin.accounts.testConnection') }}
@@ -72,9 +84,10 @@ import { useResizeObserver, useWindowSize } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import { Icon } from '@/components/icons'
 import type { Account } from '@/types'
+import type { HostedAccount } from '@/api/hosting'
 
-const props = defineProps<{ show: boolean; account: Account | null; anchorRect: DOMRect | null }>()
-const emit = defineEmits(['close', 'test', 'stats', 'schedule', 'iq-test', 'duplicate', 'reauth', 'refresh-token', 'recover-state', 'reset-quota', 'set-privacy', 'create-spark-shadow'])
+const props = defineProps<{ show: boolean; account: Account | null; anchorRect: DOMRect | null; hostingAccount?: HostedAccount; allowHostingReauth?: boolean; showHostingPolicy?: boolean; allowHostingIQTest?: boolean; disabled?: boolean }>()
+const emit = defineEmits(['close', 'test', 'stats', 'schedule', 'iq-test', 'duplicate', 'reauth', 'refresh-token', 'recover-state', 'reset-quota', 'set-privacy', 'create-spark-shadow', 'refresh-usage', 'toggle-hosting', 'hosting-policy'])
 const { t } = useI18n()
 const menuRef = ref<HTMLElement | null>(null)
 const { width: viewportWidth, height: viewportHeight } = useWindowSize()
@@ -109,6 +122,11 @@ const updatePosition = () => {
 watch([menuRef, () => props.anchorRect, viewportWidth, viewportHeight], updatePosition, { flush: 'post' })
 useResizeObserver(menuRef, updatePosition)
 
+const hostingRecoverable = computed(() => {
+  const a = props.hostingAccount
+  if (!a) return false
+  return a.status === 'error' || a.state === 'login_required' || a.state === 'quota_exhausted' || a.state === 'temporarily_unavailable' || [a.rate_limit_reset_at, a.overload_until, a.temp_unschedulable_until].some(value => value && new Date(value).getTime() > Date.now()) || Object.values((a.runtime_extra?.model_rate_limits ?? {}) as Record<string, { rate_limit_reset_at: string }>).some(value => new Date(value.rate_limit_reset_at).getTime() > Date.now())
+})
 const canDuplicate = computed(() => {
   if (!props.account || props.account.parent_account_id != null) return false
   return ['apikey', 'upstream', 'bedrock', 'service_account'].includes(props.account.type)

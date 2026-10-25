@@ -71,6 +71,7 @@ func AnthropicToResponsesWithMinOutputTokens(req *AnthropicRequest, minOutputTok
 	if openai.IsGPT61SolModelSpelling(req.Model) && req.OutputConfig != nil && req.OutputConfig.Effort == "max" && effort != "none" {
 		effort = "max"
 	}
+	effort = openai.NormalizeGPT61SolReasoningEffort(req.Model, effort)
 	out.Reasoning = &ResponsesReasoning{
 		Effort: effort,
 	}

@@ -274,6 +274,7 @@ const props = withDefaults(defineProps<{
   showSourceToggle?: boolean
   showMetricToggle?: boolean
   enableBreakdown?: boolean
+    costPrecision?: number
   showAccountCost?: boolean
   rankingLoading?: boolean
   rankingError?: boolean
@@ -513,6 +514,7 @@ const toFiniteNumber = (value: unknown): number => {
 
 const formatCost = (value: number | null | undefined): string => {
   const safeValue = toFiniteNumber(value)
+  if (props.costPrecision !== undefined) return safeValue.toFixed(props.costPrecision)
   if (safeValue >= 1000) {
     return (safeValue / 1000).toFixed(2) + 'K'
   } else if (safeValue >= 1) {

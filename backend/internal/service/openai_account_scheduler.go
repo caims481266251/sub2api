@@ -98,6 +98,7 @@ type OpenAIAccountScheduleRequest struct {
 }
 
 type OpenAIAccountScheduleDecision struct {
+	BorrowPreferred     bool
 	Layer               string
 	StickyPreviousHit   bool
 	StickySessionHit    bool
@@ -2012,9 +2013,24 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatible(ctx context.C
 // openAISelectionFilterStats so that "no available accounts" errors state why
 // each candidate was dropped instead of failing silently (#4599).
 func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx context.Context, account *Account, req OpenAIAccountScheduleRequest) (bool, string) {
+	if !HostingAccountAllowed(ctx, account) {
+		return false, "account_owner_mismatch"
+	}
 	ctx = withOpenAIProxyQuarantineTransport(ctx, req.RequiredTransport)
 	if account == nil {
 		return false, "account_nil"
+	}
+	if !borrowSchedulingAllowsAccount(ctx, account.ID) {
+		return false, "borrow_preferred_tier"
+	}
+	if !borrowHTTPContinuationAllowsAccount(ctx, account.ID) {
+		return false, "borrow_continuation_target"
+	}
+	if s.service != nil && s.service.borrowRoutes != nil && account.IsOpenAI() {
+		if err := s.service.borrowRoutes.Check(ctx, account.ID, s.service.openAICodexTicketOutboundModel(account, req.RequestedModel, req.RequireCompact), "http"); err != nil {
+			observeBorrowSelectionFailure(ctx, err)
+			return false, "borrow_route_unavailable"
+		}
 	}
 	if account.IsExcelOAuth() && s != nil && s.service != nil && !s.service.excelBPSGloballyEnabled(ctx) {
 		return false, "excel_bps_disabled"
@@ -2426,7 +2442,65 @@ func (s *OpenAIGatewayService) selectAccountWithScheduler(
 	previousResponseCanMove bool,
 	useUpstreamTokenCost bool,
 ) (selection *AccountSelectionResult, decision OpenAIAccountScheduleDecision, err error) {
-	selection, decision, err = s.selectAccountWithSchedulerOnce(ctx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, requiredImageCapability, requireCompact, platform, previousResponseCanMove, useUpstreamTokenCost)
+	// Keep existing selection, including ordinary-account and quarantine fallback,
+	// intact. Wait only for a positively identified borrowing admission failure.
+	r := BorrowBusinessRecoveryFromContext(ctx)
+	if s.borrowRoutes != nil && r != nil && !borrowInternal(ctx) {
+		ctx = BorrowBusinessRecoveryContext(ctx)
+		for {
+			published := s.borrowRoutes.routePublished()
+			selection, decision, err = s.selectAccountWithSchedulerNoWait(ctx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, requiredImageCapability, requireCompact, platform, previousResponseCanMove, useUpstreamTokenCost)
+			if errors.Is(err, ErrNoAvailableAccounts) || IsBorrowRouteUnavailable(err) {
+				if retryExcluded, ok := r.admissionRetryExclusions(excludedIDs); ok {
+					// Other accounts were tried first. A pre-send capacity race
+					// must not permanently exclude the only borrowing target.
+					if !r.waitForRoute(ctx, published) {
+						return
+					}
+					selection, decision, err = s.selectAccountWithSchedulerNoWait(ctx, groupID, previousResponseID, sessionHash, requestedModel, retryExcluded, requiredTransport, requiredCapability, requiredImageCapability, requireCompact, platform, previousResponseCanMove, useUpstreamTokenCost)
+					if err == nil || (!errors.Is(err, ErrNoAvailableAccounts) && !IsBorrowRouteUnavailable(err)) {
+						return
+					}
+					continue
+				}
+			}
+			if IsBorrowRouteUnavailable(err) && s.borrowHTTPContinuationCanFallback(ctx, groupID) {
+				return
+			}
+			if err == nil || !IsBorrowRouteUnavailable(err) || !r.waitForRoute(ctx, published) {
+				return
+			}
+		}
+	}
+	return s.selectAccountWithSchedulerNoWait(ctx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, requiredImageCapability, requireCompact, platform, previousResponseCanMove, useUpstreamTokenCost)
+}
+
+func (s *OpenAIGatewayService) selectAccountWithSchedulerNoWait(
+	ctx context.Context, groupID *int64, previousResponseID, sessionHash, requestedModel string, excludedIDs map[int64]struct{}, requiredTransport OpenAIUpstreamTransport, requiredCapability OpenAIEndpointCapability, requiredImageCapability OpenAIImagesCapability, requireCompact bool, platform string, previousResponseCanMove, useUpstreamTokenCost bool,
+) (selection *AccountSelectionResult, decision OpenAIAccountScheduleDecision, err error) {
+	ctx = context.WithValue(ctx, borrowEndpointCapabilityKey{}, requiredCapability)
+	ctx, borrowSelectionError := withBorrowSelectionFailure(ctx)
+	defer func() { err = borrowSelectionError(err) }()
+	selectOnce := func(selectionCtx context.Context) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
+		return s.selectAccountWithSchedulerOnce(selectionCtx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, requiredImageCapability, requireCompact, platform, previousResponseCanMove, useUpstreamTokenCost)
+	}
+	// Native continuation/task ownership is not movable merely to gain priority.
+	selectPreferred := func(selectionCtx context.Context) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
+		if s.borrowRoutes != nil && !borrowInternal(selectionCtx) && NormalizeOpenAICompatiblePlatform(platform) == PlatformOpenAI && !requireCompact && requiredImageCapability == "" &&
+			(requiredTransport == OpenAIUpstreamTransportAny || requiredTransport == OpenAIUpstreamTransportHTTPSSE) &&
+			strings.TrimSpace(previousResponseID) == "" && s.resolveOpenAIGuardianParentAccountID(selectionCtx, groupID) == 0 {
+			selected, decision, err := s.selectWithBorrowPreference(selectionCtx, selectOnce)
+			if err == nil && decision.BorrowPreferred && selected != nil && selected.Acquired && selected.Account != nil && sessionHash != "" {
+				_ = s.bindOpenAIStickySessionDuringSelection(ContextWithSelectionProfitGate(selectionCtx, selected), groupID, sessionHash, selected.Account.ID)
+			}
+			return selected, decision, err
+		}
+		return selectOnce(selectionCtx)
+	}
+	selectWithAffinity := func(selectionCtx context.Context) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
+		return s.selectWithOpenAISessionAffinity(selectionCtx, selectOnce, selectPreferred, requestedModel, excludedIDs)
+	}
+	selection, decision, err = selectWithAffinity(ctx)
 	if err == nil || openAIProxyStreamQuarantineBypassed(ctx) {
 		return selection, decision, err
 	}
@@ -2442,7 +2516,7 @@ func (s *OpenAIGatewayService) selectAccountWithScheduler(
 		return selection, decision, err
 	}
 	s.logOpenAIProxyStreamQuarantineFailOpen(requestedModel, blocked)
-	return s.selectAccountWithSchedulerOnce(withOpenAIProxyStreamQuarantineBypass(ctx), groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, requiredImageCapability, requireCompact, platform, previousResponseCanMove, useUpstreamTokenCost)
+	return selectWithAffinity(withOpenAIProxyStreamQuarantineBypass(ctx))
 }
 
 type openAIGroupPrivacyRequirementContextKey struct{}

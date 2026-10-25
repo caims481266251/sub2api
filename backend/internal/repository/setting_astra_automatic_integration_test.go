@@ -39,6 +39,22 @@ func TestAstraAutomaticAtomicSettings(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, donor.Credentials["model_mapping"])
 	require.NotContains(t, donor.Extra, "openai_oauth_responses_websockets_v2_enabled")
+	// Source models get their own dependency, without overwriting an existing alias.
+	require.NoError(t, client.Account.UpdateOneID(source.ID).SetCredentials(map[string]any{"model_mapping": map[string]any{"source-alias": "gpt-5.6-sol", "other": "gpt-6-sol"}}).Exec(ctx))
+	value.CookiePool.SourceAccountModels = map[int64]string{source.ID: "source-alias"}
+	value.Revision = "source-alias"
+	require.NoError(t, repo.SetAstraRoutingWithAccounts(ctx, key, value))
+	donor, err = client.Account.Get(ctx, source.ID)
+	require.NoError(t, err)
+	require.Equal(t, "gpt-5.6-sol", donor.Credentials["model_mapping"].(map[string]any)["source-alias"])
+	require.NotContains(t, donor.Credentials["model_mapping"], "gpt-6-astra")
+	value.CookiePool.SourceAccountModels[source.ID] = "gpt-5.6-terra"
+	value.Revision = "source-terra"
+	require.NoError(t, repo.SetAstraRoutingWithAccounts(ctx, key, value))
+	donor, err = client.Account.Get(ctx, source.ID)
+	require.NoError(t, err)
+	require.Equal(t, "gpt-5.6-terra", donor.Credentials["model_mapping"].(map[string]any)["gpt-5.6-terra"])
+	require.Equal(t, "gpt-5.6-sol", donor.Credentials["model_mapping"].(map[string]any)["source-alias"])
 	before, err := repo.GetValue(ctx, key)
 	require.NoError(t, err)
 	// A later missing row rolls back earlier account updates and the setting.

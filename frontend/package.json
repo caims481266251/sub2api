@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite --config vite.config.ts",
     "check:i18n": "vitest run src/i18n/__tests__/localeKeyCompleteness.spec.ts",
     "build": "pnpm run check:i18n && vue-tsc -b && vite build",
     "preview": "vite preview",
@@ -17,7 +17,6 @@
   },
   "dependencies": {
     "@airwallex/components-sdk": "^1.30.2",
-    "@lobehub/icons": "^4.0.2",
     "@stripe/stripe-js": "^9.0.1",
     "@tanstack/vue-virtual": "^3.13.23",
     "@vueuse/core": "^10.7.0",

@@ -10,6 +10,7 @@ const (
 	HTTPUpstreamProfileDefault       HTTPUpstreamProfile = ""
 	HTTPUpstreamProfileOpenAI        HTTPUpstreamProfile = "openai"
 	HTTPUpstreamProfileOpenAIHarvest HTTPUpstreamProfile = "openai_harvest"
+	HTTPUpstreamProfileBorrowProbe   HTTPUpstreamProfile = "borrow_probe"
 	HTTPUpstreamProfileGrok          HTTPUpstreamProfile = "grok"
 	HTTPUpstreamProfileLongStream    HTTPUpstreamProfile = "long_stream"
 	HTTPUpstreamProfileExcelBPS      HTTPUpstreamProfile = "excel_bps"
@@ -40,7 +41,7 @@ func HTTPUpstreamProfileFromContext(ctx context.Context) HTTPUpstreamProfile {
 		return HTTPUpstreamProfileDefault
 	}
 	switch profile {
-	case HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileOpenAIHarvest, HTTPUpstreamProfileGrok, HTTPUpstreamProfileLongStream, HTTPUpstreamProfileExcelBPS:
+	case HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileOpenAIHarvest, HTTPUpstreamProfileBorrowProbe, HTTPUpstreamProfileGrok, HTTPUpstreamProfileLongStream, HTTPUpstreamProfileExcelBPS:
 		return profile
 	default:
 		return HTTPUpstreamProfileDefault

@@ -1,3 +1,5 @@
+import ticketBorrowing from './ticketBorrowing'
+import proxyPool from './proxyPool'
 import ipAudit from './ipAudit'
 import connections from './connections'
 import securityRecords from './securityRecords'
@@ -24,6 +26,8 @@ import requestTiming from './requestTiming'
 
 import autoConfig from './autoConfig'
 
+import hosting from './hosting'
+
 export default {
   savedTwoFA: {
     manage: '补充或修改已保存信息',
@@ -35,6 +39,9 @@ export default {
     states: { queued: '等待重新授权', running: '正在重新授权', callback_processing: '正在保存授权', succeeded: '重新授权成功', failed: '重新授权失败，请检查凭据或代理后手动重试' }
   },
 
+  hosting,
+  ticketBorrowing,
+  proxyPool,
   ipAudit,
   connections,
   securityRecords,

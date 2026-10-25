@@ -12,6 +12,10 @@
     </div>
 
     <div v-else class="space-y-6 p-6">
+      <div v-if="isRecoveredUpstreamLog(detail)" class="rounded-xl bg-emerald-50 p-4 text-emerald-900 dark:bg-emerald-900/10 dark:text-emerald-200" data-testid="recovered-request">
+        <div class="font-semibold">{{ t('admin.ops.errorLog.typeRecovered') }}</div>
+        <p class="mt-1 text-sm">{{ t('admin.ops.errorLog.recoveredHint') }}</p>
+      </div>
       <div v-if="balanceSource" class="rounded-xl bg-amber-50 p-4 dark:bg-amber-900/10" data-testid="balance-source">
         <div class="font-semibold text-amber-900 dark:text-amber-200">{{ t(`admin.ops.balanceError.${balanceSource}`) }}</div>
         <p class="mt-1 text-sm text-amber-800 dark:text-amber-100">{{ t(`admin.ops.balanceError.${balanceSource}Hint`) }}</p>
@@ -145,6 +149,8 @@
         </div>
       </div>
 
+      <BorrowAttemptDetails :rows="borrowAttempts" />
+
       <!-- Upstream errors list (only for request errors) -->
       <div v-if="showUpstreamList" class="rounded-xl bg-gray-50 p-6 dark:bg-dark-900">
         <div class="flex flex-wrap items-center justify-between gap-2">
@@ -229,7 +235,10 @@
 </template>
 
 <script setup lang="ts">
+import BorrowAttemptDetails from '@/components/admin/usage/BorrowAttemptDetails.vue'
+import { borrowAttemptDetails } from '@/utils/borrowAttemptDetails'
 import { balanceErrorSource } from '../utils/balanceError'
+import { isRecoveredUpstreamLog } from '../utils/recoveryStatus'
 import { computed, ref, watch, inject } from 'vue'
 import { observerUsageAPI } from '@/api/observerUsage'
 import { observerUsageContext } from '@/components/admin/usage/observerUsageContext'
@@ -263,6 +272,7 @@ const appStore = useAppStore()
 
 const loading = ref(false)
 const detail = ref<OpsErrorDetail | null>(null)
+const borrowAttempts = computed(() => borrowAttemptDetails(detail.value?.upstream_errors))
 
 const showUpstreamList = computed(() => !observerMode && props.errorType === 'request')
 

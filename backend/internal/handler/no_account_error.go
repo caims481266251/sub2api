@@ -80,6 +80,11 @@ func classifySelectionFailureError(err error, fallback noAccountErrorClassificat
 	if fallback.ModelNotFound || fallback.Code != "" {
 		return fallback
 	}
+	if service.IsBorrowRouteUnavailable(err) {
+		// The scheduler observed at least one missing route, not necessarily a
+		// uniformly rate-limited pool. Keep its ordinary capacity/model verdict.
+		return fallback
+	}
 	match := selectionModelRateLimitedPattern.FindStringSubmatch(strings.ToLower(err.Error()))
 	if len(match) != 2 {
 		return fallback

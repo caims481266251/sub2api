@@ -549,7 +549,7 @@ func (s *OpenAIGatewayService) resolveAccountByPreviousResponseIDForCapability(
 	if responseID == "" {
 		return 0, nil, "", nil
 	}
-	store := s.getOpenAIWSStateStore()
+	store := s.getOpenAIWSStateStoreForContext(ctx)
 	if store == nil {
 		return 0, nil, "", nil
 	}
