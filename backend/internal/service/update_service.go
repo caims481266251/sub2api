@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
@@ -74,7 +75,7 @@ type UpdateService struct {
 	buildType       string // "source" for manual builds, "release" for CI builds
 	installMu       sync.Mutex
 	runtimeSocket   string
-	restartRequired bool
+	restartRequired atomic.Bool
 }
 
 // NewUpdateService creates a new UpdateService
@@ -89,13 +90,14 @@ func NewUpdateService(cache UpdateCache, githubClient GitHubReleaseClient, versi
 
 // UpdateInfo contains update information
 type UpdateInfo struct {
-	CurrentVersion string       `json:"current_version"`
-	LatestVersion  string       `json:"latest_version"`
-	HasUpdate      bool         `json:"has_update"`
-	ReleaseInfo    *ReleaseInfo `json:"release_info,omitempty"`
-	Cached         bool         `json:"cached"`
-	Warning        string       `json:"warning,omitempty"`
-	BuildType      string       `json:"build_type"` // "source" or "release"
+	CurrentVersion  string       `json:"current_version"`
+	LatestVersion   string       `json:"latest_version"`
+	HasUpdate       bool         `json:"has_update"`
+	RestartRequired bool         `json:"restart_required"`
+	ReleaseInfo     *ReleaseInfo `json:"release_info,omitempty"`
+	Cached          bool         `json:"cached"`
+	Warning         string       `json:"warning,omitempty"`
+	BuildType       string       `json:"build_type"` // "source" or "release"
 }
 
 // ReleaseInfo contains GitHub release details
@@ -140,7 +142,14 @@ type GitHubAsset struct {
 }
 
 // CheckUpdate checks for available updates
-func (s *UpdateService) CheckUpdate(ctx context.Context, force bool) (*UpdateInfo, error) {
+func (s *UpdateService) CheckUpdate(ctx context.Context, force bool) (info *UpdateInfo, err error) {
+	// Pending activation belongs to this process, not the shared release cache.
+	// Include it on every result so refreshing the page keeps the restart action.
+	defer func() {
+		if info != nil {
+			info.RestartRequired = s.restartRequired.Load()
+		}
+	}()
 	// Try cache first
 	if !force {
 		if cached, err := s.getFromCache(ctx); err == nil && cached != nil {
@@ -149,7 +158,7 @@ func (s *UpdateService) CheckUpdate(ctx context.Context, force bool) (*UpdateInf
 	}
 
 	// Fetch from GitHub
-	info, err := s.fetchLatestRelease(ctx)
+	info, err = s.fetchLatestRelease(ctx)
 	if err != nil {
 		// Return cached on error
 		if cached, cacheErr := s.getFromCache(ctx); cacheErr == nil && cached != nil {
@@ -194,7 +203,7 @@ func (s *UpdateService) PerformUpdate(ctx context.Context) error {
 func (s *UpdateService) checkRestartRequired() error {
 	s.installMu.Lock()
 	defer s.installMu.Unlock()
-	if s.restartRequired {
+	if s.restartRequired.Load() {
 		return ErrSystemRestartRequired
 	}
 	return nil
@@ -206,7 +215,7 @@ func (s *UpdateService) checkRestartRequired() error {
 func (s *UpdateService) applyReleaseAssets(ctx context.Context, releaseAssets []Asset) error {
 	s.installMu.Lock()
 	defer s.installMu.Unlock()
-	if s.restartRequired {
+	if s.restartRequired.Load() {
 		return ErrSystemRestartRequired
 	}
 
@@ -325,7 +334,7 @@ func (s *UpdateService) applyReleaseAssets(ctx context.Context, releaseAssets []
 	// Success - backup file is kept for rollback capability
 	// It will be cleaned up on next successful update
 	// On Linux, os.Executable now points at the renamed backup until restart.
-	s.restartRequired = true
+	s.restartRequired.Store(true)
 	return nil
 }
 
@@ -333,7 +342,7 @@ func (s *UpdateService) applyReleaseAssets(ctx context.Context, releaseAssets []
 func (s *UpdateService) Rollback() error {
 	s.installMu.Lock()
 	defer s.installMu.Unlock()
-	if s.restartRequired {
+	if s.restartRequired.Load() {
 		return ErrSystemRestartRequired
 	}
 
@@ -365,7 +374,7 @@ func (s *UpdateService) Rollback() error {
 		return fmt.Errorf("rollback failed: %w", err)
 	}
 
-	s.restartRequired = true
+	s.restartRequired.Store(true)
 	return nil
 }
 

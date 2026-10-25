@@ -6,11 +6,11 @@
         @click="toggleDropdown"
         class="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs transition-colors"
         :class="[
-          hasUpdate
+          hasUpdate || needRestart
             ? 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:hover:bg-amber-900/50'
             : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-dark-800 dark:text-dark-400 dark:hover:bg-dark-700'
         ]"
-        :title="hasUpdate ? t('version.updateAvailable') : t('version.upToDate')"
+        :title="needRestart ? t('version.restartRequired') : hasUpdate ? t('version.updateAvailable') : t('version.upToDate')"
       >
         <span v-if="currentVersion" class="font-medium">v{{ currentVersion }}</span>
         <span
@@ -18,7 +18,7 @@
           class="h-3 w-12 animate-pulse rounded bg-gray-200 font-medium dark:bg-dark-600"
         ></span>
         <!-- Update indicator -->
-        <span v-if="hasUpdate" class="relative flex h-2 w-2">
+        <span v-if="hasUpdate || needRestart" class="relative flex h-2 w-2">
           <span
             class="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75"
           ></span>
@@ -89,7 +89,7 @@
                   <span v-else class="text-2xl font-bold text-gray-400 dark:text-dark-500">--</span>
                   <!-- Show check mark when up to date -->
                   <span
-                    v-if="!hasUpdate"
+                    v-if="!hasUpdate && !needRestart"
                     class="flex h-5 w-5 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30"
                   >
                     <svg
@@ -107,7 +107,9 @@
                 </div>
                 <p class="mt-1 text-xs text-gray-500 dark:text-dark-400">
                   {{
-                    hasUpdate
+                    needRestart
+                      ? t('version.restartRequired')
+                      : hasUpdate
                       ? t('version.latestVersion') + ': v' + latestVersion
                       : t('version.upToDate')
                   }}
@@ -115,7 +117,7 @@
               </div>
 
               <!-- Priority 1: Update error (must check before hasUpdate) -->
-              <div v-if="updateError" class="space-y-2">
+              <div v-if="updateError && !needRestart" class="space-y-2">
                 <div
                   class="flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 p-3 dark:border-red-800/50 dark:bg-red-900/20"
                 >
@@ -150,7 +152,7 @@
               </div>
 
               <!-- Priority 2: Update success - need restart -->
-              <div v-else-if="updateSuccess && needRestart" class="space-y-2">
+              <div v-else-if="needRestart" class="space-y-2">
                 <div
                   class="flex items-center gap-3 rounded-lg border border-green-200 bg-green-50 p-3 dark:border-green-800/50 dark:bg-green-900/20"
                 >
@@ -172,10 +174,12 @@
                       {{
                         successKind === 'rollback'
                           ? t('version.rollbackComplete')
-                          : t('version.updateComplete')
+                          : successKind === 'update'
+                            ? t('version.updateComplete')
+                            : t('version.restartRequired')
                       }}
                     </p>
-                    <p class="text-xs text-green-600/70 dark:text-green-400/70">
+                    <p v-if="successKind" class="text-xs text-green-600/70 dark:text-green-400/70">
                       {{ t('version.restartRequired') }}
                     </p>
                   </div>
@@ -680,12 +684,11 @@ const buildType = computed(() => appStore.buildType)
 // Update process states (local to this component)
 const updating = ref(false)
 const restarting = ref(false)
-const needRestart = ref(false)
+const needRestart = computed(() => appStore.restartRequired)
 const updateError = ref('')
-const updateSuccess = ref(false)
 const restartCountdown = ref(0)
 // Distinguishes the success + restart panel between update and rollback flows
-const successKind = ref<'update' | 'rollback'>('update')
+const successKind = ref<'update' | 'rollback' | null>(null)
 
 // Rollback states
 const rollbackPanelOpen = ref(false)
@@ -742,35 +745,50 @@ function closeDropdown() {
 async function refreshVersion(force = true) {
   if (!isAdmin.value) return
 
-  // Reset update states when refreshing
+  // Refresh the server state without discarding an already installed update.
   updateError.value = ''
-  updateSuccess.value = false
-  needRestart.value = false
   resetRollbackState()
 
   await appStore.fetchVersion(force)
 }
 
 async function handleUpdate() {
-  if (updating.value) return
+  if (updating.value || needRestart.value) return
 
   updating.value = true
   updateError.value = ''
-  updateSuccess.value = false
 
   try {
     const result = await performUpdate()
-    successKind.value = 'update'
-    updateSuccess.value = true
-    needRestart.value = result.need_restart
-    // Clear version cache to reflect update completed
-    appStore.clearVersionCache()
+    if (result.need_restart) {
+      setRestartRequired('update')
+    } else {
+      appStore.clearVersionCache()
+    }
   } catch (error: unknown) {
+    if (restorePendingRestart(error)) return
     const err = error as { response?: { data?: { message?: string } }; message?: string }
     updateError.value = err.response?.data?.message || err.message || t('version.updateFailed')
   } finally {
     updating.value = false
   }
+}
+
+function setRestartRequired(kind: 'update' | 'rollback' | null = null) {
+  successKind.value = kind
+  appStore.restartRequired = true
+  updateError.value = ''
+  rollbackError.value = ''
+  rollbackPanelOpen.value = false
+  appStore.clearVersionCache()
+}
+
+function restorePendingRestart(error: unknown): boolean {
+  const err = error as { reason?: string; response?: { data?: { reason?: string } } } | null
+  // apiClient flattens HTTP errors; also accept the original Axios envelope.
+  if ((err?.reason || err?.response?.data?.reason) !== 'SYSTEM_RESTART_REQUIRED') return false
+  setRestartRequired()
+  return true
 }
 
 function resetRollbackState() {
@@ -827,20 +845,21 @@ function formatPublishedAt(publishedAt: string): string {
 
 async function handleRollback() {
   if (!isAdmin.value) return
-  if (rollingBack.value || !selectedRollbackVersion.value) return
+  if (rollingBack.value || needRestart.value || !selectedRollbackVersion.value) return
 
   rollingBack.value = true
   rollbackError.value = ''
 
   try {
     const result = await rollbackAPI(selectedRollbackVersion.value)
-    successKind.value = 'rollback'
-    updateSuccess.value = true
-    needRestart.value = result.need_restart
-    rollbackPanelOpen.value = false
-    // Clear version cache so the next check reflects the rolled-back version
-    appStore.clearVersionCache()
+    if (result.need_restart) {
+      setRestartRequired('rollback')
+    } else {
+      rollbackPanelOpen.value = false
+      appStore.clearVersionCache()
+    }
   } catch (error: unknown) {
+    if (restorePendingRestart(error)) return
     const err = error as { response?: { data?: { message?: string } }; message?: string }
     rollbackError.value = err.response?.data?.message || err.message || t('version.rollbackFailed')
   } finally {

@@ -15,6 +15,7 @@ export interface VersionInfo {
   current_version: string
   latest_version: string
   has_update: boolean
+  restart_required?: boolean
   release_info?: ReleaseInfo
   cached: boolean
   warning?: string

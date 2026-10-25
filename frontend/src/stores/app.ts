@@ -41,8 +41,10 @@ export const useAppStore = defineStore('app', () => {
   const currentVersion = ref<string>('')
   const latestVersion = ref<string>('')
   const hasUpdate = ref<boolean>(false)
+  const restartRequired = ref<boolean>(false)
   const buildType = ref<string>('source')
   const releaseInfo = ref<ReleaseInfo | null>(null)
+  let versionCacheRevision = 0
 
   // Auto-incrementing ID for toasts
   let toastIdCounter = 0
@@ -247,6 +249,7 @@ export const useAppStore = defineStore('app', () => {
         current_version: currentVersion.value,
         latest_version: latestVersion.value,
         has_update: hasUpdate.value,
+        restart_required: restartRequired.value,
         build_type: buildType.value,
         release_info: releaseInfo.value || undefined,
         cached: true
@@ -259,8 +262,18 @@ export const useAppStore = defineStore('app', () => {
     }
 
     versionLoading.value = true
+    const revision = versionCacheRevision
     try {
       const data = await checkUpdatesAPI(force)
+      // An update may finish while an earlier version check is in flight.
+      if (revision !== versionCacheRevision) return null
+      if (typeof data.restart_required === 'boolean') {
+        restartRequired.value = data.restart_required
+      } else if (data.current_version !== currentVersion.value) {
+        // Older servers omit this field. Keep a known pending restart until
+        // the running version changes instead of losing it on a refresh.
+        restartRequired.value = false
+      }
       currentVersion.value = data.current_version
       latestVersion.value = data.latest_version
       hasUpdate.value = data.has_update
@@ -280,8 +293,10 @@ export const useAppStore = defineStore('app', () => {
    * Clear version cache (e.g., after update)
    */
   function clearVersionCache(): void {
+    versionCacheRevision++
     versionLoaded.value = false
     hasUpdate.value = false
+    // Installed updates remain pending until the server confirms a restart.
   }
 
   // ==================== Public Settings Management ====================
@@ -465,6 +480,7 @@ export const useAppStore = defineStore('app', () => {
     currentVersion,
     latestVersion,
     hasUpdate,
+    restartRequired,
     buildType,
     releaseInfo,
 

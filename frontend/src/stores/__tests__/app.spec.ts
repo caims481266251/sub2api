@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useAppStore } from '@/stores/app'
 import { getPublicSettings } from '@/api/auth'
+import { checkUpdates, type VersionInfo } from '@/api/admin/system'
 import type { PublicSettings } from '@/types'
 
 function createDeferred<T>() {
@@ -81,6 +82,7 @@ describe('useAppStore', () => {
     vi.useFakeTimers()
     localStorage.clear()
     vi.mocked(getPublicSettings).mockReset()
+    vi.mocked(checkUpdates).mockReset()
     // 清除 window.__APP_CONFIG__
     delete (window as any).__APP_CONFIG__
   })
@@ -88,6 +90,62 @@ describe('useAppStore', () => {
   afterEach(() => {
     vi.useRealTimers()
     localStorage.clear()
+  })
+
+  describe('pending restart state', () => {
+    const versionInfo: VersionInfo = {
+      current_version: '2.15.15',
+      latest_version: '2.15.16',
+      has_update: true,
+      cached: false,
+      build_type: 'release',
+    }
+
+    it('restores the server pending flag and includes it in cached results', async () => {
+      vi.mocked(checkUpdates).mockResolvedValue({ ...versionInfo, restart_required: true })
+      const store = useAppStore()
+      await store.fetchVersion()
+      expect(store.restartRequired).toBe(true)
+      expect((await store.fetchVersion())?.restart_required).toBe(true)
+      expect(checkUpdates).toHaveBeenCalledTimes(1)
+      store.clearVersionCache()
+      expect(store.restartRequired).toBe(true)
+    })
+
+    it('uses an explicit server false after restart to clear the pending flag', async () => {
+      vi.mocked(checkUpdates).mockResolvedValue({ ...versionInfo, restart_required: true })
+      const store = useAppStore()
+      await store.fetchVersion()
+      vi.mocked(checkUpdates).mockResolvedValue({ ...versionInfo, restart_required: false })
+      await store.fetchVersion(true)
+      expect(store.restartRequired).toBe(false)
+    })
+
+    it('ignores a pre-update version response that arrives after installation', async () => {
+      const deferred = createDeferred<VersionInfo>()
+      vi.mocked(checkUpdates).mockReturnValue(deferred.promise)
+      const store = useAppStore()
+      const pendingCheck = store.fetchVersion()
+      store.restartRequired = true
+      store.clearVersionCache()
+      deferred.resolve({ ...versionInfo, restart_required: false })
+      expect(await pendingCheck).toBeNull()
+      expect(store.restartRequired).toBe(true)
+      expect(store.versionLoaded).toBe(false)
+    })
+
+    it('keeps locally confirmed pending state with an older server until its version changes', async () => {
+      vi.mocked(checkUpdates).mockResolvedValue(versionInfo)
+      const store = useAppStore()
+      await store.fetchVersion()
+      store.restartRequired = true
+      store.clearVersionCache()
+      await store.fetchVersion(true)
+      expect(store.restartRequired).toBe(true)
+      vi.mocked(checkUpdates).mockResolvedValue({ ...versionInfo, current_version: '2.15.16', has_update: false })
+      await store.fetchVersion(true)
+      expect(store.restartRequired).toBe(false)
+    })
   })
 
   // --- Toast 消息管理 ---

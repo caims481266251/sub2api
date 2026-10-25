@@ -32,12 +32,70 @@ type updateServiceGitHubClientStub struct {
 	release        *GitHubRelease
 	recentReleases []*GitHubRelease
 	recentErr      error
+	latestErr      error
 	latestRepo     string
 }
 
 func (s *updateServiceGitHubClientStub) FetchLatestRelease(_ context.Context, repo string) (*GitHubRelease, error) {
 	s.latestRepo = repo
-	return s.release, nil
+	return s.release, s.latestErr
+}
+
+func TestUpdateServiceCheckUpdateReportsLiveRestartState(t *testing.T) {
+	for _, scenario := range []string{"fresh-release", "cached-release", "offline-cached", "offline-no-cache"} {
+		t.Run(scenario, func(t *testing.T) {
+			cache := &updateServiceCacheStub{}
+			client := &updateServiceGitHubClientStub{release: &GitHubRelease{TagName: "v2.15.16"}}
+			svc := NewUpdateService(cache, client, "2.15.15", "release")
+			if scenario == "cached-release" || scenario == "offline-cached" {
+				_, err := svc.CheckUpdate(context.Background(), true)
+				require.NoError(t, err)
+			}
+			if scenario == "offline-cached" || scenario == "offline-no-cache" {
+				client.latestErr = errors.New("GitHub unavailable")
+			}
+			svc.restartRequired.Store(true)
+			info, err := svc.CheckUpdate(context.Background(), scenario != "cached-release")
+			require.NoError(t, err)
+			require.True(t, info.RestartRequired)
+			require.Equal(t, "2.15.15", info.CurrentVersion, "installed binary does not change the running version")
+			encoded, err := json.Marshal(info)
+			require.NoError(t, err)
+			require.Contains(t, string(encoded), `"restart_required":true`)
+			require.NotContains(t, cache.data, "restart_required", "do not persist process state in the shared release cache")
+			if scenario == "offline-cached" || scenario == "offline-no-cache" {
+				require.Contains(t, info.Warning, "GitHub unavailable")
+			}
+
+			// A restarted process must not inherit a previous process's pending flag.
+			restarted := NewUpdateService(cache, client, "2.15.16", "release")
+			after, err := restarted.CheckUpdate(context.Background(), false)
+			require.NoError(t, err)
+			require.False(t, after.RestartRequired)
+			require.Equal(t, "2.15.16", after.CurrentVersion)
+		})
+	}
+}
+
+func TestUpdateServiceCheckUpdateDoesNotWaitForInstallation(t *testing.T) {
+	svc := NewUpdateService(&updateServiceCacheStub{}, &updateServiceGitHubClientStub{
+		release: &GitHubRelease{TagName: "v2.15.16"},
+	}, "2.15.15", "release")
+	// Installation holds this lock during downloads and runtime preparation.
+	svc.installMu.Lock()
+	defer svc.installMu.Unlock()
+	done := make(chan *UpdateInfo, 1)
+	go func() {
+		info, _ := svc.CheckUpdate(context.Background(), true)
+		done <- info
+	}()
+	select {
+	case info := <-done:
+		require.NotNil(t, info)
+		require.False(t, info.RestartRequired)
+	case <-time.After(time.Second):
+		t.Fatal("checking update status must not wait for an in-progress installation")
+	}
 }
 
 func (s *updateServiceGitHubClientStub) FetchRecentReleases(context.Context, string, int) ([]*GitHubRelease, error) {

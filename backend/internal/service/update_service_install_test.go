@@ -77,7 +77,7 @@ func TestUpdateServicePendingRestartPrecedesReleaseLookup(t *testing.T) {
 			}
 			svc := NewUpdateService(&updateServiceCacheStub{}, client, "2.0.0", "release")
 			// The running version remains unchanged after an install or rollback.
-			svc.restartRequired = true
+			svc.restartRequired.Store(true)
 
 			var err error
 			if scenario == "version-rollback-offline" {
@@ -146,7 +146,7 @@ func runUpdateInstallScenario(t *testing.T, scenario string) {
 		before := updateInstallFileHashes(t, executable)
 		require.ErrorContains(t, update(), "require release checksums")
 		require.Equal(t, before, updateInstallFileHashes(t, executable))
-		require.False(t, svc.restartRequired)
+		require.False(t, svc.restartRequired.Load())
 		return
 	}
 	if scenario == "failed-update-retry" {
