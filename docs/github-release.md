@@ -1,14 +1,14 @@
 # GitHub 发布与在线更新
 
-本分支的发布仓库是 `caims481266251/sub2api`，持续发布分支为 `codex/vm-kernel-account-mode`。当前版本 `2.15.17` 移除调度启用／关闭的确认弹框，并修复在线更新成功后待重启状态丢失、重复更新误显示失败的问题。
+本分支的发布仓库是 `caims481266251/sub2api`，持续发布分支为 `codex/vm-kernel-account-mode`。当前版本 `2.15.18` 恢复 Docker 帐号的原有 HTTP 用量探测路径，保留快照过期刷新及探测节流。
 
 ## 发布方式
 
 在已验证的持续发布分支创建带说明的正式 tag，再原子推送分支与 tag：
 
 ```bash
-git tag -a v2.15.17 -m "Release v2.15.17" -m "本次更新说明"
-git push --atomic origin codex/vm-kernel-account-mode v2.15.17
+git tag -a v2.15.18 -m "Release v2.15.18" -m "本次更新说明"
+git push --atomic origin codex/vm-kernel-account-mode v2.15.18
 ```
 
 `.github/workflows/release.yml` 接收 `v*` tag，自动构建前端及 Windows AMD64、macOS AMD64/ARM64、Linux AMD64/ARM64 更新包，发布 `checksums.txt`、GitHub Release 和 GHCR 多架构镜像。正式 tag 固定完整发布，不能被仓库的 `SIMPLE_RELEASE` 变量降级为仅镜像模式。手动触发仍可选择 simple release，但该模式不提供系统内在线更新包。
@@ -24,7 +24,7 @@ git push --atomic origin codex/vm-kernel-account-mode v2.15.17
 Docker 部署可通过页面更新当前容器中的二进制；重新创建容器会恢复镜像内版本，因此持久升级还应更新 Compose 镜像 tag 并重新创建应用容器：
 
 ```yaml
-image: ghcr.io/caims481266251/sub2api:2.15.17
+image: ghcr.io/caims481266251/sub2api:2.15.18
 ```
 
 ```bash
@@ -194,3 +194,15 @@ OpenAI 隐私状态修复、Docker 内核检测与状态排版优化
 验证：相关后端更新服务定向回归及竞态检查通过，前端 51 项相关测试、类型检查通过；正式发布工作流构建五个平台更新包。专项验证不代表全量后端测试或线上压力测试。
 
 升级：相较 v2.15.16 无新增数据库迁移。包含五个平台更新包、checksums.txt、amd64/arm64 重登录运行包、Docker host tools 及多架构镜像。在线安装完成后需要重启服务生效；主程序与 Docker host tools 保持同版本。
+
+## v2.15.18 更新
+
+Docker 帐号用量探测恢复原有 HTTP 路径
+
+- 撤回 v2.15.16 将 Docker 帐号用量 Responses 探测改为经过容器内核的变更，恢复使用帐号 OAuth 凭据及配置代理，从上游 HTTP 响应头读取 5 小时和 7 天用量窗口。
+- 保留 Docker 帐号快照过期刷新及原有十分钟探测节流；缺少用量响应头时不写入零用量快照。
+- 业务推理、连接测试、质量检测及凭据守护继续使用绑定的容器内核。保留原有 HTTP 用量探测的限流恢复保护。
+
+验证：27 个顶层测试、共 105 项测试及子用例通过，包含竞态检查；本地 CONNECT 代理和 TLS 上游验证用量读取及保存，独立代码审查通过。未使用真实帐号额度做回归；专项验证不代表线上压力验收。
+
+升级：相较 v2.15.17 无新增数据库迁移。包含五个平台更新包、checksums.txt、amd64/arm64 重登录运行包、Docker host tools 及多架构镜像。在线安装后重启服务生效，主程序与 Docker host tools 保持同版本。

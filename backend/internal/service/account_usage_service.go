@@ -834,29 +834,8 @@ func (s *AccountUsageService) probeOpenAICodexSnapshot(ctx context.Context, acco
 		return nil, nil
 	}
 	observed := observeOpenAIQuotaRecovery(account, time.Now())
-	if account.IsVMKernel() {
-		probeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		defer cancel()
-		model := openaipkg.CodexUsageProbeModel
-		if !account.IsModelSupported(model) {
-			model = ""
-		}
-		result, probeErr := probeDockerKernelOpenAI(probeCtx, account, model)
-		if result == nil {
-			return nil, probeErr
-		}
-		if probeErr != nil || !result.Completed {
-			// Partial/error streams may contain zero-usage headers. They must
-			// never clear a cooldown, even when the kernel returned HTTP 200.
-			observed = nil
-		}
-		if snapshot := ParseCodexRateLimitHeaders(result.Headers); snapshot != nil {
-			updates := buildCodexUsageExtraUpdates(snapshot, time.Now())
-			s.persistOpenAICodexProbeSnapshot(account.ID, updates, observed)
-			return updates, nil
-		}
-		return nil, probeErr
-	}
+	// Usage management also uses the OAuth HTTP probe for Docker accounts:
+	// the kernel response does not reliably include the upstream quota headers.
 	accessToken := ""
 	if !account.IsOpenAIAgentIdentity() {
 		accessToken = account.GetOpenAIAccessToken()

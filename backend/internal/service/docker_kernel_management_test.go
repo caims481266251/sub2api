@@ -4,12 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	httppool "github.com/Wei-Shaw/sub2api/internal/pkg/httpclient"
+	openaipkg "github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
@@ -26,7 +33,7 @@ func installDockerKernelTestRuntime(t *testing.T, runtime *VMKernelService) {
 	})
 }
 
-func TestDockerKernelUsageProbeAndCredentialGuardUseBoundKernel(t *testing.T) {
+func TestDockerKernelCredentialGuardsUseBoundKernel(t *testing.T) {
 	var calls atomic.Int32
 	runtime, account := vmForwardFixture(t, PlatformOpenAI, func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/internal/v1/codex/responses", r.URL.Path)
@@ -48,63 +55,122 @@ func TestDockerKernelUsageProbeAndCredentialGuardUseBoundKernel(t *testing.T) {
 		a.Credentials["model_mapping"] = map[string]any{"gpt-6.1-sol": "gpt-6.1-sol"}
 	})
 	installDockerKernelTestRuntime(t, runtime)
-	usage := &AccountUsageService{}
-	updates, err := usage.probeOpenAICodexSnapshot(context.Background(), account)
-	require.NoError(t, err)
-	require.Equal(t, float64(25), updates["codex_5h_used_percent"])
 	// No model-list prober or host HTTP client is configured. Success therefore
-	// requires an actual second kernel execution, never a cached model catalog.
+	// requires actual kernel execution, never a cached model catalog.
 	guard := &AccountTokenGuardV2Service{}
 	state, _ := guard.probeAccount(context.Background(), account)
 	require.Equal(t, AccountTokenGuardV2ProbeOK, state)
 	legacy := (&AccountTokenGuardService{}).probe(context.Background(), AccountTokenGuardConfig{ProbeModel: "gpt-6.1-sol", ProbeTimeoutSeconds: 10}, account)
 	require.Equal(t, AccountTokenGuardProbeOK, legacy.State)
-	require.Equal(t, int32(3), calls.Load())
+	require.Equal(t, int32(2), calls.Load())
 	require.False(t, account.Schedulable)
 }
 
-func TestDockerKernelUsageProbeRecoveryRequiresCompletedStream(t *testing.T) {
-	for _, completed := range []bool{false, true} {
-		t.Run(fmt.Sprintf("completed_%v", completed), func(t *testing.T) {
-			runtime, account := vmForwardFixture(t, PlatformOpenAI, func(w http.ResponseWriter, r *http.Request) {
-				if strings.HasSuffix(r.URL.Path, "/cancel") {
-					return
-				}
+func TestDockerKernelUsageProbeUsesOAuthHTTPThroughAccountProxy(t *testing.T) {
+	previous, loaded := vmKernelServices.LoadAndDelete(PlatformOpenAI)
+	t.Cleanup(func() {
+		if loaded {
+			vmKernelServices.Store(PlatformOpenAI, previous)
+		}
+	})
+	for _, withHeaders := range []bool{true, false} {
+		t.Run(fmt.Sprintf("quota_headers_%v", withHeaders), func(t *testing.T) {
+			var upstreamCalls, proxyCalls atomic.Int32
+			upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				upstreamCalls.Add(1)
+				require.Equal(t, http.MethodPost, r.Method)
+				require.Equal(t, "chatgpt.com", r.Host)
+				require.Equal(t, "/backend-api/codex/responses", r.URL.Path)
+				require.Equal(t, "Bearer fixture-access", r.Header.Get("Authorization"))
+				require.Equal(t, "fixture-account", r.Header.Get("ChatGPT-Account-ID"))
+				body, err := io.ReadAll(r.Body)
+				require.NoError(t, err)
+				require.Equal(t, openaipkg.CodexUsageProbeModel, gjson.GetBytes(body, "model").String())
 				w.Header().Set("Content-Type", "text/event-stream")
-				w.Header().Set("x-codex-primary-used-percent", "0")
-				w.Header().Set("x-codex-primary-window-minutes", "300")
-				w.Header().Set("x-codex-secondary-used-percent", "0")
-				w.Header().Set("x-codex-secondary-window-minutes", "10080")
-				events := vmForwardEvents("responses")
-				if !completed {
-					events = events[:len(events)-1]
+				if withHeaders {
+					w.Header().Set("x-codex-primary-used-percent", "25")
+					w.Header().Set("x-codex-primary-window-minutes", "300")
+					w.Header().Set("x-codex-secondary-used-percent", "40")
+					w.Header().Set("x-codex-secondary-window-minutes", "10080")
 				}
-				for _, event := range events {
-					fmt.Fprintf(w, "data: %s\n\n", event)
-				}
-			}, func(a *Account) {
-				limited, reset := time.Now().Add(-time.Hour), time.Now().Add(time.Hour)
-				a.RateLimitedAt, a.RateLimitResetAt = &limited, &reset
+				fmt.Fprint(w, "data: [DONE]\n\n")
+			}))
+			t.Cleanup(upstream.Close)
+			proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				proxyCalls.Add(1)
+				require.Equal(t, http.MethodConnect, r.Method)
+				require.Equal(t, "chatgpt.com:443", r.Host)
+				remote, err := net.DialTimeout("tcp", upstream.Listener.Addr().String(), time.Second)
+				require.NoError(t, err)
+				defer remote.Close()
+				conn, buffered, err := w.(http.Hijacker).Hijack()
+				require.NoError(t, err)
+				defer conn.Close()
+				_, err = buffered.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n")
+				require.NoError(t, err)
+				require.NoError(t, buffered.Flush())
+				done := make(chan struct{})
+				go func() {
+					_, _ = io.Copy(remote, buffered)
+					_ = remote.Close()
+					close(done)
+				}()
+				_, _ = io.Copy(conn, remote)
+				_ = conn.Close()
+				<-done
+			}))
+			t.Cleanup(proxy.Close)
+			proxyURL, err := url.Parse(proxy.URL)
+			require.NoError(t, err)
+			port, err := strconv.Atoi(proxyURL.Port())
+			require.NoError(t, err)
+			account := quotaRecoveryAccount()
+			account.ExecutionMode = AccountExecutionModeDockerKernel
+			account.Credentials = map[string]any{"access_token": "fixture-access", "chatgpt_account_id": "fixture-account"}
+			account.Proxy = &Proxy{ID: 1, Protocol: "http", Host: proxyURL.Hostname(), Port: port}
+			account.ProxyID = &account.Proxy.ID
+			// This unique proxy owns its pooled client. Trust only the local TLS
+			// fixture while keeping the real CONNECT and OAuth request paths.
+			client, err := httppool.GetClient(httppool.Options{ProxyURL: proxy.URL, Timeout: 15 * time.Second, ResponseHeaderTimeout: 10 * time.Second})
+			require.NoError(t, err)
+			transport := upstream.Client().Transport.(*http.Transport).Clone()
+			transport.Proxy = http.ProxyURL(proxyURL)
+			transport.TLSClientConfig.ServerName = upstream.Certificate().DNSNames[0]
+			client.Transport = transport
+			t.Cleanup(func() {
+				transport.CloseIdleConnections()
+				httppool.EvictProxyClients(proxy.URL)
 			})
-			installDockerKernelTestRuntime(t, runtime)
-			repo := &quotaRecoveryTestRepo{account: *account}
-			svc := &AccountUsageService{accountRepo: repo}
-			updates, err := svc.probeOpenAICodexSnapshot(context.Background(), account)
-			require.NoError(t, err, "error streams may still update the display snapshot")
-			require.Equal(t, float64(0), updates["codex_5h_used_percent"])
-			require.Eventually(t, func() bool {
-				repo.mu.Lock()
-				defer repo.mu.Unlock()
-				return repo.writes > 0 && (!completed || repo.clears > 0)
-			}, time.Second, time.Millisecond)
+			repo := &quotaRecoveryTestRepo{account: account}
+			updates, err := (&AccountUsageService{accountRepo: repo}).probeOpenAICodexSnapshot(context.Background(), &account)
+			require.NoError(t, err)
+			require.Equal(t, int32(1), upstreamCalls.Load())
+			require.Equal(t, int32(1), proxyCalls.Load())
+			if withHeaders {
+				require.Equal(t, float64(25), updates["codex_5h_used_percent"])
+				require.Equal(t, float64(40), updates["codex_7d_used_percent"])
+				require.Eventually(t, func() bool {
+					repo.mu.Lock()
+					defer repo.mu.Unlock()
+					return repo.writes == 1
+				}, time.Second, time.Millisecond)
+			} else {
+				require.Empty(t, updates, "missing headers must not become a zero-usage snapshot")
+			}
 			repo.mu.Lock()
 			defer repo.mu.Unlock()
-			require.Equal(t, completed, repo.account.RateLimitResetAt == nil)
+			require.NotNil(t, repo.account.RateLimitResetAt)
+			require.Zero(t, repo.clears)
+			if withHeaders {
+				require.Equal(t, updates, repo.account.Extra)
+			} else {
+				require.Zero(t, repo.writes)
+			}
 		})
 	}
 }
 
-func TestDockerKernelManagementNeverFallsBackWithoutRuntime(t *testing.T) {
+func TestDockerKernelCredentialGuardsNeverFallBackWithoutRuntime(t *testing.T) {
 	previous, loaded := vmKernelServices.LoadAndDelete(PlatformOpenAI)
 	t.Cleanup(func() {
 		if loaded {
@@ -112,8 +178,6 @@ func TestDockerKernelManagementNeverFallsBackWithoutRuntime(t *testing.T) {
 		}
 	})
 	account := &Account{ID: 123, Platform: PlatformOpenAI, Type: AccountTypeOAuth, ExecutionMode: AccountExecutionModeDockerKernel}
-	_, err := (&AccountUsageService{}).probeOpenAICodexSnapshot(context.Background(), account)
-	require.ErrorContains(t, err, "kernel runtime is unavailable")
 	state, _ := (&AccountTokenGuardV2Service{}).probeAccount(context.Background(), account)
 	require.Equal(t, AccountTokenGuardV2ProbeTransient, state)
 	legacy := (&AccountTokenGuardService{}).probe(context.Background(), AccountTokenGuardConfig{ProbeTimeoutSeconds: 10}, account)
