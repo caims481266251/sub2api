@@ -335,6 +335,14 @@ func TestBorrowSharedPoolSourceThroughNormalPublication(t *testing.T) {
 		require.Contains(t, call.header.Get("Cookie"), cookie)
 	}
 	require.NotNil(t, base.route)
+	require.Contains(t, []string{"gpt-6-astra", "gpt-6.1-sol", "gpt-5.6-sol"}, base.route.VerificationModel)
+	for _, call := range up.calls[1:] {
+		var body struct {
+			Model string `json:"model"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(call.body), &body))
+		require.Equal(t, base.route.VerificationModel, body.Model, "mint, continue and publication must agree")
+	}
 	require.Equal(t, "neutral-candidate", base.route.CandidateID)
 	require.Equal(t, r.saved.SourceCredentialHash, base.route.SourceCredentialHash)
 	require.Equal(t, r.saved.SourceSubjectHash, base.route.SourceSubjectHash)

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -942,21 +943,21 @@ func (s *TicketBorrowService) runTarget(parent context.Context, target BorrowTar
 		}
 		return nil
 	}))
-	targetModel := normalizeOpenAIModelForUpstream(account, account.GetMappedModel(OpenAICodexStateProbeDefaultModel))
 	policy := target.ProbePolicy.effective()
 	ctx = withBorrowProbeSlots(ctx, policy.Concurrency)
 	type candidate = borrowProbeCandidate
 	targetEnvironment := borrowEnvironment(template, proxy, profile)
-	targetEnvironment.BodyHash = borrowHash(string(openAICodexStateProbeBody(targetModel)))
 	emitCandidate := func(c candidate, stage, outcome string) {
+		targetModel := c.details.VerificationModel
 		c.details.Business = targetEnvironment
+		c.details.Business.BodyHash = borrowHash(string(openAICodexStateProbeBody(targetModel)))
 		if env := c.details.Environment; env != nil && env.Fingerprint != nil {
 			business := template.Clone(ctx)
 			env.Fingerprint.Apply(business.Header, targetModel)
 			c.details.Business = borrowEnvironment(business, openAIAccountProxyURL(account), env.Fingerprint.Profile)
 			c.details.Business.TLSConfigHash, c.details.Business.TLSStructureHash = BorrowTLSFingerprintHashes(env.Fingerprint.Profile)
 			c.details.Business.FingerprintGenerator = env.Fingerprint.Generator
-			c.details.Business.BodyHash = targetEnvironment.BodyHash
+			c.details.Business.BodyHash = borrowHash(string(openAICodexStateProbeBody(targetModel)))
 		}
 		c.details.TargetIdentityHash = identity
 		c.details.TargetRevision = target.Revision
@@ -1004,6 +1005,8 @@ func (s *TicketBorrowService) runTarget(parent context.Context, target BorrowTar
 	var seenMu sync.Mutex
 	seen := make(map[string]time.Time)
 	verify := func(c candidate) verification {
+		targetModel := borrowCandidateVerificationModel()
+		c.details.VerificationModel = targetModel
 		// Preparation and HTTP validation share one per-candidate budget.
 		ctx, stopVerification := context.WithTimeoutCause(ctx, BorrowCandidateVerificationLimit, borrowCancelValidationDeadline)
 		defer stopVerification()
@@ -1172,6 +1175,7 @@ func (s *TicketBorrowService) runTarget(parent context.Context, target BorrowTar
 		processed = true
 		defer releaseCandidate(out.candidate)
 		c, result := out.candidate, out.result
+		targetModel := c.details.VerificationModel
 		if result == nil {
 			reason = out.reason
 			if diagnostic && out.scanned {
@@ -1828,4 +1832,11 @@ func (s *TicketBorrowService) targetIdentity(a *Account) string {
 		}
 	}
 	return base
+}
+
+// Pick once per candidate. The captured model is shared by mint, continue,
+// retries, diagnostics and publication; quality checks have their own setting.
+func borrowCandidateVerificationModel() string {
+	models := [...]string{"gpt-6-astra", "gpt-6.1-sol", "gpt-5.6-sol"}
+	return models[rand.IntN(len(models))]
 }

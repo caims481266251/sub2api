@@ -176,6 +176,7 @@ type BorrowEnvironment struct {
 }
 
 type BorrowCandidateDetails struct {
+	VerificationModel      string                      `json:"verification_model,omitempty"`
 	Quality                *BorrowRouteQualityResult   `json:"quality,omitempty"`
 	PoolEnqueuedAt         *time.Time                  `json:"pool_enqueued_at,omitempty"`
 	PoolClaimedAt          *time.Time                  `json:"pool_claimed_at,omitempty"`
