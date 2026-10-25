@@ -71,6 +71,24 @@ Docker restores existing containers after a host restart.
 | `REDIS_URL` | Redis connection string | Yes | - |
 | `PORT` | Server port | No | `8080` |
 | `GIN_MODE` | Gin framework mode (`debug`/`release`) | No | `release` |
+| `GOMEMLIMIT` | Go runtime soft memory target; `off` disables the target | No | `off` |
+
+## Memory Defaults
+
+The Sub2API runtime images and Compose templates default to `GOMEMLIMIT=off`.
+This disables the Go runtime soft memory target; ordinary garbage collection
+remains enabled. Compose passes the value from `.env` or the shell, with `off`
+as the fallback. An explicit value such as `512MiB` still takes precedence.
+
+The main-service Compose templates do not set a Docker memory hard limit.
+`mem_limit` / `deploy.resources.limits.memory` are separate deployment settings.
+Account kernel containers retain their independent `VM_KERNEL_MEMORY_MIB` budget;
+changing `GOMEMLIMIT` does not change that budget. Kubernetes Pod resource limits
+are also configured separately.
+
+Existing containers keep the environment and resource settings they were created
+with. Updating the application binary alone does not change them; update the
+deployment configuration and recreate the main service to apply new defaults.
 
 ## Supported Architectures
 

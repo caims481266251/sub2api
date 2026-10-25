@@ -25,6 +25,8 @@ services:
       - ./data:/app/data:Z
     environment:
       - AUTO_SETUP=true
+      # Go runtime soft memory target; disabled unless explicitly configured.
+      - GOMEMLIMIT=${GOMEMLIMIT:-off}
       - SERVER_HOST=0.0.0.0
       - SERVER_PORT=8080
       - SERVER_MODE=debug

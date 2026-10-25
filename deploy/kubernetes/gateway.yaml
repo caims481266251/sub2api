@@ -87,7 +87,8 @@ spec:
             - {name: REDIS_MIN_IDLE_CONNS, value: "4"}
             - {name: LOG_OUTPUT_TO_FILE, value: "false"}
             - {name: GOMAXPROCS, value: "2"}
-            - {name: GOMEMLIMIT, value: 1400MiB}
+            # Go soft memory target is disabled; Pod resource limits are separate.
+            - {name: GOMEMLIMIT, value: "off"}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

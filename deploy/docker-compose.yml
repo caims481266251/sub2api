@@ -42,6 +42,8 @@ services:
       # Auto Setup (REQUIRED for Docker deployment)
       # =======================================================================
       - AUTO_SETUP=true
+      # Go runtime soft memory target; disabled unless explicitly configured.
+      - GOMEMLIMIT=${GOMEMLIMIT:-off}
 
       # =======================================================================
       # Server Configuration

@@ -1,14 +1,14 @@
 # GitHub 发布与在线更新
 
-本分支的发布仓库是 `caims481266251/sub2api`，持续发布分支为 `codex/vm-kernel-account-mode`。当前版本 `2.15.18` 恢复 Docker 帐号的原有 HTTP 用量探测路径，保留快照过期刷新及探测节流。
+本分支的发布仓库是 `caims481266251/sub2api`，持续发布分支为 `codex/vm-kernel-account-mode`。当前版本 `2.15.19` 将主服务 Go 内存软目标的部署默认值明确设为关闭，保留管理员显式配置和独立容器资源预算。
 
 ## 发布方式
 
 在已验证的持续发布分支创建带说明的正式 tag，再原子推送分支与 tag：
 
 ```bash
-git tag -a v2.15.18 -m "Release v2.15.18" -m "本次更新说明"
-git push --atomic origin codex/vm-kernel-account-mode v2.15.18
+git tag -a v2.15.19 -m "Release v2.15.19" -m "本次更新说明"
+git push --atomic origin codex/vm-kernel-account-mode v2.15.19
 ```
 
 `.github/workflows/release.yml` 接收 `v*` tag，自动构建前端及 Windows AMD64、macOS AMD64/ARM64、Linux AMD64/ARM64 更新包，发布 `checksums.txt`、GitHub Release 和 GHCR 多架构镜像。正式 tag 固定完整发布，不能被仓库的 `SIMPLE_RELEASE` 变量降级为仅镜像模式。手动触发仍可选择 simple release，但该模式不提供系统内在线更新包。
@@ -24,7 +24,7 @@ git push --atomic origin codex/vm-kernel-account-mode v2.15.18
 Docker 部署可通过页面更新当前容器中的二进制；重新创建容器会恢复镜像内版本，因此持久升级还应更新 Compose 镜像 tag 并重新创建应用容器：
 
 ```yaml
-image: ghcr.io/caims481266251/sub2api:2.15.18
+image: ghcr.io/caims481266251/sub2api:2.15.19
 ```
 
 ```bash
@@ -206,3 +206,16 @@ Docker 帐号用量探测恢复原有 HTTP 路径
 验证：27 个顶层测试、共 105 项测试及子用例通过，包含竞态检查；本地 CONNECT 代理和 TLS 上游验证用量读取及保存，独立代码审查通过。未使用真实帐号额度做回归；专项验证不代表线上压力验收。
 
 升级：相较 v2.15.17 无新增数据库迁移。包含五个平台更新包、checksums.txt、amd64/arm64 重登录运行包、Docker host tools 及多架构镜像。在线安装后重启服务生效，主程序与 Docker host tools 保持同版本。
+
+## v2.15.19 更新
+
+主服务 Go 内存软目标默认关闭
+
+- 主服务运行镜像、四种 Compose 模板和环境示例统一默认 GOMEMLIMIT=off，关闭 Go 运行时内存软目标，正常垃圾回收继续工作。
+- Compose 未配置或值为空时采用 off；管理员显式配置的值仍优先。主服务 Compose 模板继续不设置 Docker 内存硬上限。
+- Kubernetes gateway 示例同步关闭 Go 软目标；Pod 硬限额、帐号内核容器的独立内存预算及其他服务资源设置保持原有行为。
+- 保留 v2.15.18 的 Docker 帐号 HTTP 用量探测回退和此前已发布功能。
+
+验证：四种 Compose 的默认关闭、空值回退、显式覆盖以及无主服务硬限额检查通过；运行镜像与 Kubernetes 配置检查通过，独立配置审查通过。仅修改部署默认值和文档，无业务 Go 代码改动。
+
+升级说明：相较 v2.15.18 无新增数据库迁移。在线更新替换程序后需重启生效，但不会修改现有容器环境变量、Compose 或 cgroup 限制；已有 GOMEMLIMIT 或 mem_limit 配置需由管理员修改部署配置并重建主容器。新默认值适用于采用新版镜像和部署模板的新建容器。主程序与 Docker host tools 保持同版本。
