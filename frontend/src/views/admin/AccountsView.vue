@@ -2094,7 +2094,6 @@ const handleTimerExecuted = () => {
   }, 150)
 }
 const handleBulkToggleSchedulable = async (schedulable: boolean) => {
-  if (!window.confirm(t('admin.accounts.timer.manualWarning'))) return
   const accountIds = [...selIds.value]
   try {
     const result = await adminAPI.accounts.bulkUpdate(accountIds, { schedulable })
@@ -2572,7 +2571,6 @@ const confirmCreateSparkShadow = async () => {
 const handleDelete = (a: Account) => { deletingAcc.value = a; showDeleteDialog.value = true }
 const confirmDelete = async () => { if(!deletingAcc.value) return; try { await adminAPI.accounts.delete(deletingAcc.value.id); showDeleteDialog.value = false; deletingAcc.value = null; reload() } catch (error) { console.error('Failed to delete account:', error) } }
 const handleToggleSchedulable = async (a: Account) => {
-  if (!window.confirm(t('admin.accounts.timer.manualWarning'))) return
   const nextSchedulable = !a.schedulable
   togglingSchedulable.value = a.id
   try {

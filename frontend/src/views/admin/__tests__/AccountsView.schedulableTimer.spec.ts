@@ -3,6 +3,8 @@ import { flushPromises, mount } from '@vue/test-utils'
 
 import AccountsView from '../AccountsView.vue'
 
+vi.mock('@/api/admin/accountActivity', () => ({ getAccountActivity: vi.fn().mockResolvedValue([]) }))
+
 const {
   listAccounts,
   listWithEtag,
@@ -72,7 +74,7 @@ vi.mock('vue-i18n', async () => {
   }
 })
 
-// Render the scheduler-score cell slot for every row so the fallback logic is observable.
+// Render each scheduling cell so the immediate switch and timer refresh are observable.
 const DataTableStub = {
   props: ['columns', 'data'],
   template: `
@@ -156,31 +158,34 @@ beforeEach(() => {
   bulkUpdate.mockResolvedValue({ success: 1, failed: 0, success_ids: [7], failed_ids: [] })
 })
 afterEach(() => { wrapper?.unmount(); vi.restoreAllMocks() })
-describe('account manual scheduling warnings', () => {
-  it('leaves the immediate switch untouched when cancellation is declined', async () => {
+describe('account immediate scheduling', () => {
+  it.each([true, false])('toggles a currently %s account without confirmation and refreshes plans', async (schedulable) => {
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
-    wrapper = mountView()
-    await flushPromises()
-    await wrapper.get('[data-test="scheduling-7"] button').trigger('click')
-    expect(confirm).toHaveBeenCalledWith('admin.accounts.timer.manualWarning')
-    expect(setSchedulable).not.toHaveBeenCalled()
-  })
-  it('confirms the immediate switch and refreshes plans after its atomic backend update', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    listAccounts.mockResolvedValue({ items: [{ ...baseAccount, id: 7, name: 'timer-fixture', schedulable }], total: 1, page: 1, page_size: 20, pages: 1 })
+    setSchedulable.mockResolvedValue({ ...baseAccount, id: 7, schedulable: !schedulable })
     wrapper = mountView()
     await flushPromises()
     await wrapper.get('[data-test="scheduling-7"] button').trigger('click')
     await flushPromises()
-    expect(setSchedulable).toHaveBeenCalledWith(7, false)
+    expect(confirm).not.toHaveBeenCalled()
+    expect(setSchedulable).toHaveBeenCalledTimes(1)
+    expect(setSchedulable).toHaveBeenCalledWith(7, !schedulable)
+    expect(wrapper.get('[data-test="scheduling-7"] button').attributes('aria-checked')).toBe(String(!schedulable))
     expect(wrapper.findComponent({ name: 'SchedulableTimerControl' }).props('refreshKey')).toBe(1)
   })
-  it('also warns before batch immediate switching', async () => {
+  it.each([true, false])('sets bulk scheduling to %s without confirmation and refreshes plans', async (schedulable) => {
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
     wrapper = mountView()
     await flushPromises()
-    wrapper.findComponent({ name: 'AccountBulkActionsBar' }).vm.$emit('toggle-schedulable', false)
+    const bulkActions = wrapper.findComponent({ name: 'AccountBulkActionsBar' })
+    bulkActions.vm.$emit('select-page')
     await flushPromises()
-    expect(confirm).toHaveBeenCalledWith('admin.accounts.timer.manualWarning')
-    expect(bulkUpdate).not.toHaveBeenCalled()
+    bulkActions.vm.$emit('toggle-schedulable', schedulable)
+    await flushPromises()
+    expect(confirm).not.toHaveBeenCalled()
+    expect(bulkUpdate).toHaveBeenCalledTimes(1)
+    expect(bulkUpdate).toHaveBeenCalledWith([7], { schedulable })
+    expect(wrapper.get('[data-test="scheduling-7"] button').attributes('aria-checked')).toBe(String(schedulable))
+    expect(wrapper.findComponent({ name: 'SchedulableTimerControl' }).props('refreshKey')).toBe(1)
   })
 })
