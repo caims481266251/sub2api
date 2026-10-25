@@ -381,6 +381,7 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 			trimmedPayload := strings.TrimSpace(payload)
 			BorrowBusinessRecoveryFromContext(c.Request.Context()).ObserveSSE(c.Request.Context(), []byte(payload), "")
 			terminal.ObserveDataLine(trimmedPayload)
+			observeRecentJSON(recentRequestResponseContext(c.Request.Context(), resp), []byte(trimmedPayload))
 			if trimmedPayload == "[DONE]" && c.Request != nil {
 				regionalMeterObserveUsage(c.Request.Context(), regionalUsagePayload, "json")
 			}
@@ -391,6 +392,7 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 					regionalUsagePayload = []byte(payload)
 					usage = *u
 				}
+				observeRecentRequest(recentRequestResponseContext(c.Request.Context(), resp), recentChatChunkHasOutput([]byte(payload)), "")
 				if firstTokenMs == nil && !usageOnlyChunk {
 					elapsed := int(time.Since(startTime).Milliseconds())
 					firstTokenMs = &elapsed
@@ -449,7 +451,11 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 	// 上游在任何终止信号之前结束：连接被 reset（scanErr != nil）或干净 EOF。
 	// 两者都不能再记成功——此前统一返回 nil error，把上游截断伪装成
 	// `HTTP 200 + usage 0/0`，客户端收到半截回答且 Ops 侧完全无感。
+	if clientAborted {
+		recentRequestFailed(recentRequestResponseContext(c.Request.Context(), resp), context.Canceled)
+	}
 	if !clientAborted && terminal.IsTruncated(clientOutputStarted) {
+		observeRecentRequest(recentRequestResponseContext(c.Request.Context(), resp), false, "incomplete")
 		cause := scanErr
 		if cause == nil {
 			cause = ErrOpenAIUpstreamStreamTruncated
@@ -560,6 +566,7 @@ func (s *OpenAIGatewayService) bufferRawChatCompletions(
 		observer = beginUpstreamResponseModelObservation(c)
 	}
 	observer.ObserveOpenAI(respBody, strings.TrimSpace(gjson.GetBytes(respBody, "type").String()))
+	observeRecentJSON(recentRequestResponseContext(c.Request.Context(), resp), respBody)
 	if c.Request != nil {
 		regionalMeterObserveUsage(c.Request.Context(), respBody, "json")
 	}

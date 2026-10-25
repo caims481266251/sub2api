@@ -1679,7 +1679,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	}
 
 	var rejectedFieldRetryState *openAIResponsesRejectedFieldRetryState
-	sendAndRelay := func(turn int, lease *openAIWSConnLease, payload []byte, payloadBytes int, originalModel string, imageBillingModel string, imageSizeTier string, imageInputSize string, requestedReasoningEffort *string) (*OpenAIForwardResult, error) {
+	sendAndRelay := func(turn int, lease *openAIWSConnLease, payload []byte, payloadBytes int, originalModel string, imageBillingModel string, imageSizeTier string, imageInputSize string, requestedReasoningEffort *string) (recentResult *OpenAIForwardResult, recentErr error) {
 		responseModelObserver := &upstreamResponseModelObserver{}
 		if lease == nil {
 			return nil, errors.New("upstream websocket lease is nil")
@@ -1714,6 +1714,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		if err := regionalMeterBeforeSend(ctx); err != nil {
 			return nil, err
 		}
+		recentAttempt := beginAccountRequestAttempt(withRecentRequestScope(ctx, latest, codexAccountIdentitySource(c, latest)), s.recentRequests, latest, gjson.GetBytes(payload, "model").String())
+		defer func() { recentAttempt.finish(recentErr) }()
 		if err := lease.WriteJSONWithContextTimeout(ctx, json.RawMessage(payload), s.openAIWSWriteTimeout()); err != nil {
 			return nil, wrapOpenAIWSIngressTurnError(
 				"write_upstream",
@@ -1780,6 +1782,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 
 			eventType, eventResponseID, _ := parseOpenAIWSEventEnvelope(upstreamMessage)
 			responseModelObserver.ObserveOpenAI(upstreamMessage, eventType)
+			observeRecentWSEvent(recentAttempt, upstreamMessage, eventType, s.openAITTFTMode(ctx))
 			if responseID == "" && eventResponseID != "" {
 				responseID = eventResponseID
 			}

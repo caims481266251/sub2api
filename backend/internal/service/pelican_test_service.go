@@ -22,6 +22,13 @@ type pelicanTestOptions struct {
 	reasoningEffort string
 	testChannel     string
 	observeOnly     bool
+	strictComplete  bool
+}
+
+// Strict completion is independent from ModelTrace's payload and identity rules.
+func accountTestRequiresNormalFinish(ctx context.Context) bool {
+	options, _ := pelicanTestOptionsFromContext(ctx)
+	return options.strictComplete || modelTraceRequested(ctx)
 }
 
 func withPelicanTestOptions(ctx context.Context, options pelicanTestOptions) context.Context {

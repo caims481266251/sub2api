@@ -642,6 +642,7 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 		observer = beginUpstreamResponseModelObservation(c)
 	}
 	observer.Observe(finalResponse.Model, true)
+	observeRecentTerminal(recentRequestResponseContext(c.Request.Context(), resp), finalResponse.Status == "completed" && finalResponse.Error == nil)
 	observer.ObserveServiceTier(finalResponse.ServiceTier, true)
 
 	if strings.TrimSpace(finalResponse.Status) == "failed" {
@@ -878,6 +879,7 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 					var event apicompat.ResponsesStreamEvent
 					if err := json.Unmarshal([]byte(payload), &event); err == nil {
 						s.parseSSEUsageBytesWithType([]byte(payload), event.Type, &usage)
+						observeRecentProtocolEvent(recentRequestResponseContext(c.Request.Context(), resp), []byte(payload), event.Type, s.openAITTFTMode(c.Request.Context()))
 						acc.ProcessEvent(&event)
 						if response := openAICompatTerminalResponse(&event, []byte(payload)); isOpenAICompatResponsesTerminalEvent(event.Type) && response != nil {
 							if event.Usage != nil {
@@ -926,6 +928,7 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 				continue
 			}
 			s.parseSSEUsageBytesWithType([]byte(payload), event.Type, &usage)
+			observeRecentProtocolEvent(recentRequestResponseContext(c.Request.Context(), resp), []byte(payload), event.Type, s.openAITTFTMode(c.Request.Context()))
 
 			acc.ProcessEvent(&event)
 
@@ -1050,6 +1053,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			return false
 		}
 		observer.ObserveOpenAI([]byte(payload), event.Type)
+		observeRecentProtocolEvent(recentRequestResponseContext(c.Request.Context(), resp), []byte(payload), event.Type, s.openAITTFTMode(c.Request.Context()))
 		s.parseSSEUsageBytesWithType([]byte(payload), event.Type, &usage)
 
 		eventType := strings.TrimSpace(event.Type)

@@ -149,6 +149,9 @@ func (b *Bridge) transformWithRepairs(ctx context.Context, reader io.Reader, wri
 		if kind == "" {
 			kind = event
 		}
+		if observer, ok := reader.(interface{ ObserveOpenAIEvent([]byte, string) }); ok {
+			observer.ObserveOpenAIEvent(data, kind)
+		}
 		if b.structured != nil && kind == "response.completed" {
 			if response, ok := payload["response"].(object); !ok || response == nil {
 				return fmt.Errorf("basispoints structured output is missing its terminal response")
@@ -203,6 +206,11 @@ func (b *Bridge) transformWithRepairs(ctx context.Context, reader io.Reader, wri
 				validation := b.validateToolResponse(response)
 				if validation != nil {
 					failureStage = "bridge_tool_validation"
+				}
+				if validation != nil {
+					if observer, ok := reader.(interface{ ObserveOpenAIError(error) }); ok {
+						observer.ObserveOpenAIError(validation)
+					}
 				}
 				var rejected unknownClientToolError
 				if errors.As(validation, &rejected) {
@@ -294,6 +302,9 @@ func (b *Bridge) transformWithRepairs(ctx context.Context, reader io.Reader, wri
 		return nil
 	})
 	if err != nil && !errors.Is(err, io.EOF) {
+		if observer, ok := reader.(interface{ ObserveOpenAIError(error) }); ok {
+			observer.ObserveOpenAIError(err)
+		}
 		var invalid protocolError
 		if errors.Is(err, io.ErrClosedPipe) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || !errors.As(err, &invalid) {
 			return err
@@ -319,6 +330,9 @@ func (b *Bridge) transformWithRepairs(ctx context.Context, reader io.Reader, wri
 		return emit("response.failed", object{"response": failed})
 	}
 	if !terminal {
+		if observer, ok := reader.(interface{ ObserveOpenAIError(error) }); ok {
+			observer.ObserveOpenAIError(io.ErrUnexpectedEOF)
+		}
 		return io.ErrUnexpectedEOF
 	}
 	return nil

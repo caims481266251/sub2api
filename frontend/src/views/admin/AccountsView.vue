@@ -291,9 +291,12 @@
             <AccountCapacityCell :account="row" :concurrency-upgrade-enabled="concurrencyUpgradeEnabled" />
           </template>
           <template #cell-status="{ row }">
-            <div class="flex items-center gap-1.5">
-              <AccountStatusIndicator :account="row" :global-bps-enabled="appStore.cachedPublicSettings?.excel_bps_enabled !== false" @show-temp-unsched="handleShowTempUnsched" />
-              <TicketBorrowStatusBadge v-if="row.platform === 'openai'" :account-id="row.parent_account_id || row.id" />
+            <div class="min-w-0 space-y-2">
+              <div class="flex items-center gap-1.5">
+                <AccountStatusIndicator :account="row" :global-bps-enabled="appStore.cachedPublicSettings?.excel_bps_enabled !== false" @show-temp-unsched="handleShowTempUnsched" />
+                <TicketBorrowStatusBadge v-if="row.platform === 'openai'" :account-id="row.parent_account_id || row.id" />
+              </div>
+              <OpenAIAccountActivity v-if="row.platform === 'openai'" :activity="accountActivity[row.id]" :stale="activityStale" :loading="activityLoading" @open-quality="qualityAccount = row" />
             </div>
           </template>
           <template #cell-schedulable="{ row }">
@@ -466,6 +469,7 @@
     <ReAuthAccountModal :show="showReAuth" :account="reAuthAcc" @close="closeReAuthModal" @reauthorized="handleAccountUpdated" />
     <AccountTestModal :show="showTest" :account="testingAcc" @close="closeTestModal" @tested="reload" />
     <AccountStatsModal :show="showStats" :account="statsAcc" @close="closeStatsModal" />
+    <AccountQualityMonitorDialog :show="qualityAccount !== null" :account="qualityAccount" :summary="qualityAccount ? accountActivity[qualityAccount.id]?.quality : undefined" @close="qualityAccount = null" @updated="updateActivityQuality" />
     <IQTestModal :show="showIQTest" :account="iqTestingAcc" :accounts="accounts" @close="closeIQTestModal" />
     <ScheduledTestsPanel :show="showSchedulePanel" :account-id="scheduleAcc?.id ?? null" :model-options="scheduleModelOptions" @close="closeSchedulePanel" />
     <AccountActionMenu :show="menu.show" :account="menu.acc" :anchor-rect="menu.anchorRect" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @iq-test="handleIQTest" @duplicate="handleDuplicateAccount" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" @create-spark-shadow="handleCreateSparkShadow" />
@@ -507,6 +511,7 @@ import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { adminAPI } from '@/api/admin'
 import { useTableLoader } from '@/composables/useTableLoader'
+import { useAccountActivity } from '@/composables/useAccountActivity'
 import { useSwipeSelect, type SwipeSelectVirtualContext } from '@/composables/useSwipeSelect'
 import { useTableSelection } from '@/composables/useTableSelection'
 import { useStepUp, isStepUpBlocked, isStepUpCancelled, stepUpBlockReason } from '@/composables/useStepUp'
@@ -532,6 +537,8 @@ import IQTestModal from '@/components/admin/account/IQTestModal.vue'
 import ScheduledTestsPanel from '@/components/admin/account/ScheduledTestsPanel.vue'
 import type { SelectOption } from '@/components/common/Select.vue'
 import AccountStatusIndicator from '@/components/account/AccountStatusIndicator.vue'
+import OpenAIAccountActivity from '@/components/account/OpenAIAccountActivity.vue'
+import AccountQualityMonitorDialog from '@/components/account/AccountQualityMonitorDialog.vue'
 import TicketBorrowStatusBadge from '@/components/account/TicketBorrowStatusBadge.vue'
 import AccountUsageCell from '@/components/account/AccountUsageCell.vue'
 import AccountTodayStatsCell from '@/components/account/AccountTodayStatsCell.vue'
@@ -1135,6 +1142,9 @@ const {
   }
 })
 
+const qualityAccount = ref<{ id: number; name: string } | null>(null)
+const { byAccount: accountActivity, stale: activityStale, loading: activityLoading, setQuality: updateActivityQuality } = useAccountActivity(accounts)
+
 const {
   selectedSet,
   selectedIds: selIds,
@@ -1411,6 +1421,7 @@ watch(accounts, (rows) => {
 
 const isAnyModalOpen = computed(() => {
   return (
+    qualityAccount.value !== null ||
     newAPIConfigAccount.value !== null ||
     showCreate.value ||
     showEdit.value ||

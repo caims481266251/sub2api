@@ -167,6 +167,7 @@ type AccountTestService struct {
 	bpsProbeAccounts          map[int64]struct{}
 	stateProbeAccounts        sync.Map
 	modelTraceAccounts        sync.Map
+	recentRequests            AccountRecentRequestsCache
 	agentIdentityTaskMu       sync.Mutex
 	agentIdentityWS           agentIdentityWSConnectionInvalidator
 	// grokWSDialer is optional; realtime account tests use the default OpenAI-style
@@ -393,6 +394,17 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 	account, err := s.accountRepo.GetByID(ctx, accountID)
 	if err != nil {
 		return s.sendErrorAndEnd(c, "Account not found")
+	}
+	if expected, ok := ctx.Value(accountQualityScopeContextKey{}).(string); ok {
+		credentialAccount, resolveErr := resolveCredentialAccount(ctx, s.accountRepo, account)
+		if resolveErr != nil || AccountActivityScopeWithCredentialAccount(account, credentialAccount) != expected {
+			return s.sendErrorAndEnd(c, "Quality monitor account identity changed")
+		}
+		if !IsAccountQualityTextModel(account, modelID) {
+			return s.sendErrorAndEnd(c, "Quality monitor requires a text model")
+		}
+		ctx = withRecentRequestScope(ctx, account, credentialAccount)
+		c.Request = c.Request.WithContext(ctx)
 	}
 	bindAccountTestPlatform(c, account)
 	if expected, ok := ctx.Value(modelTraceContextKey{}).(modelTraceEnvironment); ok {
@@ -972,6 +984,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		}
 		credentialAccount = resolved
 	}
+	ctx = withRecentRequestScope(ctx, account, credentialAccount)
 
 	if credentialAccount.IsExcelOAuth() {
 		return s.sendErrorAndEnd(c, errExcelOAuthRouteUnavailable.Error())
@@ -1131,6 +1144,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	}
 
 	// Process SSE stream
+	c.Request = c.Request.WithContext(recentRequestResponseContext(c.Request.Context(), resp))
 	return s.processOpenAIStream(c, resp.Body)
 }
 
@@ -1202,8 +1216,13 @@ func (s *AccountTestService) testResponsesGatewayAccountConnection(c *gin.Contex
 				_, _ = answer.WriteString(delta)
 				s.sendEvent(c, TestEvent{Type: "content", Text: delta})
 			}
-		case "response.completed":
+		case "response.completed", "response.done":
+			if !recentResponseTerminalSuccessful([]byte(strings.TrimPrefix(line, "data: ")), event["type"].(string)) {
+				return s.sendErrorAndEnd(c, "Responses gateway generation did not finish normally")
+			}
 			completed = true
+		case "response.failed", "response.incomplete", "response.cancelled", "response.canceled", "error":
+			return s.sendErrorAndEnd(c, "Responses gateway generation did not finish normally")
 		}
 	}
 	if result == nil || result.ClientDisconnect {
@@ -1554,6 +1573,7 @@ func (s *AccountTestService) testGrokResponsesConnection(c *gin.Context, ctx con
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Grok Responses API returned %d: %s", resp.StatusCode, string(body)))
 	}
 
+	c.Request = c.Request.WithContext(recentRequestResponseContext(c.Request.Context(), resp))
 	return s.processOpenAIStream(c, resp.Body)
 }
 
@@ -2459,6 +2479,7 @@ func (s *AccountTestService) testOpenAIChatCompletionsConnection(
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Chat Completions API (/v1/chat/completions) returned %d: %s", resp.StatusCode, string(body)))
 	}
 
+	c.Request = c.Request.WithContext(recentRequestResponseContext(c.Request.Context(), resp))
 	return s.processOpenAIChatCompletionsStream(c, resp.Body)
 }
 
@@ -2476,6 +2497,7 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 		}
 		credentialAccount = resolved
 	}
+	ctx = withRecentRequestScope(ctx, account, credentialAccount)
 
 	if credentialAccount.IsExcelOAuth() {
 		return s.sendErrorAndEnd(c, errExcelOAuthRouteUnavailable.Error())
@@ -3128,7 +3150,7 @@ func (s *AccountTestService) processClaudeStream(c *gin.Context, body io.Reader)
 	stopReason, refusalCategory := "", ""
 	messageStopped := false
 	complete := func() error {
-		if modelTraceRequested(c.Request.Context()) && (!messageStopped || stopReason != "end_turn") {
+		if accountTestRequiresNormalFinish(c.Request.Context()) && (!messageStopped || stopReason != "end_turn") {
 			return s.sendErrorAndEnd(c, "ModelTrace generation did not finish normally")
 		}
 		if pelican {
@@ -3200,7 +3222,9 @@ func (s *AccountTestService) processClaudeStream(c *gin.Context, body io.Reader)
 
 // processOpenAIChatCompletionsStream processes SSE chunks from the
 // OpenAI-compatible Chat Completions API.
-func (s *AccountTestService) processOpenAIChatCompletionsStream(c *gin.Context, body io.Reader) error {
+func (s *AccountTestService) processOpenAIChatCompletionsStream(c *gin.Context, body io.Reader) (resultErr error) {
+	recentCtx := recentRequestReaderContext(c.Request.Context(), body)
+	defer func() { recentRequestFailed(recentCtx, resultErr) }()
 	reader := bufio.NewReader(body)
 	usage := startPelicanTestStream(c, "chat")
 	seenJSON := false
@@ -3230,8 +3254,9 @@ func (s *AccountTestService) processOpenAIChatCompletionsStream(c *gin.Context, 
 
 		jsonStr := sseDataPrefix.ReplaceAllString(line, "")
 		usage.read(jsonStr)
+		observeRecentJSON(recentCtx, []byte(jsonStr))
 		if jsonStr == "[DONE]" {
-			if modelTraceRequested(c.Request.Context()) && !seenFinish {
+			if accountTestRequiresNormalFinish(c.Request.Context()) && !seenFinish {
 				return s.sendErrorAndEnd(c, "ModelTrace generation ended without a finish reason")
 			}
 			s.sendEvent(c, TestEvent{Type: "status", Text: "已通过 /v1/chat/completions 验证"})
@@ -3264,16 +3289,18 @@ func (s *AccountTestService) processOpenAIChatCompletionsStream(c *gin.Context, 
 			}
 			if delta, ok := choice["delta"].(map[string]any); ok {
 				if text, ok := delta["content"].(string); ok && text != "" {
+					observeRecentRequest(recentCtx, true, "")
 					s.sendEvent(c, TestEvent{Type: "content", Text: text})
 				}
 			}
 			if message, ok := choice["message"].(map[string]any); ok {
 				if text, ok := message["content"].(string); ok && text != "" {
+					observeRecentRequest(recentCtx, true, "")
 					s.sendEvent(c, TestEvent{Type: "content", Text: text})
 				}
 			}
 			if finishReason, ok := choice["finish_reason"].(string); ok && finishReason != "" {
-				if modelTraceRequested(c.Request.Context()) && finishReason != "stop" {
+				if accountTestRequiresNormalFinish(c.Request.Context()) && finishReason != "stop" {
 					return s.sendErrorAndEnd(c, "ModelTrace generation did not finish normally")
 				}
 				seenFinish = true
@@ -3283,7 +3310,9 @@ func (s *AccountTestService) processOpenAIChatCompletionsStream(c *gin.Context, 
 }
 
 // processOpenAIStream processes the SSE stream from OpenAI Responses API
-func (s *AccountTestService) processOpenAIStream(c *gin.Context, body io.Reader) error {
+func (s *AccountTestService) processOpenAIStream(c *gin.Context, body io.Reader) (resultErr error) {
+	recentCtx := recentRequestReaderContext(c.Request.Context(), body)
+	defer func() { recentRequestFailed(recentCtx, resultErr) }()
 	reader := bufio.NewReader(body)
 	usage := startPelicanTestStream(c, "openai")
 	seenCompleted := false
@@ -3308,6 +3337,7 @@ func (s *AccountTestService) processOpenAIStream(c *gin.Context, body io.Reader)
 
 		jsonStr := sseDataPrefix.ReplaceAllString(line, "")
 		usage.read(jsonStr)
+		observeRecentJSON(recentCtx, []byte(jsonStr))
 		if jsonStr == "[DONE]" {
 			if seenCompleted {
 				s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
@@ -3322,24 +3352,34 @@ func (s *AccountTestService) processOpenAIStream(c *gin.Context, body io.Reader)
 		}
 
 		eventType, _ := data["type"].(string)
+		mode := OpenAITTFTModeSemantic
+		if s.openaiGatewayService != nil {
+			mode = s.openaiGatewayService.openAITTFTMode(recentCtx)
+		}
+		observeRecentProtocolEvent(recentCtx, []byte(jsonStr), eventType, mode)
 
 		switch eventType {
 		case "response.output_text.delta":
 			// OpenAI Responses API uses "delta" field for text content
 			if delta, ok := data["delta"].(string); ok && delta != "" {
+				observeRecentRequest(recentCtx, true, "")
 				s.sendEvent(c, TestEvent{Type: "content", Text: delta})
 			}
 		case "response.completed", "response.done":
-			if modelTraceRequested(c.Request.Context()) {
+			observeRecentTerminal(recentCtx, recentResponseTerminalSuccessful([]byte(jsonStr), eventType))
+			if accountTestRequiresNormalFinish(c.Request.Context()) {
 				if responseData, ok := data["response"].(map[string]any); ok {
 					if status, _ := responseData["status"].(string); status != "" && status != "completed" {
 						return s.sendErrorAndEnd(c, "ModelTrace generation did not finish normally")
+					}
+					if responseData["error"] != nil {
+						return s.sendErrorAndEnd(c, "Generation completed with an error")
 					}
 				}
 			}
 			s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
 			return nil
-		case "response.failed":
+		case "response.failed", "response.incomplete":
 			errorMsg := "OpenAI response failed"
 			if responseData, ok := data["response"].(map[string]any); ok {
 				if errData, ok := responseData["error"].(map[string]any); ok {
@@ -3469,6 +3509,7 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 		}
 		credentialAccount = resolved
 	}
+	ctx = withRecentRequestScope(ctx, account, credentialAccount)
 	authToken := ""
 	if !credentialAccount.IsOpenAIAgentIdentity() {
 		authToken = credentialAccount.GetOpenAIAccessToken()

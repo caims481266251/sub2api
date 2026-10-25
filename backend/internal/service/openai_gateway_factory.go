@@ -35,6 +35,7 @@ type OpenAIGatewayDependencies struct {
 	Quotas           UserPlatformQuotaRepository
 	RPMCache         RPMCache
 	Harvest          *CodexHarvestService
+	RecentRequests   AccountRecentRequestsCache
 }
 
 func ProvideOpenAIGatewayService(d OpenAIGatewayDependencies) *OpenAIGatewayService {
@@ -47,5 +48,9 @@ func ProvideOpenAIGatewayService(d OpenAIGatewayDependencies) *OpenAIGatewayServ
 		d.Channels, d.BalanceNotify, d.Settings, d.Quotas,
 		WithOpenAIRPMCache(d.RPMCache),
 		WithRegionalMetering(d.RegionalMetering),
-		func(s *OpenAIGatewayService) { s.codexHarvest = d.Harvest; s.requestTimezoneProber = d.TimezoneProber })
+		func(s *OpenAIGatewayService) {
+			s.codexHarvest = d.Harvest
+			s.requestTimezoneProber = d.TimezoneProber
+			s.SetRecentRequests(d.RecentRequests)
+		})
 }

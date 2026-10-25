@@ -1928,7 +1928,8 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	// previous_response_id，避免携带状态字段被上游拒绝。
 	body = normalizeDeepSeekResponsesRequestBody(account, body)
 
-	req, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewReader(body))
+	ctx = withRecentRequestScope(ctx, account, codexAccountIdentitySource(c, account))
+	req, err := http.NewRequestWithContext(withRecentRequestModel(ctx, body), "POST", targetURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}

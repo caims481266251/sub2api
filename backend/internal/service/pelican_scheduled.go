@@ -48,17 +48,24 @@ func (s *AccountTestService) RunPelicanBackground(ctx context.Context, accountID
 		cfg = &copy
 
 	}
+	return s.runAccountTextTest(ctx, accountID, model, cfg, intelligenceTestPrompt(cfg), false)
+}
+
+// runAccountTextTest shares transport and response collection while allowing the
+// lightweight monitor to send its exact prompt and require a normal terminal.
+func (s *AccountTestService) runAccountTextTest(ctx context.Context, accountID int64, model string, cfg *PelicanTestConfig, prompt string, strict bool) (*ScheduledTestResult, error) {
 	started := time.Now()
 	ctx = withPelicanTestOptions(ctx, pelicanTestOptions{
-		testChannel: cfg.TestChannel,
-		observeOnly: cfg.Quality != nil && cfg.Quality.Action == QualityActionObserveOnly,
+		testChannel:    cfg.TestChannel,
+		observeOnly:    cfg.Quality != nil && cfg.Quality.Action == QualityActionObserveOnly,
+		strictComplete: strict,
 	})
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	w := &pelicanRecorder{ResponseRecorder: httptest.NewRecorder(), cancel: cancel}
 	c, _ := gin.CreateTestContext(w)
 	c.Request = (&http.Request{Header: make(http.Header)}).WithContext(ctx)
-	err := s.TestPelicanAccountConnection(c, accountID, model, intelligenceTestPrompt(cfg), cfg.ReasoningEffort)
+	err := s.TestPelicanAccountConnection(c, accountID, model, prompt, cfg.ReasoningEffort)
 	output, message := parsePelicanOutput(w.Body.String())
 	if w.overflow {
 		output = ""
@@ -67,7 +74,7 @@ func (s *AccountTestService) RunPelicanBackground(ctx context.Context, accountID
 	if err != nil && message == "" {
 		message = err.Error()
 	}
-	if message == "" {
+	if message == "" && !strict {
 		message = intelligenceTestOutputError(cfg, output)
 	}
 	// Bounded history storage; never persist a truncated animation as a success.

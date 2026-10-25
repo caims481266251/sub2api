@@ -317,6 +317,7 @@ func ProvideAccountTestService(
 	)
 	service.agentIdentityWS = openAIGatewayService
 	service.SetOpenAIGatewayService(openAIGatewayService)
+	service.SetRecentRequests(openAIGatewayService.recentRequests)
 	service.SetSettingService(settingService)
 	service.SetPluginManager(pluginManager)
 	borrowing := NewTicketBorrowService(borrowRepo, service, borrowOAuth)
@@ -783,8 +784,10 @@ func ProvideScheduledTestRunnerService(
 	rdb *redis.Client,
 	groupTests *PelicanGroupTestService,
 	monitor *ChannelMonitorV2Service,
+	accountQualityMonitor *AccountQualityMonitorService,
 ) *ScheduledTestRunnerService {
 	svc := NewScheduledTestRunnerService(planRepo, scheduledSvc, accountTestSvc, rateLimitSvc, cfg)
+	svc.SetAccountQualityMonitor(accountQualityMonitor)
 	if rdb != nil {
 		svc.qualityTrigger = &quality5xxTrigger{queue: qualityqueue.NewRedis(rdb)}
 	}
@@ -1014,6 +1017,7 @@ var ProviderSet = wire.NewSet(
 	NewGroupService,
 	NewCompositeRouteResolver,
 	NewAccountService,
+	NewAccountQualityMonitorService,
 	NewProxyService,
 	NewRedeemService,
 	NewPromoService,

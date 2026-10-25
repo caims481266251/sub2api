@@ -692,7 +692,8 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	// DeepSeek / Kimi 原生 Responses 端点为无状态实现（见 normalizeDeepSeekResponsesRequestBody）。
 	body = normalizeDeepSeekResponsesRequestBody(account, body)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
+	ctx = withRecentRequestScope(ctx, account, codexAccountIdentitySource(c, account))
+	req, err := http.NewRequestWithContext(withRecentRequestModel(ctx, body), http.MethodPost, targetURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -2033,7 +2034,8 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 	mappedModel string,
 	imageBillingModel string,
 	reasoningEfforts ...string,
-) (*openaiStreamingResultPassthrough, error) {
+) (recentResult *openaiStreamingResultPassthrough, recentErr error) {
+	defer func() { recentRequestFailed(recentRequestResponseContext(ctx, resp), recentErr) }()
 	observer := upstreamResponseModelObserverFromContext(c)
 	if observer == nil {
 		observer = beginUpstreamResponseModelObservation(c)
@@ -2060,6 +2062,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 	var firstTokenMs *int
 	responseID := ""
 	ctx = requesttiming.ResponseContext(ctx, resp)
+	ctx = recentRequestResponseContext(ctx, resp)
 	ttftMode := s.openAITTFTMode(ctx)
 	requesttiming.Mode(ctx, ttftMode)
 	clientDisconnected := OpenAIDownstreamDisconnected(c)
@@ -2189,7 +2192,12 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 		maxLineSize = s.cfg.Gateway.MaxLineSize
 	}
 	documentScanner := newOpenAISSEReadPump(resp.Body, maxLineSize)
-	defer documentScanner.Close()
+	defer func() {
+		// The pump closes its body. Commit the parser outcome before that close
+		// can finalize the attempt, including early failover returns.
+		recentRequestFailed(ctx, recentErr)
+		documentScanner.Close()
+	}()
 	if account != nil && account.Platform == PlatformOpenAI {
 		effort := ""
 		if len(reasoningEfforts) > 0 {
@@ -2382,6 +2390,9 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 			if openAIStreamEventIsTerminalWithType(trimmedData, eventType) {
 				sawTerminalEvent = true
 				terminalSuccessful = IsSuccessfulStreamTerminal(dataBytes)
+				if isOpenAICompatResponsesTerminalEvent(eventType) {
+					observeRecentTerminal(ctx, recentResponseTerminalSuccessful(dataBytes, eventType))
+				}
 				if trimmedData != "[DONE]" {
 					terminalEventType = eventType
 				}
@@ -2418,6 +2429,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 			}
 			s.observeBorrowHTTPReplayResponse(ctx, account, dataBytes, eventType)
 			requesttiming.Output(ctx, openAIStreamDataStartsSemanticTTFT(trimmedData, eventType), openAIStreamDataStartsVisibleOutput(trimmedData, eventType), timingTerminal(eventType))
+			observeRecentRequest(ctx, recentResponseStartsTTFT(trimmedData, eventType, ttftMode), "")
 			if firstTokenMs == nil && openAIStreamDataStartsTTFT(trimmedData, eventType, forceFlushFailedEvent, ttftMode) {
 				ms := int(time.Since(startTime).Milliseconds())
 				firstTokenMs = &ms
@@ -2596,6 +2608,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 		observeOpenAISSEBody(observer, string(body))
 	} else {
 		observer.ObserveOpenAI(body, strings.TrimSpace(gjson.GetBytes(body, "type").String()))
+		observeRecentJSON(recentRequestResponseContext(ctx, resp), body)
 	}
 
 	// Detect SSE responses from upstream and convert to JSON.
@@ -2658,6 +2671,9 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c *gin.Context, account *Account, body []byte, originalModel string, mappedModel string) (*openaiNonStreamingResultPassthrough, error) {
 	bodyText := string(body)
 	terminalType, terminalPayload, terminalOK := extractOpenAISSETerminalEvent(bodyText)
+	if terminalOK {
+		observeRecentTerminal(recentRequestResponseContext(c.Request.Context(), resp), recentResponseTerminalSuccessful(terminalPayload, terminalType))
+	}
 	if terminalOK && (terminalType == "response.failed" || terminalType == "error") {
 		msg := extractOpenAISSEErrorMessage(terminalPayload)
 		if msg == "" {

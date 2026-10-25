@@ -34,7 +34,9 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	attempt int,
 	lastFailureReason string,
 	agentTaskRecoveryTried *bool,
-) (*OpenAIForwardResult, error) {
+) (recentResult *OpenAIForwardResult, recentErr error) {
+	var recentAttempt *accountRequestAttempt
+	defer func() { recentAttempt.finish(recentErr) }()
 	// HTTP ingress can use WS internally and later fall back to HTTP. A local
 	// rejection on that later path must not claim the whole forward was unsent.
 	claimOpenAIInitialUpstreamAttempt(ctx)
@@ -510,6 +512,8 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		if err := controlledSubmission(ctx, "native_ws"); err != nil {
 			return err
 		}
+		recentAttempt.finish(nil)
+		recentAttempt = beginAccountRequestAttempt(withRecentRequestScope(ctx, account, codexAccountIdentitySource(c, account)), s.recentRequests, account, mappedModel)
 		if err := lease.WriteJSONWithContextTimeout(ctx, value, s.openAIWSWriteTimeout()); err != nil {
 			lease.MarkBroken()
 			logOpenAIWSModeInfo(
@@ -801,6 +805,7 @@ readLoop:
 			continue
 		}
 		responseModelObserver.ObserveOpenAI(message, eventType)
+		observeRecentWSEvent(recentAttempt, message, eventType, s.openAITTFTMode(ctx))
 		eventCount++
 		if firstEventType == "" {
 			firstEventType = eventType

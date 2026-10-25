@@ -22,8 +22,9 @@ type ScheduledTestRunnerService struct {
 	judgeQuality   func(context.Context, int64, *PelicanTestConfig, string) *QualityJudgment
 	runPelican     func(context.Context, int64, string, *PelicanTestConfig) (*ScheduledTestResult, error)
 	// groupTests runs the Pelican group tests on the same tick; nil disables them.
-	groupTests   *PelicanGroupTestService
-	candyMonitor *ChannelMonitorV2CandyService
+	groupTests            *PelicanGroupTestService
+	candyMonitor          *ChannelMonitorV2CandyService
+	accountQualityMonitor *AccountQualityMonitorService
 
 	qualityTrigger *quality5xxTrigger
 	triggerCancel  context.CancelFunc
@@ -32,6 +33,10 @@ type ScheduledTestRunnerService struct {
 	cron           *cron.Cron
 	startOnce      sync.Once
 	stopOnce       sync.Once
+}
+
+func (s *ScheduledTestRunnerService) SetAccountQualityMonitor(monitor *AccountQualityMonitorService) {
+	s.accountQualityMonitor = monitor
 }
 
 // NewScheduledTestRunnerService creates a new runner.
@@ -85,6 +90,9 @@ func (s *ScheduledTestRunnerService) Stop() {
 		return
 	}
 	s.stopOnce.Do(func() {
+		if s.accountQualityMonitor != nil {
+			s.accountQualityMonitor.Stop()
+		}
 		if s.qualityTrigger != nil && s.qualityTrigger.queue != nil {
 			defer func() { _ = s.qualityTrigger.queue.Close() }()
 		}
@@ -111,6 +119,11 @@ func (s *ScheduledTestRunnerService) runScheduled() {
 	defer cancel()
 
 	now := time.Now()
+	if s.accountQualityMonitor != nil {
+		// Dispatch only: monitor tasks own the service lifecycle, not this
+		// legacy scheduled round's twelve-minute deadline.
+		s.accountQualityMonitor.RunDue(ctx, now)
+	}
 	if err := s.scheduledSvc.resultRepo.PruneExpiredPelican(ctx, now.Add(-7*24*time.Hour)); err != nil {
 		logger.LegacyPrintf("service.scheduled_test_runner", "pelican history cleanup failed: %v", err)
 	}

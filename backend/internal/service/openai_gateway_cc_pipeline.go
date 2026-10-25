@@ -201,7 +201,8 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 	// passed back to the API"。在共用出站点补空格占位，真实明文不覆盖。
 	body = ensureDeepSeekChatReasoningPlaceholders(account, body)
 	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
-	upstreamReq, err := http.NewRequestWithContext(upstreamCtx, http.MethodPost, targetURL, bytes.NewReader(body))
+	upstreamCtx = withRecentRequestScope(upstreamCtx, account, codexAccountIdentitySource(c, account))
+	upstreamReq, err := http.NewRequestWithContext(withRecentRequestModel(upstreamCtx, body), http.MethodPost, targetURL, bytes.NewReader(body))
 	releaseUpstreamCtx()
 	if err != nil {
 		return nil, fmt.Errorf("build upstream request: %w", err)
@@ -288,6 +289,7 @@ func (s *OpenAIGatewayService) scanCCStream(
 	emit func(*apicompat.ChatCompletionsChunk),
 ) ccStreamScanState {
 	var st ccStreamScanState
+	recentCtx := recentRequestResponseContext(c.Request.Context(), resp)
 
 	scanner := s.newUpstreamSSEScanner(resp.Body)
 	for scanner.Scan() {
@@ -326,7 +328,9 @@ func (s *OpenAIGatewayService) scanCCStream(
 		if st.FirstTokenMs == nil && !isOpenAIChatUsageOnlyStreamChunk(payload) && chatChunkStartsResponsesOutput(&chunk) {
 			ms := int(time.Since(startTime).Milliseconds())
 			st.FirstTokenMs = &ms
+			observeRecentRequest(recentCtx, true, "")
 		}
+		observeRecentJSON(recentCtx, []byte(payload))
 		emit(&chunk)
 	}
 
@@ -338,6 +342,7 @@ func (s *OpenAIGatewayService) scanCCStream(
 			)
 		}
 		st.Err = err
+		recentRequestFailed(recentCtx, err)
 	}
 	return st
 }
@@ -369,6 +374,7 @@ func (s *OpenAIGatewayService) readCCUpstreamJSONResponse(
 		writeError(c, http.StatusBadGateway, "api_error", "Failed to parse upstream response")
 		return nil, OpenAIUsage{}, fmt.Errorf("parse chat completions response: %w", err)
 	}
+	observeRecentJSON(recentRequestResponseContext(c.Request.Context(), resp), respBody)
 	// 观察上游 CC JSON 回显的 model / service_tier（计费以回显为准）。
 	// CC JSON 无 type 字段，按 untyped payload 观察（上游约束）。
 	if observer := upstreamResponseModelObserverFromContext(c); observer != nil {

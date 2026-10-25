@@ -1025,6 +1025,11 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	if s.borrowRoutes != nil {
 		upstreamFrameConn = &borrowWSFrameConn{FrameConn: upstreamFrameConn, borrow: borrowing, service: s.borrowRoutes, accountID: account.ID}
 	}
+	if s.recentRequests != nil && account.Platform == PlatformOpenAI {
+		recentConn := &recentRequestsFrameConn{FrameConn: upstreamFrameConn, cache: s.recentRequests, account: account, scope: AccountActivityScopeWithCredentialAccount(account, codexAccountIdentitySource(c, account)), ttftMode: s.openAITTFTMode(ctx)}
+		defer func() { recentConn.current().finish(nil) }()
+		upstreamFrameConn = recentConn
+	}
 	if capture := requestcapture.FromContext(ctx); capture != nil {
 		upstreamFrameConn = &captureUpstreamFrameConn{FrameConn: upstreamFrameConn, capture: capture, account: account.ID, route: openAIWSCaptureRoute(ctx, wsURL)}
 	}

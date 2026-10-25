@@ -72,6 +72,8 @@ type AccountHandler struct {
 	openAIGatewayService    *service.OpenAIGatewayService
 	cfg                     *config.Config
 	opencodeGoUsage         *service.OpenCodeGoUsageService
+	qualityMonitor          accountQualityMonitor
+	recentRequests          service.AccountRecentRequestsCache
 }
 
 // SetUpstreamBillingProbeService attaches the optional remote billing probe service.

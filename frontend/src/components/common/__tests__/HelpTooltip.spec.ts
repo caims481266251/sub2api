@@ -109,6 +109,35 @@ describe('HelpTooltip', () => {
 
     wrapper.unmount()
   })
+
+  it('opens hover details on keyboard focus and closes when focus leaves', async () => {
+    const wrapper = mount(HelpTooltip, {
+      attachTo: document.body,
+      props: { content: 'request details' },
+      slots: { trigger: '<button>request</button>' }
+    })
+    const button = wrapper.get('button')
+    await button.trigger('focusin')
+    expect(getTooltipElement().style.display).not.toBe('none')
+    await button.trigger('focusout', { relatedTarget: document.body })
+    expect(getTooltipElement().style.display).toBe('none')
+    wrapper.unmount()
+  })
+
+  it.each(['click', 'touch'] as const)('does not open before the %s activation click', async mode => {
+    const wrapper = mount(HelpTooltip, {
+      attachTo: document.body,
+      props: { content: 'request details', trigger: mode === 'click' ? 'click' : 'hover' },
+      slots: { trigger: '<button>request</button>' }
+    })
+    const button = wrapper.get('button')
+    if (mode === 'touch') await button.trigger('pointerdown', { pointerType: 'touch' })
+    await button.trigger('focusin')
+    expect(getTooltipElement().style.display).toBe('none')
+    await button.trigger('click')
+    expect(getTooltipElement().style.display).not.toBe('none')
+    wrapper.unmount()
+  })
 })
 
 

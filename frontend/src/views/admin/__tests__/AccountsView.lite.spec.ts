@@ -6,6 +6,8 @@ import AccountsView from '../AccountsView.vue'
 import UpstreamBillingRateCell from '@/components/account/UpstreamBillingRateCell.vue'
 import AccountActionMenu from '@/components/admin/account/AccountActionMenu.vue'
 
+vi.mock('@/api/admin/accountActivity', () => ({ getAccountActivity: vi.fn().mockResolvedValue([]) }))
+
 const {
   listAccounts,
   listWithEtag,
@@ -123,6 +125,7 @@ function mountView(stubActionMenu = true) {
         ReAuthAccountModal: true,
         AccountTestModal: AccountTestModalStub,
         AccountStatsModal: AccountStatsModalStub,
+        AccountQualityMonitorDialog: true,
         ScheduledTestsPanel: true,
         SyncFromCrsModal: true,
         TempUnschedStatusModal: true,

@@ -713,6 +713,7 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 		observer = beginUpstreamResponseModelObservation(c)
 	}
 	observer.Observe(finalResponse.Model, true)
+	observeRecentTerminal(recentRequestResponseContext(c.Request.Context(), resp), finalResponse.Status == "completed" && finalResponse.Error == nil)
 	if finalResponse.Usage != nil && c.Request != nil {
 		raw, _ := json.Marshal(finalResponse)
 		regionalMeterObserveUsage(c.Request.Context(), raw, "json")
@@ -955,6 +956,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			return false
 		}
 		observer.ObserveOpenAI([]byte(payload), event.Type)
+		observeRecentProtocolEvent(recentRequestResponseContext(c.Request.Context(), resp), []byte(payload), event.Type, s.openAITTFTMode(c.Request.Context()))
 		if c.Request != nil {
 			regionalMeterObserveUsage(c.Request.Context(), []byte(payload), event.Type)
 		}

@@ -9,6 +9,10 @@ func ObserverAccountRouteAllowed(method, route string) bool {
 }
 
 var observerAccountRoutes = map[string]struct{}{
+	"POST /api/v1/admin/accounts/activity/batch":                     {},
+	"GET /api/v1/admin/accounts/:id/quality-monitor":                 {},
+	"PUT /api/v1/admin/accounts/:id/quality-monitor":                 {},
+	"POST /api/v1/admin/accounts/:id/quality-monitor/run":            {},
 	"GET /api/v1/admin/accounts/:id/scheduled-test-plans":            {},
 	"POST /api/v1/admin/scheduled-test-plans":                        {},
 	"PUT /api/v1/admin/scheduled-test-plans/:id":                     {},

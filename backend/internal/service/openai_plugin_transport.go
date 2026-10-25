@@ -50,7 +50,9 @@ func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL 
 		authorization := request.Header.Get("Authorization")
 		applySIWCRequestHeaders(request)
 		request.Host = ""
+		request, recentAttempt := beginRecentHTTPRequest(request, s.recentRequests, account)
 		resp, err := s.httpUpstream.Do(request, proxyURL, account.ID, account.Concurrency)
+		recentAttempt.response(request, resp, err)
 		if err == nil && resp != nil && resp.StatusCode == http.StatusUnauthorized && s.excelOAuthReauth != nil {
 			var cache OpenAITokenCache
 			if s.openAITokenProvider != nil {
@@ -122,7 +124,8 @@ func (s *AccountTestService) doOpenAIAccountTestUpstream(
 	account *Account,
 	useTLSFallback bool,
 	body []byte,
-) (*http.Response, error) {
+) (response *http.Response, responseErr error) {
+	request = request.WithContext(withRecentRequestModel(request.Context(), body))
 	gateway := s.openaiGatewayService
 	model := extractOpenAICodexTicketModel(body)
 	if gateway != nil && !IsAstraSourceAcquisition(request.Context()) && request.URL != nil && request.URL.String() == chatgptCodexAPIURL &&
@@ -136,6 +139,8 @@ func (s *AccountTestService) doOpenAIAccountTestUpstream(
 		request = request.WithContext(context.WithValue(request.Context(), astraCandySkipObservationKey{}, true))
 		return gateway.doOpenAIUpstream(request, proxyURL, account)
 	}
+	request, recentAttempt := beginRecentHTTPRequest(request, s.recentRequests, account)
+	defer func() { recentAttempt.response(request, response, responseErr) }()
 	if s.pluginManager != nil {
 		response, handled, err := s.pluginManager.RoundTripOpenAIOAuth(request.Context(), request, proxyURL, account)
 		if handled {

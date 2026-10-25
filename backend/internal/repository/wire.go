@@ -82,6 +82,8 @@ var ProviderSet = wire.NewSet(
 	ProvideAccountRepository,
 	NewAdminAccountRepository,
 	NewAccountOpsRepository,
+	NewAccountQualityMonitorRepository,
+	NewAccountRecentRequestsCache,
 	NewAccountTokenGuardRepository,
 	NewOpenAIOAuthReauthRepository,
 	NewOpenAISessionExportRepository,

@@ -50,7 +50,8 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 	return s.handleStreamingResponseWithReasoning(ctx, resp, c, account, startTime, originalModel, mappedModel, "")
 }
 
-func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, startTime time.Time, originalModel, mappedModel, reasoningEffort string) (*openaiStreamingResult, error) {
+func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, startTime time.Time, originalModel, mappedModel, reasoningEffort string) (recentResult *openaiStreamingResult, recentErr error) {
+	defer func() { recentRequestFailed(recentRequestResponseContext(ctx, resp), recentErr) }()
 	observer := upstreamResponseModelObserverFromContext(c)
 	if observer == nil {
 		observer = beginUpstreamResponseModelObservation(c)
@@ -122,6 +123,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 	}
 	var firstTokenMs *int
 	ctx = requesttiming.ResponseContext(ctx, resp)
+	ctx = recentRequestResponseContext(ctx, resp)
 	ttftMode := s.openAITTFTMode(ctx)
 	requesttiming.Mode(ctx, ttftMode)
 	firstOutputProgressObserved := false
@@ -541,6 +543,9 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			if openAIStreamEventIsTerminalWithType(data, eventType) {
 				sawTerminalEvent = true
 				terminalSuccessful = IsSuccessfulStreamTerminal(dataBytes)
+				if isOpenAICompatResponsesTerminalEvent(eventType) {
+					observeRecentTerminal(ctx, recentResponseTerminalSuccessful(dataBytes, eventType))
+				}
 				terminalEventType = eventType
 				if strings.TrimSpace(data) == "[DONE]" {
 					terminalEventType = "[DONE]"
@@ -771,6 +776,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 
 			s.observeBorrowHTTPReplayResponse(ctx, account, dataBytes, eventType)
 			requesttiming.Output(ctx, openAIStreamDataStartsSemanticTTFT(data, eventType), startsVisibleOutput, timingTerminal(eventType))
+			observeRecentRequest(ctx, recentResponseStartsTTFT(data, eventType, ttftMode), "")
 			// 写入客户端（客户端断开后继续 drain 上游）
 			if !clientDisconnected && !failureDelivered && !suppressCurrentEvent {
 				shouldFlush := queueDrained && (clientOutputStarted || startsClientOutput)
@@ -1686,6 +1692,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 		observeOpenAISSEBody(observer, string(body))
 	} else {
 		observer.ObserveOpenAI(body, strings.TrimSpace(gjson.GetBytes(body, "type").String()))
+		observeRecentJSON(recentRequestResponseContext(ctx, resp), body)
 	}
 
 	// Detect SSE responses for ALL account types via Content-Type header.
@@ -1797,6 +1804,9 @@ func bodyHasSSEFraming(body []byte) bool {
 func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Context, account *Account, body []byte, originalModel, mappedModel string) (*openaiNonStreamingResult, error) {
 	bodyText := string(body)
 	terminalType, terminalPayload, terminalOK := extractOpenAISSETerminalEvent(bodyText)
+	if terminalOK {
+		observeRecentTerminal(recentRequestResponseContext(c.Request.Context(), resp), recentResponseTerminalSuccessful(terminalPayload, terminalType))
+	}
 	if c.Request != nil {
 		regionalMeterObserveUsage(c.Request.Context(), terminalPayload, terminalType)
 	}

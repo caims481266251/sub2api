@@ -88,6 +88,7 @@ func provideCleanup(
 	requestCaptures *requestcapture.Manager,
 	entClient *ent.Client,
 	rdb *redis.Client,
+	recentRequests service.AccountRecentRequestsCache,
 	opsMetricsCollector *service.OpsMetricsCollector,
 	opsAggregation *service.OpsAggregationService,
 	opsAlertEvaluator *service.OpsAlertEvaluatorService,
@@ -478,6 +479,12 @@ func provideCleanup(
 		}
 
 		infraSteps := []cleanupStep{
+			{"AccountRecentRequestsCache", func() error {
+				if recentRequests != nil {
+					return recentRequests.Close()
+				}
+				return nil
+			}},
 			{"Redis", func() error {
 				if rdb == nil {
 					return nil
