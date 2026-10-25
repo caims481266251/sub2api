@@ -1345,9 +1345,9 @@ func (s *RateLimitService) handle429Cooldown(ctx context.Context, account *Accou
 	if resetTimestamp == "" {
 		switch account.Platform {
 		case PlatformOpenAI:
-			// 尝试解析 OpenAI 的 usage_limit_reached 错误
-			if resetAt := parseOpenAIRateLimitResetTime(responseBody); resetAt != nil {
-				resetTime := time.Unix(*resetAt, 0)
+			// Share the same reset decision as the OAuth retry/runtime blocker.
+			if resetAt := openAI429BodyOrSnapshotResetAt(account, responseBody, time.Now()); resetAt != nil {
+				resetTime := *resetAt
 				s.notifyAccountSchedulingBlocked(account, resetTime, "429")
 				if err := s.accountRepo.SetRateLimited(ctx, account.ID, resetTime); err != nil {
 					slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
@@ -2478,7 +2478,8 @@ func (s *RateLimitService) HandleOpenAICodexSparkRateLimit(ctx context.Context, 
 		return false
 	}
 	now := time.Now()
-	disposition, resetAt := classifyOpenAIOAuth429(headers, responseBody)
+	// Spark limits are model-scoped; never borrow a cached global quota window.
+	disposition, resetAt := classifyOpenAIOAuth429(nil, headers, responseBody)
 	// Spark 只有明确耗尽 5h/7d 窗口时才能使用上游长 reset；普通瞬时 429
 	// 即使携带全局 reset 头，也只能使用短时回避，避免错误冷却数天。
 	if disposition != openAIOAuth429Quota5h && disposition != openAIOAuth429Quota7d {

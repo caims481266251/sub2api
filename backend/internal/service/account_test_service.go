@@ -2682,9 +2682,8 @@ func (s *AccountTestService) reconcileOpenAI429State(ctx context.Context, accoun
 	var resetAt *time.Time
 	if calculated := calculateOpenAI429ResetTime(headers); calculated != nil {
 		resetAt = calculated
-	} else if unixTs := parseOpenAIRateLimitResetTime(body); unixTs != nil {
-		t := time.Unix(*unixTs, 0)
-		resetAt = &t
+	} else {
+		resetAt = openAI429BodyOrSnapshotResetAt(account, body, time.Now())
 	}
 	if resetAt == nil {
 		return
