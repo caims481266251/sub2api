@@ -298,6 +298,7 @@ func (h *OpenAIOAuthHandler) RefreshAccountToken(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	persistOpenAIRefreshPrivacy(c.Request.Context(), h.adminService, updatedAccount, tokenInfo.PrivacyMode)
 
 	response.Success(c, dto.AccountForObserver(c.Request.Context(), dto.AccountFromService(updatedAccount)))
 }

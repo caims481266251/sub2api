@@ -292,8 +292,8 @@
             <AccountCapacityCell :account="row" :concurrency-upgrade-enabled="concurrencyUpgradeEnabled" />
           </template>
           <template #cell-status="{ row }">
-            <div class="min-w-0 space-y-2">
-              <div class="flex items-center gap-1.5">
+            <div class="w-48 min-w-48 space-y-1.5 whitespace-normal text-left">
+              <div class="flex flex-wrap items-start gap-1.5">
                 <AccountStatusIndicator :account="row" :global-bps-enabled="appStore.cachedPublicSettings?.excel_bps_enabled !== false" @show-temp-unsched="handleShowTempUnsched" />
                 <TicketBorrowStatusBadge v-if="row.platform === 'openai'" :account-id="row.parent_account_id || row.id" />
               </div>

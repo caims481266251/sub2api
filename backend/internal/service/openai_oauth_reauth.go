@@ -1171,6 +1171,18 @@ func (s *OpenAIOAuthReauthService) applyReauthTokenInfo(ctx context.Context, rec
 	if strings.TrimSpace(tokenInfo.RefreshToken) == "" || strings.TrimSpace(tokenInfo.AccessToken) == "" {
 		return s.failCallback(ctx, taskID, "OpenAI did not return a usable OAuth token", errors.New("missing token"))
 	}
+	// Direct worker credentials may omit the privacy result. Retry a missing or
+	// failed setting with the new token, without making privacy a login gate.
+	// Callback results and previously confirmed settings need no extra request.
+	if tokenInfo.PrivacyMode == "" && reauthMapString(account.Extra, "privacy_mode") != PrivacyModeTrainingOff && s.oauth.privacyClientFactory != nil {
+		proxyURL, err := s.reauthProxyURL(ctx, account.ProxyID)
+		if err == nil && (!account.IsVMKernel() || account.ProxyID != nil) {
+			tokenInfo.PrivacyMode = disableOpenAITraining(ctx, s.oauth.privacyClientFactory, tokenInfo.AccessToken, proxyURL)
+		} else {
+			// Never bypass a configured proxy or report an unchecked setting as OK.
+			slog.Warn("openai_oauth_reauth_privacy_proxy_unavailable", "account_id", account.ID)
+		}
+	}
 	newCredentials := s.oauth.BuildAccountCredentials(tokenInfo)
 	for key, value := range account.Credentials {
 		if _, exists := newCredentials[key]; !exists {

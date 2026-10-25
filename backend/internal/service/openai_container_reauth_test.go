@@ -151,16 +151,21 @@ func TestContainerReauthProbeUsesAutomaticDeduplication(t *testing.T) {
 	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			svc, reader, repo, _, _, _ := newReauthTestService("acct-1")
-			reader.account.ExecutionMode = AccountExecutionModeDockerKernel
+			runtime, account := vmForwardFixture(t, PlatformOpenAI, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				fmt.Fprintf(w, "data: {\"type\":\"error\",\"error\":{\"status\":%d,\"message\":\"upstream rejection\"}}\n\n", status)
+			}, func(a *Account) { a.ID = 42 })
+			installDockerKernelTestRuntime(t, runtime)
+			reader.account = account
 			store := &containerReauthTestRepo{reauthTestRepo: repo}
 			svc.repo = store
 			guard := &accountTokenGuardV2TestRepo{record: &AccountTokenGuardV2Record{AccountID: 42, Enabled: true, AutoReloginEnabled: true}}
-			prober := accountTokenGuardV2TestProber{err: &codexModelsManifestUpstreamError{err: errors.New("upstream rejection"), statusCode: status}}
-			NewAccountTokenGuardV2Service(guard, nil, reader, prober, svc).runProbe(t.Context(), *guard.record)
+			NewAccountTokenGuardV2Service(guard, nil, reader, nil, svc).runProbe(t.Context(), *guard.record)
 			if status == http.StatusUnauthorized {
 				require.Equal(t, 1, store.calls)
 			} else {
 				require.Zero(t, store.calls)
+				require.Equal(t, AccountTokenGuardV2ProbeTransient, guard.completion.ProbeState)
 			}
 			require.False(t, store.manual, "automatic probes cannot override a failed attempt")
 			require.Zero(t, repo.createCalls)

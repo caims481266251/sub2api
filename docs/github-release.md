@@ -1,14 +1,14 @@
 # GitHub 发布与在线更新
 
-本分支的发布仓库是 `caims481266251/sub2api`，持续发布分支为 `codex/vm-kernel-account-mode`。当前版本 `2.15.15` 统一 Docker 帐号、帐号托管、借票、代理池及 OpenAI 质量检测，并修复额度耗尽后的恢复时间处理。
+本分支的发布仓库是 `caims481266251/sub2api`，持续发布分支为 `codex/vm-kernel-account-mode`。当前版本 `2.15.16` 修复重新授权后的隐私状态残留、刷新响应不同步，补齐 Docker 内核检测链路，并优化帐号状态列排版。
 
 ## 发布方式
 
 在已验证的持续发布分支创建带说明的正式 tag，再原子推送分支与 tag：
 
 ```bash
-git tag -a v2.15.15 -m "Release v2.15.15" -m "本次更新说明"
-git push --atomic origin codex/vm-kernel-account-mode v2.15.15
+git tag -a v2.15.16 -m "Release v2.15.16" -m "本次更新说明"
+git push --atomic origin codex/vm-kernel-account-mode v2.15.16
 ```
 
 `.github/workflows/release.yml` 接收 `v*` tag，自动构建前端及 Windows AMD64、macOS AMD64/ARM64、Linux AMD64/ARM64 更新包，发布 `checksums.txt`、GitHub Release 和 GHCR 多架构镜像。正式 tag 固定完整发布，不能被仓库的 `SIMPLE_RELEASE` 变量降级为仅镜像模式。手动触发仍可选择 simple release，但该模式不提供系统内在线更新包。
@@ -24,7 +24,7 @@ git push --atomic origin codex/vm-kernel-account-mode v2.15.15
 Docker 部署可通过页面更新当前容器中的二进制；重新创建容器会恢复镜像内版本，因此持久升级还应更新 Compose 镜像 tag 并重新创建应用容器：
 
 ```yaml
-image: ghcr.io/caims481266251/sub2api:2.15.15
+image: ghcr.io/caims481266251/sub2api:2.15.16
 ```
 
 ```bash
@@ -167,3 +167,17 @@ OpenAI 帐号质量检测、请求状态与额度恢复修复
 已知限制：本地 gpt-5.6-terra / low、15 并发、持续 5 分钟的压力测试共 1139 次，237 次完整成功，失败包括 58 次内核 403 和 844 次 no_capacity，业务稳定性验收未通过；本版本不宣称消除了内核容量或上游拒绝问题。默认模型是否可用取决于帐号和上游支持。
 
 升级：从 v2.15.14 升级会补齐已合并的帐号托管、借票及质量检测数据库迁移；升级前保留数据库备份。主程序与 Docker host tools 应使用同版本。回滚到缺少这些功能的旧程序需要配套数据库恢复，不能只替换旧二进制。
+
+## v2.15.16 更新
+
+OpenAI 隐私状态修复、Docker 内核检测与状态排版优化
+
+- 修复普通与 Docker OpenAI 帐号重授权后旧隐私失败结果残留：新凭据没有附带隐私结果时，使用新 token 和帐号代理补做实际设置，并与凭据更新一并保存。只有真实设置成功才显示 Private，隐私设置失败不会使授权失败。
+- 修复两种刷新入口丢弃最新隐私结果或立即返回旧对象的问题；同次刷新不重复请求，持久化失败不假报成功，并隔离创建后台任务的响应快照。
+- OpenAI 盾牌 Fail/CF 改为“隐私未设置／隐私受阻”，中英文说明明确其与授权状态的区别。优化主状态、429/529、恢复提示、质量检测与最近 16 次请求色块的排列。
+- Docker 帐号的用量 Responses 探测和凭据守护探测通过绑定的容器内核执行；内核不可用不回退宿主推理，不完整／失败流不会凭零用量解除限流。普通 403、429、内核通信错误与上游认证失效保持区分。
+- 内核不支持的额度查询、模型目录、OAuth 刷新／重新授权等管理功能保留原有实现。容器代理失效或被移除时，新增隐私重试不会意外直连。
+
+验证：后端相关回归 851 个测试及子用例、定向竞态 67 个、前端 85 项通过；类型检查、生产构建、浅色／深色组件视觉检查通过。全部使用本地替身，未消耗真实帐号额度；相关专项通过不代表全量测试或线上压力验收。
+
+升级：相较 v2.15.15 无新增数据库迁移。正式发布包含五个平台更新包、checksums.txt、amd64/arm64 重登录运行包、Docker host tools 与多架构镜像。平台管理员可自行在线更新；使用 Docker host tools 的部署保持主程序与工具同版本。

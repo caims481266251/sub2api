@@ -508,6 +508,19 @@ func (s *AccountTokenGuardV2Service) completeProbe(ctx context.Context, accountI
 }
 
 func (s *AccountTokenGuardV2Service) probeAccount(ctx context.Context, account *Account) (string, string) {
+	if account.IsVMKernel() {
+		result, err := probeDockerKernelOpenAI(ctx, account, "")
+		if err == nil {
+			return AccountTokenGuardV2ProbeOK, "credential accepted by container kernel"
+		}
+		if result != nil && len(result.ErrorEvent) > 0 {
+			status := vmKernelProviderErrorStatus(result.ErrorEvent)
+			if status == http.StatusUnauthorized {
+				return AccountTokenGuardV2ProbeAuth, fmt.Sprintf("upstream returned %d", status)
+			}
+		}
+		return AccountTokenGuardV2ProbeTransient, "container kernel inspection did not complete"
+	}
 	if strings.TrimSpace(account.GetCredential("access_token")) == "" {
 		return AccountTokenGuardV2ProbeAuth, "account has no access token"
 	}

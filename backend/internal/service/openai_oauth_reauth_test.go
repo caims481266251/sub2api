@@ -200,6 +200,7 @@ type reauthTestUpdater struct {
 	repo        *reauthTestRepo
 	applied     bool
 	credentials map[string]any
+	extra       map[string]any
 }
 
 type reauthTestRuntimeBlocker struct {
@@ -211,12 +212,13 @@ func (b *reauthTestRuntimeBlocker) ClearAccountSchedulingBlock(accountID int64) 
 	b.clearedAccountID = accountID
 }
 
-func (u *reauthTestUpdater) ApplyOpenAIOAuthReauth(_ context.Context, taskID int64, workerID string, accountID int64, _ map[string]any, credentials, _ map[string]any) (bool, error) {
+func (u *reauthTestUpdater) ApplyOpenAIOAuthReauth(_ context.Context, taskID int64, workerID string, accountID int64, _ map[string]any, credentials, extra map[string]any) (bool, error) {
 	if u.repo.task == nil || u.repo.task.ID != taskID || u.repo.task.AccountID != accountID || u.repo.task.WorkerID != workerID || u.repo.task.Status != OpenAIOAuthReauthStatusCallbackProcessing {
 		return false, nil
 	}
 	u.applied = true
 	u.credentials = cloneReauthMap(credentials)
+	u.extra = cloneReauthMap(extra)
 	u.repo.task.Status = OpenAIOAuthReauthStatusSucceeded
 	u.repo.task.Stage = OpenAIOAuthReauthStageSucceeded
 	return true, nil

@@ -796,7 +796,7 @@ func isOpenAICodexSnapshotStale(account *Account, now time.Time) bool {
 	// (/wham/usage body 的 codex_bengalfox),与 WSv2 无关——不能用 WSv2 门控其 staleness,否则首刷后
 	// codex_5h/7d 已存在→staleness 恒 false→spark 窗口永久冻结(外审第9轮 P1)。影子改按
 	// codex_usage_updated_at TTL 判定;实际查询频率仍由 shouldProbeOpenAICodexSnapshot 的缓存 TTL 节流。
-	if !account.IsShadow() && !account.IsOpenAIResponsesWebSocketV2Enabled() {
+	if !account.IsShadow() && !account.IsVMKernel() && !account.IsOpenAIResponsesWebSocketV2Enabled() {
 		return false
 	}
 	if account.Extra == nil {
@@ -834,6 +834,29 @@ func (s *AccountUsageService) probeOpenAICodexSnapshot(ctx context.Context, acco
 		return nil, nil
 	}
 	observed := observeOpenAIQuotaRecovery(account, time.Now())
+	if account.IsVMKernel() {
+		probeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		model := openaipkg.CodexUsageProbeModel
+		if !account.IsModelSupported(model) {
+			model = ""
+		}
+		result, probeErr := probeDockerKernelOpenAI(probeCtx, account, model)
+		if result == nil {
+			return nil, probeErr
+		}
+		if probeErr != nil || !result.Completed {
+			// Partial/error streams may contain zero-usage headers. They must
+			// never clear a cooldown, even when the kernel returned HTTP 200.
+			observed = nil
+		}
+		if snapshot := ParseCodexRateLimitHeaders(result.Headers); snapshot != nil {
+			updates := buildCodexUsageExtraUpdates(snapshot, time.Now())
+			s.persistOpenAICodexProbeSnapshot(account.ID, updates, observed)
+			return updates, nil
+		}
+		return nil, probeErr
+	}
 	accessToken := ""
 	if !account.IsOpenAIAgentIdentity() {
 		accessToken = account.GetOpenAIAccessToken()

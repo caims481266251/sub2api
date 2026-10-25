@@ -1144,11 +1144,29 @@ func findGuardReloginAccount(cfg AccountTokenGuardConfig, accountName string) (A
 
 // probe 用账号当前的 access_token 调测活接口。
 func (s *AccountTokenGuardService) probe(ctx context.Context, cfg AccountTokenGuardConfig, account *Account) AccountTokenGuardProbeResult {
-	// A probe provider's own 429, 401 or outage must not prevent recovery
-	// when a business request already established that this token was revoked.
+	// Preserve confirmed business authentication failures even when an account
+	// is no longer eligible to dispatch a fresh kernel probe.
 	if guardAccountHasAuthFailure(account) {
 		diagnostic := AccountTokenGuardDiagnostic{Code: "account_auth_rejected"}
 		return AccountTokenGuardProbeResult{State: AccountTokenGuardProbeAuth, Detail: formatGuardDiagnostic(diagnostic), Diagnostic: diagnostic}
+	}
+	if account.IsVMKernel() {
+		probeCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.ProbeTimeoutSeconds)*time.Second)
+		defer cancel()
+		started := time.Now()
+		result, err := probeDockerKernelOpenAI(probeCtx, account, cfg.ProbeModel)
+		state := AccountTokenGuardProbeTransient
+		diagnostic := AccountTokenGuardDiagnostic{Code: "container_kernel_probe_failed"}
+		if err == nil {
+			state = AccountTokenGuardProbeOK
+			diagnostic.Code = "container_kernel_probe_ok"
+		} else if result != nil && len(result.ErrorEvent) > 0 {
+			diagnostic.HTTPStatus = vmKernelProviderErrorStatus(result.ErrorEvent)
+			if diagnostic.HTTPStatus == http.StatusUnauthorized {
+				state = AccountTokenGuardProbeAuth
+			}
+		}
+		return AccountTokenGuardProbeResult{State: state, Detail: formatGuardDiagnostic(diagnostic), Diagnostic: diagnostic, LatencyMS: int(time.Since(started).Milliseconds())}
 	}
 	token := strings.TrimSpace(account.GetCredential("access_token"))
 	if token == "" {

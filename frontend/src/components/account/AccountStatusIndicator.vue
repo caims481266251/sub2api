@@ -1,5 +1,5 @@
 <template>
-  <div class="flex flex-col items-start gap-1">
+  <div class="flex min-w-0 flex-col items-start gap-1">
     <ExcelBPSCredentialStatus :state="account.excel_bps_credential_state" />
     <span
       v-if="protocolEnabled && isExcelBPSEnabled"
@@ -7,44 +7,21 @@
       class="inline-flex items-center rounded bg-[#217346] px-1.5 py-0.5 text-[10px] font-semibold leading-3 text-white"
       :title="t('admin.accounts.openai.excelBPS')"
     >bps</span>
-    <div class="flex items-center gap-2">
-      <!-- OpenAI OAuth RPM Display - keep the pause reason explicit -->
-      <div v-if="isRPMPaused" class="flex flex-col items-center gap-1">
-        <span class="badge text-xs badge-warning">{{ t('admin.accounts.status.rpmPaused') }}</span>
-        <span class="text-[11px] text-gray-400 dark:text-gray-500">{{ rpmResumeText }}</span>
-      </div>
-
-      <!-- Rate Limit Display (429) - Two-line layout -->
-      <div v-else-if="isRateLimited" class="flex flex-col items-center gap-1">
-        <span class="badge text-xs badge-warning">{{ t('admin.accounts.status.rateLimited') }}</span>
-        <span class="text-[11px] text-gray-400 dark:text-gray-500">{{ rateLimitResumeText }}</span>
-      </div>
-
-      <!-- Overload Display (529) - Two-line layout -->
-      <div v-else-if="isOverloaded" class="flex flex-col items-center gap-1">
-        <span class="badge text-xs badge-danger">{{ t('admin.accounts.status.overloaded') }}</span>
-        <span class="text-[11px] text-gray-400 dark:text-gray-500">{{ overloadCountdown }}</span>
-      </div>
-
-      <!-- Main Status Badge (shown when not rate limited/overloaded) -->
-      <template v-else>
-        <div v-if="isTempUnschedulable" class="flex flex-col items-center gap-1">
-          <button
-            type="button"
-            :class="['badge text-xs', statusClass, 'cursor-pointer']"
-            :title="t('admin.accounts.status.viewTempUnschedDetails')"
-            @click="handleTempUnschedClick"
-          >
-            {{ statusText }}
-          </button>
-          <span class="max-w-[180px] text-center text-[11px] leading-4 text-gray-500 dark:text-gray-400">
-            {{ tempUnschedRecoveryText }}
-          </span>
-        </div>
-        <span v-else :class="['badge text-xs', statusClass]">
-          {{ statusText }}
-        </span>
-      </template>
+    <div class="flex max-w-full flex-wrap items-center gap-1.5">
+      <!-- Keep the primary state and its HTTP code on the same baseline. -->
+      <span v-if="isRPMPaused" class="badge text-xs badge-warning">{{ t('admin.accounts.status.rpmPaused') }}</span>
+      <span v-else-if="isRateLimited" class="badge text-xs badge-warning">{{ t('admin.accounts.status.rateLimited') }}</span>
+      <span v-else-if="isOverloaded" class="badge text-xs badge-danger">{{ t('admin.accounts.status.overloaded') }}</span>
+      <button
+        v-else-if="isTempUnschedulable"
+        type="button"
+        :class="['badge text-xs', statusClass, 'cursor-pointer']"
+        :title="t('admin.accounts.status.viewTempUnschedDetails')"
+        @click="handleTempUnschedClick"
+      >
+        {{ statusText }}
+      </button>
+      <span v-else :class="['badge text-xs', statusClass]">{{ statusText }}</span>
 
       <!-- Error Info Indicator -->
       <HelpTooltip v-if="hasError && account.error_message" class="!ml-0" width-class="w-72">
@@ -79,57 +56,6 @@
         {{ t('admin.accounts.status.rateLimitedUntil', { time: formatDateTime(account.rate_limit_reset_at) }) }}
       </HelpTooltip>
 
-      <!-- Model Status Indicators (普通限流 / 超量请求中) -->
-      <div
-        v-if="activeModelStatuses.length > 0"
-        :class="[
-          activeModelStatuses.length <= 4
-            ? 'flex flex-col gap-1'
-            : activeModelStatuses.length <= 8
-              ? 'columns-2 gap-x-2'
-              : 'columns-3 gap-x-2'
-        ]"
-      >
-        <HelpTooltip v-for="item in activeModelStatuses" :key="`${item.kind}-${item.model}`" class="!ml-0 !flex mb-1 break-inside-avoid" width-class="w-80">
-          <template #trigger>
-            <!-- 积分已用尽 -->
-            <span
-              v-if="item.kind === 'credits_exhausted'"
-              class="inline-flex items-center gap-1 rounded bg-red-100 px-1.5 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/30 dark:text-red-400"
-            >
-              <Icon name="exclamationTriangle" size="xs" :stroke-width="2" />
-              {{ t('admin.accounts.status.creditsExhausted') }}
-              <span class="text-[10px] opacity-70">{{ formatCountdown(item.reset_at) }}</span>
-            </span>
-            <!-- 正在走积分（模型限流但积分可用）-->
-            <span
-              v-else-if="item.kind === 'credits_active'"
-              class="inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
-            >
-              <span>⚡</span>
-              {{ formatScopeName(item.model) }}
-              <span class="text-[10px] opacity-70">{{ formatCountdown(item.reset_at) }}</span>
-            </span>
-            <!-- 普通模型限流 -->
-            <span
-              v-else
-              class="inline-flex items-center gap-1 rounded bg-purple-100 px-1.5 py-0.5 text-xs font-medium text-purple-700 dark:bg-purple-900/30 dark:text-purple-400"
-            >
-              <Icon name="exclamationTriangle" size="xs" :stroke-width="2" />
-              {{ formatScopeName(item.model) }}
-              <span class="text-[10px] opacity-70">{{ formatCountdown(item.reset_at) }}</span>
-            </span>
-          </template>
-          {{
-            item.kind === 'credits_exhausted'
-              ? t('admin.accounts.status.creditsExhaustedUntil', { time: formatDateTimeToMinute(item.reset_at) })
-              : item.kind === 'credits_active'
-                ? t('admin.accounts.status.modelCreditOveragesUntil', { model: formatScopeName(item.model), time: formatDateTimeToMinute(item.reset_at) })
-                : t('admin.accounts.status.modelRateLimitedUntil', { model: formatScopeName(item.model), time: formatDateTimeToMinute(item.reset_at) })
-          }}
-        </HelpTooltip>
-      </div>
-
       <!-- Overload Indicator (529) -->
       <HelpTooltip v-if="isOverloaded" class="!ml-0" width-class="w-56">
         <template #trigger>
@@ -141,6 +67,50 @@
           </span>
         </template>
         {{ t('admin.accounts.status.overloadedUntil', { time: formatTime(account.overload_until) }) }}
+      </HelpTooltip>
+    </div>
+    <p v-if="recoveryText" class="max-w-full whitespace-normal break-words text-left text-[11px] leading-4 text-gray-400 dark:text-gray-500">
+      {{ recoveryText }}
+    </p>
+    <!-- Model Status Indicators (普通限流 / 超量请求中) -->
+    <div v-if="activeModelStatuses.length > 0" class="flex max-w-full flex-wrap gap-1">
+      <HelpTooltip v-for="item in activeModelStatuses" :key="`${item.kind}-${item.model}`" class="!ml-0 !flex max-w-full" width-class="w-80">
+        <template #trigger>
+          <!-- 积分已用尽 -->
+          <span
+            v-if="item.kind === 'credits_exhausted'"
+            class="inline-flex max-w-full items-center gap-1 whitespace-normal break-words rounded bg-red-100 px-1.5 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/30 dark:text-red-400"
+          >
+            <Icon name="exclamationTriangle" size="xs" :stroke-width="2" />
+            {{ t('admin.accounts.status.creditsExhausted') }}
+            <span class="shrink-0 whitespace-nowrap text-[10px] opacity-70">{{ formatCountdown(item.reset_at) }}</span>
+          </span>
+          <!-- 正在走积分（模型限流但积分可用）-->
+          <span
+            v-else-if="item.kind === 'credits_active'"
+            class="inline-flex max-w-full items-center gap-1 whitespace-normal break-words rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+          >
+            <span>⚡</span>
+            <span class="min-w-0 [overflow-wrap:anywhere]">{{ formatScopeName(item.model) }}</span>
+            <span class="shrink-0 whitespace-nowrap text-[10px] opacity-70">{{ formatCountdown(item.reset_at) }}</span>
+          </span>
+          <!-- 普通模型限流 -->
+          <span
+            v-else
+            class="inline-flex max-w-full items-center gap-1 whitespace-normal break-words rounded bg-purple-100 px-1.5 py-0.5 text-xs font-medium text-purple-700 dark:bg-purple-900/30 dark:text-purple-400"
+          >
+            <Icon name="exclamationTriangle" size="xs" :stroke-width="2" />
+            <span class="min-w-0 [overflow-wrap:anywhere]">{{ formatScopeName(item.model) }}</span>
+            <span class="shrink-0 whitespace-nowrap text-[10px] opacity-70">{{ formatCountdown(item.reset_at) }}</span>
+          </span>
+        </template>
+        {{
+          item.kind === 'credits_exhausted'
+            ? t('admin.accounts.status.creditsExhaustedUntil', { time: formatDateTimeToMinute(item.reset_at) })
+            : item.kind === 'credits_active'
+              ? t('admin.accounts.status.modelCreditOveragesUntil', { model: formatScopeName(item.model), time: formatDateTimeToMinute(item.reset_at) })
+              : t('admin.accounts.status.modelRateLimitedUntil', { model: formatScopeName(item.model), time: formatDateTimeToMinute(item.reset_at) })
+        }}
       </HelpTooltip>
     </div>
   </div>
@@ -338,6 +308,15 @@ const tempUnschedRecoveryText = computed(() => {
   return t('admin.accounts.status.tempUnschedulableUntil', {
     time: formatDateTime(props.account.temp_unschedulable_until)
   })
+})
+
+// The recovery detail belongs to the displayed primary status.
+const recoveryText = computed(() => {
+  if (isRPMPaused.value) return rpmResumeText.value
+  if (isRateLimited.value) return rateLimitResumeText.value
+  if (isOverloaded.value) return overloadCountdown.value
+  if (isTempUnschedulable.value) return tempUnschedRecoveryText.value
+  return ''
 })
 
 // Computed: status badge class

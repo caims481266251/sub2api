@@ -652,14 +652,18 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if account.Type == AccountTypeOAuth {
 		switch account.Platform {
 		case PlatformOpenAI:
-			go func() {
+			// The background check owns its snapshot; the request may update or
+			// serialize the returned account while the privacy request is running.
+			privacyAccount := *account
+			privacyAccount.Extra = maps.Clone(account.Extra)
+			go func(account *Account) {
 				defer func() {
 					if r := recover(); r != nil {
 						slog.Error("create_account_openai_privacy_panic", "account_id", account.ID, "recover", r)
 					}
 				}()
 				s.EnsureOpenAIPrivacy(context.Background(), account)
-			}()
+			}(&privacyAccount)
 		case PlatformAntigravity:
 			go func() {
 				defer func() {
@@ -2019,7 +2023,14 @@ func (s *adminServiceImpl) EnsureOpenAIPrivacy(ctx context.Context, account *Acc
 		return ""
 	}
 
-	_ = s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{"privacy_mode": mode})
+	if err := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{"privacy_mode": mode}); err != nil {
+		slog.Warn("openai_privacy_persistence_failed", "account_id", account.ID)
+		return ""
+	}
+	if account.Extra == nil {
+		account.Extra = make(map[string]any)
+	}
+	account.Extra["privacy_mode"] = mode
 	return mode
 }
 

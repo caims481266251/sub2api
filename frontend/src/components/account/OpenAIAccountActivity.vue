@@ -1,10 +1,10 @@
 <template>
-  <div class="w-52 max-w-full space-y-1.5" data-testid="openai-account-activity" @click.stop>
+  <div class="w-48 max-w-full space-y-1 border-t border-gray-100 pt-1.5 dark:border-dark-700" data-testid="openai-account-activity" @click.stop>
     <button type="button" class="flex w-full min-w-0 items-center gap-1.5 rounded text-left text-[11px] focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary-500"
       data-testid="open-quality-monitor" @click="emit('open-quality')">
       <span class="shrink-0 text-gray-500 dark:text-dark-300">{{ t('admin.accounts.activity.quality') }}</span>
-      <span class="badge truncate text-[10px]" :class="qualityBadgeClass(activity?.quality.state)">{{ qualityLabel }}</span>
-      <Icon name="chevronRight" size="xs" class="ml-auto shrink-0 text-gray-400" />
+      <span class="badge ml-auto truncate text-[10px]" :class="qualityBadgeClass(activity?.quality.state)">{{ qualityLabel }}</span>
+      <Icon name="chevronRight" size="xs" class="shrink-0 text-gray-400" />
     </button>
 
     <div class="grid grid-cols-[repeat(16,minmax(0,1fr))] gap-[2px]" role="group" :aria-label="t('admin.accounts.activity.barLabel')">

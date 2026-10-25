@@ -1548,6 +1548,7 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 	}
 
 	var newCredentials map[string]any
+	var openAIPrivacyMode string
 
 	if account.IsOpenAI() {
 		tokenInfo, err := h.openaiOAuthService.RefreshAccountToken(ctx, account)
@@ -1564,6 +1565,7 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 			}
 		}
 		newCredentials = service.NormalizeOpenAIPersonalAccessTokenCredentials(account, tokenInfo, newCredentials)
+		openAIPrivacyMode = tokenInfo.PrivacyMode
 	} else if account.Platform == service.PlatformGemini {
 		tokenInfo, err := h.geminiOAuthService.RefreshAccountToken(ctx, account)
 		if err != nil {
@@ -1668,12 +1670,33 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 		}
 	}
 
-	// OpenAI OAuth: 刷新成功后检查并设置 privacy_mode
-	h.adminService.EnsureOpenAIPrivacy(ctx, updatedAccount)
+	// Keep the result already obtained with the refreshed token. A failed setting
+	// is still a fresh result and must not trigger a duplicate request here.
+	if openAIPrivacyMode != "" {
+		persistOpenAIRefreshPrivacy(ctx, h.adminService, updatedAccount, openAIPrivacyMode)
+	} else {
+		h.adminService.EnsureOpenAIPrivacy(ctx, updatedAccount)
+	}
 	// Antigravity OAuth: 刷新成功后检查并设置 privacy_mode
 	h.adminService.EnsureAntigravityPrivacy(ctx, updatedAccount)
 
 	return updatedAccount, "", nil
+}
+
+// persistOpenAIRefreshPrivacy merges only the privacy key and updates the reply
+// snapshot after persistence, preserving unrelated account settings.
+func persistOpenAIRefreshPrivacy(ctx context.Context, adminService service.AdminService, account *service.Account, mode string) {
+	if account == nil || account.Platform != service.PlatformOpenAI || !account.IsOAuth() || mode == "" {
+		return
+	}
+	if err := adminService.UpdateAccountExtra(ctx, account.ID, map[string]any{"privacy_mode": mode}); err != nil {
+		slog.Warn("openai_refresh_privacy_persistence_failed", "account_id", account.ID)
+		return
+	}
+	if account.Extra == nil {
+		account.Extra = make(map[string]any)
+	}
+	account.Extra["privacy_mode"] = mode
 }
 
 // Refresh handles refreshing account credentials
