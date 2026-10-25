@@ -1882,14 +1882,23 @@ func parseOpenAIRateLimitResetTime(body []byte) *int64 {
 		return nil
 	}
 
-	errObj, ok := parsed["error"].(map[string]any)
-	if !ok {
+	errObj, _ := parsed["error"].(map[string]any)
+	if errObj == nil {
+		// Streaming response.failed events carry the same quota error under
+		// response.error. Keep its reset metadata on the shared HTTP/WS path.
+		response, _ := parsed["response"].(map[string]any)
+		errObj, _ = response["error"].(map[string]any)
+	}
+	if errObj == nil {
 		return nil
 	}
 
-	// 检查是否为已知的账号用量限制类型。
+	// Only explicit quota types/codes authorize reset metadata. A generic
+	// rate-limit message or a local capacity error must not create a quota block.
 	errType, _ := errObj["type"].(string)
-	if errType != "usage_limit_reached" && errType != "rate_limit_exceeded" && errType != "GoUsageLimitError" {
+	errCode, _ := errObj["code"].(string)
+	if errType != "usage_limit_reached" && errType != "rate_limit_exceeded" && errType != "GoUsageLimitError" &&
+		errCode != "usage_limit_reached" && errCode != "rate_limit_exceeded" {
 		return nil
 	}
 

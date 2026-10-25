@@ -171,17 +171,20 @@ func (s *AccountQualityMonitorService) account(ctx context.Context, id int64) (*
 	return account, scope, nil
 }
 
-func accountQualityPauseReason(account *Account, now time.Time) string {
+func (s *AccountQualityMonitorService) pauseReason(ctx context.Context, account *Account, model string, now time.Time) string {
 	if !account.IsActive() {
 		return "帐号已停用或不可用"
 	}
 	if account.AutoPauseOnExpired && account.ExpiresAt != nil && !now.Before(*account.ExpiresAt) {
 		return "帐号已过期"
 	}
-	for _, window := range []string{"5h", "7d"} {
-		if value, known := resolveOpenAIQuotaUtilization(account.Extra, window, now); known && value >= 1 {
-			return strings.ToUpper(window) + " 额度受限"
-		}
+	// Resolve the same global settings on every check, including detached tasks
+	// whose lifecycle context does not retain the initiating HTTP request values.
+	if s.tests != nil {
+		ctx = s.tests.openaiGatewayService.withOpenAIQuotaAutoPauseContext(ctx)
+	}
+	if paused, decision := evaluateOpenAIAccountQuotaPause(ctx, account, now); paused {
+		return accountQualityQuotaWindowLabel(account, decision.window) + "额度策略暂停"
 	}
 	if account.Type == AccountTypeAPIKey && account.IsQuotaExceeded() {
 		return "帐号额度受限"
@@ -195,14 +198,38 @@ func accountQualityPauseReason(account *Account, now time.Time) string {
 	if account.TempUnschedulableUntil != nil && now.Before(*account.TempUnschedulableUntil) {
 		return "帐号暂时不可用"
 	}
+	if account.isModelRateLimitedWithContext(ctx, model) {
+		return "当前模型临时限流"
+	}
 	return ""
 }
 
-func (s *AccountQualityMonitorService) view(account *Account, scope string, record *AccountQualityMonitorRecord, details bool) *AccountQualityMonitorView {
+func accountQualityQuotaWindowLabel(account *Account, window string) string {
+	minutes := parseExtraInt(account.Extra["codex_"+window+"_window_minutes"])
+	if minutes <= 0 {
+		if window == "5h" {
+			minutes = 5 * 60
+		} else {
+			minutes = 7 * 24 * 60
+		}
+	}
+	if minutes%(24*60) == 0 {
+		return fmt.Sprintf("%d 天", minutes/(24*60))
+	}
+	if minutes%60 == 0 {
+		return fmt.Sprintf("%d 小时", minutes/60)
+	}
+	return fmt.Sprintf("%d 分钟", minutes)
+}
+
+func (s *AccountQualityMonitorService) view(ctx context.Context, account *Account, scope string, record *AccountQualityMonitorRecord, details bool) *AccountQualityMonitorView {
 	result := &AccountQualityMonitorView{AccountID: account.ID, AccountQualityMonitorConfig: defaultAccountQualityConfig(account), State: "untested"}
 	result.Scope = scope
 	now := s.now()
-	result.PauseReason = accountQualityPauseReason(account, now)
+	if record != nil && record.Scope == scope {
+		result.AccountQualityMonitorConfig = record.AccountQualityMonitorConfig
+	}
+	result.PauseReason = s.pauseReason(ctx, account, result.Model, now)
 	if scope == "" {
 		result.State, result.PauseReason = "paused", "母帐号暂时不可用"
 		if record != nil {
@@ -213,7 +240,6 @@ func (s *AccountQualityMonitorService) view(account *Account, scope string, reco
 	if record == nil || record.Scope != result.Scope {
 		return result
 	}
-	result.AccountQualityMonitorConfig = record.AccountQualityMonitorConfig
 	if result.PauseReason == "" && !IsAccountQualityTextModel(account, record.Model) {
 		result.PauseReason = "当前模型不支持文本质量检测"
 	}
@@ -255,7 +281,7 @@ func (s *AccountQualityMonitorService) Get(ctx context.Context, id int64, detail
 	if err != nil {
 		return nil, err
 	}
-	return s.view(account, scope, record, details), nil
+	return s.view(ctx, account, scope, record, details), nil
 }
 
 func (s *AccountQualityMonitorService) Batch(ctx context.Context, ids []int64) (map[int64]*AccountQualityMonitorView, error) {
@@ -284,7 +310,7 @@ func (s *AccountQualityMonitorService) BatchForAccounts(ctx context.Context, acc
 	views := make(map[int64]*AccountQualityMonitorView, len(ids))
 	for _, a := range accounts {
 		if a != nil && a.Platform == PlatformOpenAI {
-			views[a.ID] = s.view(a, scopes[a.ID], records[a.ID], false)
+			views[a.ID] = s.view(ctx, a, scopes[a.ID], records[a.ID], false)
 		}
 	}
 	return views, nil
@@ -367,7 +393,7 @@ func (s *AccountQualityMonitorService) Save(ctx context.Context, id int64, confi
 	if err != nil {
 		return nil, err
 	}
-	return s.view(account, scope, record, true), nil
+	return s.view(ctx, account, scope, record, true), nil
 }
 
 func (s *AccountQualityMonitorService) Start(ctx context.Context, id int64, scope string) (*AccountQualityMonitorView, error) {
@@ -393,7 +419,7 @@ func (s *AccountQualityMonitorService) Start(ctx context.Context, id int64, scop
 	if !IsAccountQualityTextModel(account, record.Model) {
 		return nil, ErrAccountQualityTextModel
 	}
-	if reason := accountQualityPauseReason(account, s.now()); reason != "" {
+	if reason := s.pauseReason(ctx, account, record.Model, s.now()); reason != "" {
 		return nil, fmt.Errorf("%w: %s", ErrAccountQualityUnavailable, reason)
 	}
 	if err = s.dispatch(ctx, record, false); err != nil {
@@ -475,7 +501,7 @@ func (s *AccountQualityMonitorService) run(ctx context.Context, record *AccountQ
 	}()
 	defer func() { close(heartbeatDone); <-heartbeatStopped }()
 	account, scope, err := s.account(ctx, record.AccountID)
-	if err != nil || scope != record.Scope || accountQualityPauseReason(account, s.now()) != "" || !IsAccountQualityTextModel(account, record.Model) {
+	if err != nil || scope != record.Scope || s.pauseReason(ctx, account, record.Model, s.now()) != "" || !IsAccountQualityTextModel(account, record.Model) {
 		return
 	}
 	started := s.now()
@@ -539,7 +565,7 @@ func (s *AccountQualityMonitorService) RunDue(ctx context.Context, now time.Time
 			_, _ = s.repo.Ensure(ctx, account.ID, config, now)
 			continue
 		}
-		if accountQualityPauseReason(account, now) != "" || !IsAccountQualityTextModel(account, record.Model) {
+		if s.pauseReason(ctx, account, record.Model, now) != "" || !IsAccountQualityTextModel(account, record.Model) {
 			_ = s.repo.Postpone(ctx, record, now.Add(time.Minute))
 			continue
 		}

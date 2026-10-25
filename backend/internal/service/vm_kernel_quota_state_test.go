@@ -124,3 +124,66 @@ func TestVMKernelLocalFailuresDoNotChangeAccountQuota(t *testing.T) {
 		})
 	}
 }
+
+func TestOpenAIStreamQuotaResetUsesOrdinaryAccountState(t *testing.T) {
+	reset := time.Now().Add(4 * time.Hour).Truncate(time.Second)
+	for _, tc := range []struct {
+		name, payload string
+		limited       bool
+	}{
+		{"top-level quota type", fmt.Sprintf(`{"type":"error","error":{"type":"usage_limit_reached","resets_at":%d}}`, reset.Unix()), true},
+		{"nested quota type", fmt.Sprintf(`{"type":"response.failed","response":{"error":{"type":"usage_limit_reached","resets_at":%d}}}`, reset.Unix()), true},
+		{"top-level quota code", fmt.Sprintf(`{"type":"error","error":{"type":"api_error","code":"usage_limit_reached","resets_at":"%d"}}`, reset.Unix()), true},
+		{"nested quota code", `{"type":"response.failed","response":{"error":{"code":"rate_limit_exceeded","resets_in_seconds":"14400"}}}`, true},
+		{"transient rate limit", `{"type":"error","error":{"code":"rate_limit_exceeded","message":"Please retry later"}}`, false},
+		{"local capacity", `{"type":"error","error":{"code":"no_capacity","resets_in_seconds":14400}}`, false},
+	} {
+		for _, mode := range []string{AccountExecutionModeNormal, AccountExecutionModeDockerKernel} {
+			t.Run(tc.name+"/"+mode, func(t *testing.T) {
+				repo := &oauth429RateLimitRepo{}
+				limits := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+				svc := &OpenAIGatewayService{rateLimitService: limits}
+				limits.SetAccountRuntimeBlocker(svc)
+				account := &Account{ID: 995513, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+					Status: StatusActive, Schedulable: true, ExecutionMode: mode}
+				// A successful stream's quota snapshot is not an account rejection.
+				// Only the error's explicit reset may establish a long quota block.
+				headers := http.Header{
+					"X-Codex-Secondary-Used-Percent":        {"100"},
+					"X-Codex-Secondary-Reset-After-Seconds": {"14400"},
+					"X-Codex-Secondary-Window-Minutes":      {"10080"},
+				}
+				if mode == AccountExecutionModeDockerKernel {
+					socket := vmForwardUDS(t, func(w http.ResponseWriter, r *http.Request) {
+						for key, values := range headers {
+							w.Header()[key] = values
+						}
+						w.Header().Set("Content-Type", "text/event-stream")
+						// The kernel wraps upstream WebSocket events in generic SSE.
+						fmt.Fprintf(w, "event: response\ndata: %s\n\n", tc.payload)
+					})
+					client := vmkernel.NewClient()
+					t.Cleanup(client.Close)
+					result, err := client.Execute(context.Background(), vmkernel.Binding{Socket: socket, Token: "test", Generation: 1}, vmkernel.Request{Protocol: "responses", Body: json.RawMessage(`{}`)}, nil)
+					require.Error(t, err)
+					require.NotNil(t, result)
+					require.True(t, result.Settled)
+					require.False(t, result.ProviderHTTPFailure, "exercise the stream account-state path")
+					require.JSONEq(t, tc.payload, string(result.ErrorEvent))
+					svc.observeVMKernelOpenAIResult(context.Background(), nil, account, "gpt-6-luna", result)
+				} else {
+					svc.handleOpenAIWSFailureAccountSideEffects(context.Background(), account, "gpt-6-luna", headers, []byte(tc.payload))
+				}
+				require.Equal(t, tc.limited, svc.isOpenAIAccountRuntimeBlocked(account))
+				require.Equal(t, StatusActive, account.Status, "a timed quota block must preserve account enablement")
+				require.True(t, account.Schedulable, "a timed quota block must preserve manual scheduling")
+				if tc.limited {
+					require.Equal(t, 1, repo.setRateLimitedCalls)
+					require.WithinDuration(t, reset, repo.lastRateLimitedUntil, 2*time.Second)
+				} else {
+					require.Zero(t, repo.setRateLimitedCalls, "transient and local failures must not inherit the quota snapshot")
+				}
+			})
+		}
+	}
+}
