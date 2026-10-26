@@ -1016,7 +1016,7 @@ redis:
   db: 0
   # Connection pool size (max concurrent connections)
   # 连接池大小（最大并发连接数）
-  pool_size: 1024
+  pool_size: 4096
   # Minimum number of idle connections (高并发场景建议 128+，保持足够热连接)
   # 最小空闲连接数
   min_idle_conns: 128

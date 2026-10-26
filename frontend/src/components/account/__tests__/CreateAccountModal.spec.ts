@@ -25,6 +25,7 @@ const {
   importCodexSessionMock,
   createOpenAICodexPATMock,
   createCredentialOperationsMock,
+  managementCapabilitiesMock,
   authIsSimpleMode,
 } = vi.hoisted(() => ({
   createAccountMock: vi.fn(),
@@ -37,6 +38,7 @@ const {
   importCodexSessionMock: vi.fn(),
   createOpenAICodexPATMock: vi.fn(),
   createCredentialOperationsMock: vi.fn(),
+  managementCapabilitiesMock: vi.fn(),
   authIsSimpleMode: { value: true },
 }))
 
@@ -59,7 +61,7 @@ vi.mock('@/stores/auth', () => ({
 vi.mock('@/api/admin', () => ({
   adminAPI: {
     accounts: {
-      getManagementCapabilities: vi.fn().mockResolvedValue({ web_search_enabled: false, account_quota_notify_enabled: false, vm_kernel_enabled: true }),
+      getManagementCapabilities: managementCapabilitiesMock,
       create: createAccountMock,
       generateAuthUrl: generateAuthUrlMock,
       exchangeCode: exchangeCodeMock,
@@ -471,6 +473,7 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
 
   beforeEach(() => {
     authIsSimpleMode.value = true
+    managementCapabilitiesMock.mockReset().mockResolvedValue({ vm_kernel_enabled: false })
     createAccountMock.mockReset().mockResolvedValue({ id: 42, platform: 'openai', type: 'apikey' })
     generateAuthUrlMock.mockReset().mockResolvedValue({
       auth_url: 'https://example.test/auth?state=test-state', session_id: 'test-session',
@@ -499,13 +502,70 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
 
   afterEach(() => vi.useRealTimers())
 
-  it('defaults new accounts to normal execution', async () => {
+  it('defaults OpenAI OAuth and 2FA to Docker when the deployment supports it', async () => {
+    managementCapabilitiesMock.mockResolvedValue({ vm_kernel_enabled: true })
+    const wrapper = mountModal()
+    await flushPromises()
+    const mode = () => wrapper.get<HTMLSelectElement>('[data-testid="account-execution-mode"]').element.value
+    expect(mode()).toBe('docker_kernel')
+    expect(wrapper.find('[data-testid="docker-request-cache"]').exists()).toBe(true)
+    await wrapper.get('[data-testid="openai-two-fa"]').trigger('click')
+    expect(mode()).toBe('docker_kernel')
+    await selectButtonByText(wrapper, 'Anthropic')
+    expect(mode()).toBe('normal')
+    await selectButtonByText(wrapper, 'OpenAI')
+    expect(mode()).toBe('docker_kernel')
+    await selectButtonByText(wrapper, 'API Key')
+    expect(mode()).toBe('normal')
+    expect(wrapper.get('[data-testid="account-execution-mode"] option[value="docker_kernel"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-testid="openai-bps-oauth"]').trigger('click')
+    expect(mode()).toBe('normal')
+    await wrapper.get('[data-testid="openai-two-fa"]').trigger('click')
+    expect(mode()).toBe('docker_kernel')
+  })
+
+  it('preserves manual normal mode and resets to Docker for the next new account', async () => {
+    managementCapabilitiesMock.mockResolvedValue({ vm_kernel_enabled: true })
+    const wrapper = mountModal()
+    await flushPromises()
+    await wrapper.get('[data-testid="account-execution-mode"]').setValue('normal')
+    await wrapper.get('[data-testid="openai-two-fa"]').trigger('click')
+    await selectButtonByText(wrapper, 'Anthropic')
+    await selectButtonByText(wrapper, 'OpenAI')
+    expect(wrapper.get('[data-testid="account-execution-mode"]').element).toHaveProperty('value', 'normal')
+    await wrapper.setProps({ show: false })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    expect(wrapper.get('[data-testid="account-execution-mode"]').element).toHaveProperty('value', 'docker_kernel')
+  })
+
+  it('does not overwrite a manual choice when capabilities finish loading', async () => {
+    let resolveCapabilities!: (value: { vm_kernel_enabled: boolean }) => void
+    managementCapabilitiesMock.mockReturnValue(new Promise(resolve => { resolveCapabilities = resolve }))
+    const wrapper = mountModal()
+    await wrapper.get('[data-testid="account-execution-mode"]').setValue('normal')
+    resolveCapabilities({ vm_kernel_enabled: true })
+    await flushPromises()
+    expect(wrapper.get('[data-testid="account-execution-mode"]').element).toHaveProperty('value', 'normal')
+  })
+
+  it('keeps normal mode if deployment capabilities cannot be loaded', async () => {
+    managementCapabilitiesMock.mockRejectedValue(new Error('capabilities unavailable'))
+    const wrapper = mountModal()
+    await flushPromises()
+    expect(wrapper.get('[data-testid="account-execution-mode"]').element).toHaveProperty('value', 'normal')
+    expect(wrapper.get('[data-testid="account-execution-mode"] option[value="docker_kernel"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('keeps API key accounts on normal execution when Docker is available', async () => {
+    managementCapabilitiesMock.mockResolvedValue({ vm_kernel_enabled: true })
     const wrapper = await submitApiKeyAccount('openai')
     expect(createAccountMock.mock.calls[0]?.[0]?.execution_mode).toBe('normal')
     wrapper.unmount()
   })
 
   it('preserves VM execution mode and configured concurrency through standard Codex session import', async () => {
+    managementCapabilitiesMock.mockResolvedValue({ vm_kernel_enabled: true })
     const wrapper = mountModal()
     await selectButtonByText(wrapper, 'OpenAI')
     await wrapper.get('[data-testid="account-concurrency"]').setValue(17)
@@ -523,6 +583,7 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
   })
 
   it('rejects API key creation in VM mode before sending a request', async () => {
+    managementCapabilitiesMock.mockResolvedValue({ vm_kernel_enabled: true })
     const wrapper = mountModal()
     await selectButtonByText(wrapper, 'OpenAI')
     await selectButtonByText(wrapper, 'API Key')
@@ -536,6 +597,7 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
   })
 
   it.each(['normal', 'docker_kernel'])('offers 2FA initial login and credential operations in %s mode', async (executionMode) => {
+    managementCapabilitiesMock.mockResolvedValue({ vm_kernel_enabled: true })
     const wrapper = mountModal()
     await selectButtonByText(wrapper, 'OpenAI')
     await wrapper.get('[data-testid="openai-two-fa"]').trigger('click')

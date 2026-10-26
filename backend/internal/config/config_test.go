@@ -112,6 +112,34 @@ func TestLoadSimpleModeKeyRateLimitEnabledFromEnvironment(t *testing.T) {
 	require.True(t, cfg.SimpleModeKeyRateLimitEnabled)
 }
 
+func TestLoadRedisPoolSizeDefaultAndOverrides(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		fileConfig string
+		envValue   string
+		want       int
+	}{
+		{name: "default", fileConfig: "{}\n", want: 4096},
+		{name: "existing yaml override", fileConfig: "redis:\n  pool_size: 1024\n", want: 1024},
+		{name: "environment override", fileConfig: "{}\n", envValue: "2048", want: 2048},
+		{name: "environment overrides yaml", fileConfig: "redis:\n  pool_size: 1024\n", envValue: "8192", want: 8192},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resetViperWithJWTSecret(t)
+			t.Setenv("REDIS_POOL_SIZE", tc.envValue)
+			t.Setenv("REDIS_MIN_IDLE_CONNS", "")
+			configFile := filepath.Join(t.TempDir(), "config.yaml")
+			require.NoError(t, os.WriteFile(configFile, []byte(tc.fileConfig), 0o600))
+			t.Setenv("CONFIG_FILE", configFile)
+
+			cfg, err := Load()
+			require.NoError(t, err)
+			require.Equal(t, tc.want, cfg.Redis.PoolSize)
+			require.Equal(t, 128, cfg.Redis.MinIdleConns)
+		})
+	}
+}
+
 func TestLoadRedisUsernameFromEnvironment(t *testing.T) {
 	resetViperWithJWTSecret(t)
 	t.Setenv("REDIS_USERNAME", "app-user")

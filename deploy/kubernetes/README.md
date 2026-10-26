@@ -107,7 +107,7 @@ kubectl -n sub2api get pods,pvc,pdb
 
 `GOMEMLIMIT` 默认设为 `"off"`，关闭 Go 运行时内存软目标；正常垃圾回收仍启用。它不取消下方 Pod 的资源硬限制，管理员仍可显式配置软目标。
 
-资源和连接池是起始预算：每 Pod requests=500m/768Mi、limits=2 CPU/2 GiB；SQL 最大连接 16，Redis pool size 32。总池容量随 Pod 数增长，需给主站和其他服务留连接余量。不要沿用每实例 256/1024 的默认池后直接大幅扩容。PDB minAvailable=1 只约束自愿驱逐，不是故障接管保证，也不阻止管理员直接删除 Pod。
+资源和连接池是起始预算：每 Pod requests=500m/768Mi、limits=2 CPU/2 GiB；SQL 最大连接 16，Redis pool size 32。总池容量随 Pod 数增长，需给主站和其他服务留连接余量。不要沿用主服务的默认连接池配置后直接大幅扩容。PDB minAvailable=1 只约束自愿驱逐，不是故障接管保证，也不阻止管理员直接删除 Pod。
 
 ## 仍需单独解决的有状态路径
 

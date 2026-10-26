@@ -17,8 +17,8 @@ import (
 // 2. 无超时控制可能导致慢操作阻塞
 //
 // 新实现支持可配置的连接池和超时参数：
-// 1. PoolSize: 控制最大并发连接数（默认 128）
-// 2. MinIdleConns: 保持最小空闲连接，减少冷启动延迟（默认 10）
+// 1. PoolSize: 连接池容量，由 redis.pool_size 配置
+// 2. MinIdleConns: 保持最小空闲连接，减少冷启动延迟，由 redis.min_idle_conns 配置
 // 3. DialTimeout/ReadTimeout/WriteTimeout: 精确控制各阶段超时
 func InitRedis(cfg *config.Config) *redis.Client {
 	client := redis.NewClient(buildRedisOptions(cfg))

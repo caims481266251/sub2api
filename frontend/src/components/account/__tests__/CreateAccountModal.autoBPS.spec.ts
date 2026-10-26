@@ -146,8 +146,8 @@ describe('CreateAccountModal auto BPS switch', () => {
     capabilities.mockResolvedValueOnce({ vm_kernel_enabled: true } as any)
     const wrapper = mountModal()
     await flushPromises()
-    expect(wrapper.find('[data-testid="docker-request-cache"]').exists()).toBe(false)
-    await wrapper.get('[data-testid="account-execution-mode"]').setValue('docker_kernel')
+    expect(wrapper.find('[data-testid="docker-request-cache"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="account-execution-mode"]').element).toHaveProperty('value', 'docker_kernel')
     const toggle = '[data-testid="docker-request-cache-enabled"]'
     expect((wrapper.get(toggle).element as HTMLInputElement).checked).toBe(true)
     await wrapper.get(toggle).setValue(enabled)

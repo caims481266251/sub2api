@@ -69,9 +69,9 @@
 
       <div>
         <label class="input-label">{{ t('admin.accounts.executionMode') }}</label>
-        <select v-model="form.execution_mode" data-testid="account-execution-mode" class="input mt-2">
+        <select v-model="form.execution_mode" data-testid="account-execution-mode" class="input mt-2" @change="executionModeChoice = form.execution_mode">
           <option value="normal">{{ t('admin.accounts.executionModeNormal') }}</option>
-          <option value="docker_kernel" :disabled="form.platform !== 'openai' || vmKernelEnabled !== true">{{ t('admin.accounts.executionModeVM') }}</option>
+          <option value="docker_kernel" :disabled="!dockerExecutionAvailable">{{ t('admin.accounts.executionModeVM') }}</option>
         </select>
         <p v-if="vmKernelEnabled === false && ['anthropic', 'openai'].includes(form.platform)" class="input-hint">{{ t('admin.accounts.vmKernelUnavailable') }}</p>
         <p v-if="form.execution_mode === 'docker_kernel'" class="mt-2 text-sm text-gray-500">{{ t('admin.accounts.executionModeVMHint') }}</p>
@@ -5107,6 +5107,7 @@ const tempUnschedPresets = computed(() => [
   }
 ])
 
+const executionModeChoice = ref<'normal' | 'docker_kernel' | null>(null)
 const form = reactive({
   execution_mode: 'normal' as 'normal' | 'docker_kernel',
   name: '',
@@ -5121,6 +5122,17 @@ const form = reactive({
   rate_multiplier: 1,
   group_ids: [] as number[],
   expires_at: null as number | null
+})
+
+const dockerExecutionAvailable = computed(() =>
+  vmKernelEnabled.value === true && form.platform === 'openai' &&
+  accountCategory.value === 'oauth-based' && addMethod.value === 'oauth' && !isOpenAIBPSOAuth.value
+)
+
+// Default eligible OpenAI accounts to Docker once capabilities are known.
+// Preserve an explicit choice across OAuth/2FA and platform/type switches.
+watch(dockerExecutionAvailable, (available) => {
+  form.execution_mode = available ? executionModeChoice.value ?? 'docker_kernel' : 'normal'
 })
 
 
@@ -5711,7 +5723,8 @@ const resetForm = () => {
   bpsOAuthModels.value = [...DEFAULT_EXCEL_BPS_MODELS]
   autoBPS.reset()
   twoFABusy.value = false
-  form.execution_mode = 'normal'
+  executionModeChoice.value = null
+  form.execution_mode = vmKernelEnabled.value === true ? 'docker_kernel' : 'normal'
   form.name = ''
   openAIRequestTimezone.value = 'Asia/Singapore'
   form.notes = ''
