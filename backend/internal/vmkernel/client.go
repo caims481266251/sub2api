@@ -26,6 +26,9 @@ const MaxEventBytes = 16 << 20
 type Client struct {
 	ResponseHeaderTimeout time.Duration
 	CancelTimeout         time.Duration
+	// Bounds a blocked response-body read, not total execution or downstream work.
+	// Set before serving requests. Zero disables this guard.
+	StreamDataIntervalTimeout time.Duration
 	// Set before serving requests. Empty uses vm2api's prefer_websocket default.
 	UpstreamTransport string
 	poolMu            sync.Mutex
@@ -155,7 +158,9 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 	// Once a connection is obtained a write may partially reach the guest even
 	// without a WroteHeaders callback. Conservatively forbid replay from here.
 	trace := &httptrace.ClientTrace{GotConn: func(httptrace.GotConnInfo) { dispatched.Store(true) }}
-	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(ctx, trace), http.MethodPost, "http://guest"+endpoint, bytes.NewReader(payload))
+	readCtx, cancelRead := context.WithCancelCause(ctx)
+	defer cancelRead(nil)
+	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(readCtx, trace), http.MethodPost, "http://guest"+endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return nil, err
 	}
@@ -175,12 +180,19 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 		}
 		return result, &AttemptError{Code: "kernel_transport_failed", SafeToRetry: !dispatched.Load(), Cause: err}
 	}
+	if c.StreamDataIntervalTimeout > 0 {
+		resp.Body = &idleReadCloser{ReadCloser: resp.Body, timeout: c.StreamDataIntervalTimeout, ctx: readCtx, cancel: cancelRead}
+	}
 	defer resp.Body.Close()
 	copyPublicHeaders(result.Headers, resp.Header)
 	notifyResponseHeaders(ctx, result.Headers)
 	result.RequestID = result.Headers.Get("x-request-id")
 	if resp.StatusCode != http.StatusOK {
 		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, (64<<10)+1))
+		if errors.Is(readErr, errKernelStreamIdle) {
+			result.CancelStatus, result.CancelHTTPStatus = c.cancel(binding, attemptID)
+			return result, &AttemptError{Code: "kernel_stream_idle_timeout", Cause: readErr}
+		}
 		if readErr == nil && len(raw) <= 64<<10 {
 			// This private socket reaches only the fixed synchronous kernel;
 			// the relay does not generate HTTP responses. A fully read failure
@@ -409,6 +421,9 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 			result.ClientDisconnect = true
 		}
 		result.CancelStatus, result.CancelHTTPStatus = c.cancel(binding, attemptID)
+		if errors.Is(err, errKernelStreamIdle) {
+			return result, &AttemptError{Code: "kernel_stream_idle_timeout", Cause: err}
+		}
 		return result, &AttemptError{Code: "kernel_stream_incomplete", Cause: err}
 	}
 	// A verified terminal plus normal EOF settles this HTTP attempt. A socket

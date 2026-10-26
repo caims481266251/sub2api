@@ -154,6 +154,7 @@ func newVMKernelClient(cfg *config.Config, platform string) *vmkernel.Client {
 	seconds := cfg.Gateway.ResponseHeaderTimeout
 	if platform == PlatformOpenAI {
 		seconds = cfg.Gateway.OpenAIResponseHeaderTimeout
+		client.StreamDataIntervalTimeout = time.Duration(cfg.Gateway.StreamDataIntervalTimeout) * time.Second
 	}
 	client.ResponseHeaderTimeout = time.Duration(seconds) * time.Second
 	return client
