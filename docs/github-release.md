@@ -1,6 +1,6 @@
 # GitHub 发布与在线更新
 
-本分支的发布仓库是 `caims481266251/sub2api`，持续发布分支为 `codex/vm-kernel-account-mode`。当前版本 `2.15.21` 补齐 Docker OpenAI Responses SSE 的持续保活、读取无进展超时和失败收尾处理。
+本分支的发布仓库是 `caims481266251/sub2api`，持续发布分支为 `codex/vm-kernel-account-mode`。最近已发布版本为 `2.15.21`；当前开发代码已撤销该版本新增的 Docker OpenAI SSE 保活、读取无进展超时及配套失败收尾改动，恢复为 `v2.15.20` 的对应实现。此撤销尚未发布，不改变已有 `v2.15.21` tag 和安装包。
 
 ## 发布方式
 

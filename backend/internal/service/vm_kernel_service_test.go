@@ -324,16 +324,8 @@ func TestVMKernelUsesExistingGatewayTimeoutPolicy(t *testing.T) {
 	} {
 		cfg := &config.Config{}
 		cfg.Gateway.OpenAIResponseHeaderTimeout, cfg.Gateway.ResponseHeaderTimeout = tc.openai, tc.general
-		cfg.Gateway.StreamDataIntervalTimeout = 180
 		if got := newVMKernelClient(cfg, tc.platform).ResponseHeaderTimeout; got != tc.want {
 			t.Fatalf("platform=%s got %v want %v", tc.platform, got, tc.want)
-		}
-		wantIdle := time.Duration(0)
-		if tc.platform == PlatformOpenAI {
-			wantIdle = 180 * time.Second
-		}
-		if got := newVMKernelClient(cfg, tc.platform).StreamDataIntervalTimeout; got != wantIdle {
-			t.Fatalf("platform=%s stream idle=%v want %v", tc.platform, got, wantIdle)
 		}
 	}
 }

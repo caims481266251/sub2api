@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/vmkernel"
 	"github.com/gin-gonic/gin"
@@ -106,7 +105,7 @@ func vmKernelProviderErrorStatus(payload []byte) int {
 	return openAIWSErrorHTTPStatus(payload)
 }
 
-func writeVMKernelRequestError(c *gin.Context, ingress string, status int, errType, message string, results ...*vmkernel.Result) {
+func writeVMKernelRequestError(c *gin.Context, ingress string, status int, errType, message string) {
 	if c == nil || (c.Request != nil && c.Request.Context().Err() != nil) {
 		return
 	}
@@ -116,28 +115,6 @@ func writeVMKernelRequestError(c *gin.Context, ingress string, status int, errTy
 		} else {
 			writeChatCompletionsError(c, status, errType, message)
 		}
-		return
-	}
-	MarkOpsStreamFailure(c, errType, errType, message, status)
-	if ingress == "responses" {
-		source, _ := json.Marshal(map[string]any{"error": map[string]string{"type": errType, "code": errType, "message": message}})
-		var responseID, model string
-		createdAt := int64(0)
-		if len(results) > 0 && results[0] != nil {
-			responseID, model = results[0].ResponseID, results[0].Model
-			createdAt = gjson.GetBytes(results[0].Response, "created_at").Int()
-		}
-		if createdAt <= 0 {
-			createdAt = time.Now().Unix()
-		}
-		_, err := fmt.Fprint(c.Writer, buildOpenAIResponseFailedSSE(responseID, model, createdAt, source, message))
-		if err == nil {
-			err = FlushGatewayResponse(c.Writer)
-		}
-		if err != nil {
-			c.Set(openAIDownstreamDisconnectedKey, true)
-		}
-		MarkResponseCommitted(c)
 		return
 	}
 	envelope := map[string]any{"error": map[string]string{"type": errType, "message": message}}
@@ -150,16 +127,6 @@ func writeVMKernelRequestError(c *gin.Context, ingress string, status int, errTy
 	}
 	_, _ = fmt.Fprintf(c.Writer, "data: %s\n\n", raw)
 	c.Writer.Flush()
-	MarkResponseCommitted(c)
-}
-
-func reportVMKernelIdleTimeout(c *gin.Context, ingress string, err error, results ...*vmkernel.Result) bool {
-	var attempt *vmkernel.AttemptError
-	if !errors.As(err, &attempt) || attempt.Code != "kernel_stream_idle_timeout" {
-		return false
-	}
-	writeVMKernelRequestError(c, ingress, http.StatusGatewayTimeout, "stream_timeout", "Kernel response stream timed out", results...)
-	return true
 }
 
 func reportVMKernelProviderError(c *gin.Context, account *Account, ingress string, result *vmkernel.Result) {
@@ -176,5 +143,5 @@ func reportVMKernelProviderError(c *gin.Context, account *Account, ingress strin
 	if retry := result.Headers.Get("Retry-After"); retry != "" && !c.Writer.Written() {
 		c.Header("Retry-After", retry)
 	}
-	writeVMKernelRequestError(c, ingress, status, errType, message, result)
+	writeVMKernelRequestError(c, ingress, status, errType, message)
 }

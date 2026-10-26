@@ -70,7 +70,6 @@ func vmKernelHTTP(ctx context.Context, runtime *VMKernelService, c *gin.Context,
 	}
 	var gateway *OpenAIGatewayService
 	var staged http.Header
-	stageHeaders := func(headers http.Header) { stageOpenAICodexTurnState(&staged, headers) }
 	if provider == "responses" {
 		gateway = &OpenAIGatewayService{}
 		if len(gateways) > 0 && gateways[0] != nil {
@@ -78,7 +77,9 @@ func vmKernelHTTP(ctx context.Context, runtime *VMKernelService, c *gin.Context,
 		}
 		ctx = gateway.vmKernelResponsesTTFTContext(ctx)
 		ctx = gateway.vmKernelResponsesHeaderContext(ctx, c, account, body)
-		ctx = vmkernel.WithOnResponseHeaders(ctx, stageHeaders)
+		ctx = vmkernel.WithOnResponseHeaders(ctx, func(headers http.Header) {
+			stageOpenAICodexTurnState(&staged, headers)
+		})
 	}
 	if gateway != nil {
 		defer func() {
@@ -98,22 +99,17 @@ func vmKernelHTTP(ctx context.Context, runtime *VMKernelService, c *gin.Context,
 		c.Header("X-Accel-Buffering", "no")
 		if kind != "" {
 			if _, err := fmt.Fprintf(c.Writer, "event: %s\n", kind); err != nil {
-				c.Set(openAIDownstreamDisconnectedKey, true)
 				return err
 			}
 		}
 		if _, err := fmt.Fprintf(c.Writer, "data: %s\n\n", data); err != nil {
-			c.Set(openAIDownstreamDisconnectedKey, true)
 			return err
 		}
-		err := FlushGatewayResponse(c.Writer)
-		if err != nil {
-			c.Set(openAIDownstreamDisconnectedKey, true)
-		}
-		return err
+		c.Writer.Flush()
+		return nil
 	}
 	presentation := newVMKernelPresentation(ingress, provider, stream, emit)
-	consume := func(event vmkernel.Event) error {
+	result, err := runtime.Execute(ctx, account, provider, body, func(event vmkernel.Event) error {
 		data := event.Data
 		if provider == "responses" {
 			var err error
@@ -133,16 +129,7 @@ func vmKernelHTTP(ctx context.Context, runtime *VMKernelService, c *gin.Context,
 			return nil
 		}
 		return presentation.event(event.Type, data)
-	}
-	var err error
-	if provider == "responses" && stream && gateway.cfg != nil && gateway.cfg.Gateway.StreamKeepaliveInterval > 0 {
-		result, err = runVMKernelSSE(ctx, c, time.Duration(gateway.cfg.Gateway.StreamKeepaliveInterval)*time.Second,
-			func(ctx context.Context, emit func(vmkernel.Event) error) (*vmkernel.Result, error) {
-				return runtime.Execute(ctx, account, provider, body, emit)
-			}, stageHeaders, consume)
-	} else {
-		result, err = runtime.Execute(ctx, account, provider, body, consume)
-	}
+	})
 	if err != nil {
 		return result, err
 	}
@@ -518,7 +505,7 @@ func (s *OpenAIGatewayService) forwardVMKernelResponses(ctx context.Context, c *
 	result, callErr := vmKernelHTTP(ctx, s.vmKernel, c, account, ingress, "responses", prepared, stream, original, s)
 	s.observeVMKernelOpenAIResult(ctx, c, account, model, result)
 	callErr = vmKernelBusinessError(ctx, result, callErr)
-	if callErr != nil && !reportVMKernelIdleTimeout(c, ingress, callErr, result) {
+	if callErr != nil {
 		reportVMKernelProviderError(c, account, ingress, result)
 	}
 	if callErr == nil && result != nil && result.Completed && ingress == "responses" {
