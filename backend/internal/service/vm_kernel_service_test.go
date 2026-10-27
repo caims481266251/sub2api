@@ -1268,33 +1268,37 @@ func TestVMKernelDesktopUAMigrationDrainsAndRunsOnce(t *testing.T) {
 }
 
 func TestVMKernelLegacyDesktopUAMigrationDrainsAndRunsOnce(t *testing.T) {
-	s, a, f := vmLifecycleSetup(t)
-	s.prepare(context.Background(), a)
-	device := f.state.ClientIdentity.DeviceID
-	oldProxy := f.state.AppliedProxyRevision
-	f.mu.Lock()
-	f.state.ClientIdentity.UserAgent = "codex_cli_rs/0.150.0 (Mac OS 14.0; arm64)"
-	f.state.ClientIdentity.UserAgentTemplate = "desktop-v1/0.150.0/Mac OS/14.0/arm64"
-	f.mu.Unlock()
-	slot := s.slot(a.ID)
-	slot.mu.Lock()
-	slot.active = 2
-	slot.mu.Unlock()
-	s.prepare(context.Background(), a)
-	if f.state.Generation != 1 || VMKernelRuntimeReady(a) || f.kernelCalls != 0 {
-		t.Fatal("migration interrupted in-flight requests or admitted new work")
-	}
-	slot.mu.Lock()
-	slot.active = 0
-	slot.mu.Unlock()
-	s.prepare(context.Background(), a)
-	if f.state.Generation != 2 || !VMKernelRuntimeReady(a) || vmruntime.DesktopUserAgentNeedsMigration(f.state.ClientIdentity) || f.state.ClientIdentity.DeviceID != device || f.state.AppliedProxyRevision != oldProxy {
-		t.Fatalf("identity upgrade failed: operations=%v", f.operations())
-	}
-	identity := *f.state.ClientIdentity
-	s.prepare(context.Background(), a)
-	if f.state.Generation != 2 || *f.state.ClientIdentity != identity || !VMKernelRuntimeReady(a) {
-		t.Fatal("upgraded identity did not remain stable")
+	for _, version := range []string{"0.150.0", "0.155.0", "0.158.0"} {
+		t.Run(version, func(t *testing.T) {
+			s, a, f := vmLifecycleSetup(t)
+			s.prepare(context.Background(), a)
+			device := f.state.ClientIdentity.DeviceID
+			oldProxy := f.state.AppliedProxyRevision
+			f.mu.Lock()
+			f.state.ClientIdentity.UserAgent = "codex_cli_rs/" + version + " (Mac OS 14.0; arm64)"
+			f.state.ClientIdentity.UserAgentTemplate = "desktop-v1/" + version + "/Mac OS/14.0/arm64"
+			f.mu.Unlock()
+			slot := s.slot(a.ID)
+			slot.mu.Lock()
+			slot.active = 2
+			slot.mu.Unlock()
+			s.prepare(context.Background(), a)
+			if f.state.Generation != 1 || VMKernelRuntimeReady(a) || f.kernelCalls != 0 {
+				t.Fatal("migration interrupted in-flight requests or admitted new work")
+			}
+			slot.mu.Lock()
+			slot.active = 0
+			slot.mu.Unlock()
+			s.prepare(context.Background(), a)
+			if f.state.Generation != 2 || !VMKernelRuntimeReady(a) || vmruntime.DesktopUserAgentNeedsMigration(f.state.ClientIdentity) || f.state.ClientIdentity.DeviceID != device || f.state.AppliedProxyRevision != oldProxy {
+				t.Fatalf("identity upgrade failed: operations=%v", f.operations())
+			}
+			identity := *f.state.ClientIdentity
+			s.prepare(context.Background(), a)
+			if f.state.Generation != 2 || *f.state.ClientIdentity != identity || !VMKernelRuntimeReady(a) {
+				t.Fatal("upgraded identity did not remain stable")
+			}
+		})
 	}
 }
 

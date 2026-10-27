@@ -1,14 +1,14 @@
 # GitHub 发布与在线更新
 
-本分支的发布仓库是 `caims481266251/sub2api`，持续发布分支为 `codex/vm-kernel-account-mode`。当前版本 `2.15.23` 修复 Docker OpenAI 旧 UA 的模型兼容问题、模板池回收及上游错误透传，并显示质量检测距今时间。
+本分支的发布仓库是 `caims481266251/sub2api`，持续发布分支为 `codex/vm-kernel-account-mode`。当前版本 `2.15.24` 修复 Docker OpenAI GPT-6.1 Sol/Terra 在旧客户端 UA 下被上游拒绝的问题，并保留 UA 独立分配、回收、错误透传和质量检测距今时间。
 
 ## 发布方式
 
 在已验证的持续发布分支创建带说明的正式 tag，再原子推送分支与 tag：
 
 ```bash
-git tag -a v2.15.23 -m "Release v2.15.23" -m "本次更新说明"
-git push --atomic origin codex/vm-kernel-account-mode v2.15.23
+git tag -a v2.15.24 -m "Release v2.15.24" -m "本次更新说明"
+git push --atomic origin codex/vm-kernel-account-mode v2.15.24
 ```
 
 `.github/workflows/release.yml` 接收 `v*` tag，自动构建前端及 Windows AMD64、macOS AMD64/ARM64、Linux AMD64/ARM64 更新包，发布 `checksums.txt`、GitHub Release 和 GHCR 多架构镜像。正式 tag 固定完整发布，不能被仓库的 `SIMPLE_RELEASE` 变量降级为仅镜像模式。手动触发仍可选择 simple release，但该模式不提供系统内在线更新包。
@@ -24,7 +24,7 @@ git push --atomic origin codex/vm-kernel-account-mode v2.15.23
 Docker 部署可通过页面更新当前容器中的二进制；重新创建容器会恢复镜像内版本，因此持久升级还应更新 Compose 镜像 tag 并重新创建应用容器：
 
 ```yaml
-image: ghcr.io/caims481266251/sub2api:2.15.23
+image: ghcr.io/caims481266251/sub2api:2.15.24
 ```
 
 ```bash
@@ -78,6 +78,20 @@ docker compose up -d --no-deps app
 - 保存失败恢复已确认选项，保留现有帐号模式，防止旧轮询或探测策略响应覆盖最新配置；切换帐号后隔离旧请求。
 - 更新中英文借票说明，移除过时的传输限制文案。
 - 补充帐号编辑入口回归测试；沿用现有后端接口，无新增数据库迁移。
+
+## v2.15.24 更新
+
+修复 Docker 帐号 GPT-6.1 Sol/Terra 被旧客户端 UA 拒绝
+
+- v2.15.23 按 GPT-6 Luna 的实测门槛保留了 0.155.0，但同一线上帐号使用 0.155.0、0.157.0、0.158.0 调用 GPT-6.1 Sol/Terra 仍被拒绝；仅改为 0.159.0 或 0.164.0 后两个模型都完成真实推理。上游模型清单声明的最低版本 0.153.0 不能替代推理接口验收。
+- 新分配池仅保留 0.159.0–0.164.0（含 0.162.1），新帐号和迁移优先选最新兼容版本，避免按字典序优先使用兼容下限。
+- 0.150.0–0.158.0 已有身份在请求排空后通过现有应用配置流程迁移，保留设备 ID 并优先保留原系统及架构；已有兼容身份保持稳定。上一版签发的 0.155.0–0.158.0 扩展系统模板继续作为历史身份校验，不会被误判无效。
+- 增加 Apple 已发布的 Ventura 系统版本模板，兼容池共 1,113 个不同 Mac/Windows UA，维持至少 999 个唯一配置及删除确认后的回收规则。
+- 不自动重放业务请求，不批量清除模型冷却，不修改帐号的模型映射或凭据。
+
+验证：同一线上帐号、容器、代理及设备身份的请求级 UA 对照确认 Sol/Terra 在 0.158.0 失败、0.159.0 和 0.164.0 成功；Mac Ventura 与 Windows 配置也均完成两个模型调用。测试仅临时覆盖诊断请求的 UA，没有修改线上持久配置或重启业务容器。本地竞态回归通过 63 个顶层测试、41 个子用例，覆盖低版本排空迁移、历史模板兼容、并发唯一性、池耗尽、删除回收与故障收尾。
+
+升级：无新增数据库迁移。主程序与 Docker host tools 需一并更新到 2.15.24，重启后由协调器迁移旧 UA。正式发布包含完整的在线更新资产；发布本身不代表线上已安装。
 
 ## v2.15.23 更新
 
