@@ -16,6 +16,7 @@ from urllib.parse import unquote, urlsplit
 LISTEN_HOST, LISTEN_PORT = '127.0.0.1', 1081
 HANDSHAKE_TIMEOUT, MAX_ATTEMPTS = 8, 3
 RETRY_DELAYS = (0.2, 0.5)
+HALF_CLOSE_IDLE_TIMEOUT = 30
 FAIL_BIND = b'\x01\x00\x00\x00\x00\x00\x00'
 
 
@@ -49,7 +50,11 @@ async def close_writer(writer):
     if writer is None: return
     writer.close()
     try: await asyncio.wait_for(writer.wait_closed(), 1)
-    except (OSError, asyncio.TimeoutError): pass
+    except asyncio.TimeoutError:
+        # close() alone keeps flushing buffered bytes. An unresponsive peer
+        # must not retain the socket after the bounded cleanup wait expires.
+        writer.transport.abort()
+    except OSError: pass
 
 
 class ProxyBridge:
@@ -156,27 +161,57 @@ class ProxyBridge:
                 await close_writer(results[0][1])
 
     @staticmethod
-    async def relay(left_reader, left_writer, right_reader, right_writer):
+    async def relay(left_reader, left_writer, right_reader, right_writer,
+                    half_close_timeout=HALF_CLOSE_IDLE_TIMEOUT):
+        # Only start the drain deadline after the kernel has stopped sending.
+        # An open, quiet model stream has no bridge read/idle deadline.
+        kernel_eof = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        last_progress = loop.time()
+
         async def copy(reader, writer, direction):
+            nonlocal last_progress
             try:
                 while True:
                     data = await reader.read(65536)
                     if not data:
+                        if direction == 'tunnel_upload':
+                            last_progress = loop.time()
+                            kernel_eof.set()
                         if writer.can_write_eof(): writer.write_eof(); await writer.drain()
                         return
                     writer.write(data); await writer.drain()
+                    if direction == 'tunnel_download':
+                        last_progress = loop.time()
             except OSError as error:
                 reason = {errno.ECONNRESET: 'connection_reset', errno.EPIPE: 'broken_pipe',
                           errno.ETIMEDOUT: 'timeout'}.get(error.errno, 'socket_error')
                 diagnostic('closed', direction, 1, reason)
                 raise
+
+        async def drain_deadline():
+            await kernel_eof.wait()
+            while True:
+                remaining = half_close_timeout - (loop.time() - last_progress)
+                if remaining <= 0:
+                    return
+                await asyncio.sleep(remaining)
+
         tasks = [asyncio.create_task(copy(left_reader, right_writer, 'tunnel_upload')),
                  asyncio.create_task(copy(right_reader, left_writer, 'tunnel_download'))]
-        try: await asyncio.gather(*tasks)
+        transfer = asyncio.gather(*tasks)
+        deadline = asyncio.create_task(drain_deadline())
+        try:
+            await asyncio.wait((transfer, deadline), return_when=asyncio.FIRST_COMPLETED)
+            if transfer.done():
+                await transfer
+            else:
+                diagnostic('closed', 'tunnel_drain', 1, 'kernel_eof_idle_timeout')
         except OSError: pass  # The failed direction logged only safe metadata; never replay.
         finally:
+            deadline.cancel()
             for task in tasks: task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+            await asyncio.gather(transfer, deadline, return_exceptions=True)
 
     async def handle(self, reader, writer):
         remote = None

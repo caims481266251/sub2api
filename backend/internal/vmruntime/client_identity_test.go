@@ -10,14 +10,25 @@ import (
 	"github.com/google/uuid"
 )
 
+func desktopIdentityRequest() Request {
+	req := prepareRequest()
+	req.Spec.Platform = "codex"
+	req.Projection.Credential = json.RawMessage(`{"accounts":[{"id":"fixture","access_token":"fixture-token","chatgpt_account_id":"fixture"}]}`)
+	return req
+}
+
 func TestClientIdentityPersistsAcrossRestartAndCredentialRotation(t *testing.T) {
 	driver := &fakeDriver{}
 	h, root := openTest(t, driver)
-	s, e := h.Do(context.Background(), prepareRequest())
+	s, e := h.Do(context.Background(), desktopIdentityRequest())
 	if e != nil || s.ClientIdentity == nil {
 		t.Fatalf("prepare did not bind client identity: %v", e)
 	}
 	device := s.ClientIdentity.DeviceID
+	userAgent := s.ClientIdentity.UserAgent
+	if userAgent == "" {
+		t.Fatal("missing container UA")
+	}
 	if parsed, e := uuid.Parse(device); e != nil || parsed.String() != device {
 		t.Fatal("client identity not canonical UUID")
 	}
@@ -29,17 +40,25 @@ func TestClientIdentityPersistsAcrossRestartAndCredentialRotation(t *testing.T) 
 		t.Fatal(e)
 	}
 	defer h.Close()
-	req := prepareRequest()
+	req := desktopIdentityRequest()
 	req.Operation, req.Generation = "apply-config", 2
 	req.Projection.Revision = "c2"
 	s, e = h.Do(context.Background(), req)
-	if e != nil || s.ClientIdentity == nil || s.ClientIdentity.DeviceID != device {
+	if e != nil || s.ClientIdentity == nil || s.ClientIdentity.DeviceID != device || s.ClientIdentity.UserAgent != userAgent {
 		t.Fatalf("credential update changed client identity: %v", e)
 	}
-	other := prepareRequest()
+	req.Generation = 3
+	req.Spec.ProxyID = 8
+	req.Spec.ProxyRevision = "px2"
+	req.Projection.ProxyURL = "http://192.0.2.2:3128"
+	s, e = h.Do(context.Background(), req)
+	if e != nil || s.ClientIdentity.DeviceID != device || s.ClientIdentity.UserAgent != userAgent {
+		t.Fatalf("proxy update changed client identity: %v", e)
+	}
+	other := desktopIdentityRequest()
 	other.AccountID++
 	second, e := h.Do(context.Background(), other)
-	if e != nil || second.ClientIdentity == nil || second.ClientIdentity.DeviceID == device {
+	if e != nil || second.ClientIdentity == nil || second.ClientIdentity.DeviceID == device || second.ClientIdentity.UserAgent == userAgent {
 		t.Fatalf("accounts did not receive independent identities: %v", e)
 	}
 }
@@ -47,7 +66,7 @@ func TestClientIdentityPersistsAcrossRestartAndCredentialRotation(t *testing.T) 
 func TestClientIdentityIsDurableBeforeFailedExternalCreate(t *testing.T) {
 	driver := &fakeDriver{ensureError: fault("docker_operation_unknown")}
 	h, root := openTest(t, driver)
-	s, e := h.Do(context.Background(), prepareRequest())
+	s, e := h.Do(context.Background(), desktopIdentityRequest())
 	if e == nil || s.ClientIdentity == nil {
 		t.Fatal("expected failed create with assigned identity")
 	}

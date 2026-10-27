@@ -1,14 +1,14 @@
 # GitHub 发布与在线更新
 
-本分支的发布仓库是 `caims481266251/sub2api`，持续发布分支为 `codex/vm-kernel-account-mode`。最近已发布版本为 `2.15.21`；当前开发代码已撤销该版本新增的 Docker OpenAI SSE 保活、读取无进展超时及配套失败收尾改动，恢复为 `v2.15.20` 的对应实现。此撤销尚未发布，不改变已有 `v2.15.21` tag 和安装包。
+本分支的发布仓库是 `caims481266251/sub2api`，持续发布分支为 `codex/vm-kernel-account-mode`。当前版本 `2.15.22` 包含 Docker OpenAI 容器独立 UA、代理连接收尾修复，保留 SSE 保活与读取无进展超时，并补齐读取超时的诊断分类。
 
 ## 发布方式
 
 在已验证的持续发布分支创建带说明的正式 tag，再原子推送分支与 tag：
 
 ```bash
-git tag -a v2.15.19 -m "Release v2.15.19" -m "本次更新说明"
-git push --atomic origin codex/vm-kernel-account-mode v2.15.19
+git tag -a v2.15.22 -m "Release v2.15.22" -m "本次更新说明"
+git push --atomic origin codex/vm-kernel-account-mode v2.15.22
 ```
 
 `.github/workflows/release.yml` 接收 `v*` tag，自动构建前端及 Windows AMD64、macOS AMD64/ARM64、Linux AMD64/ARM64 更新包，发布 `checksums.txt`、GitHub Release 和 GHCR 多架构镜像。正式 tag 固定完整发布，不能被仓库的 `SIMPLE_RELEASE` 变量降级为仅镜像模式。手动触发仍可选择 simple release，但该模式不提供系统内在线更新包。
@@ -24,7 +24,7 @@ git push --atomic origin codex/vm-kernel-account-mode v2.15.19
 Docker 部署可通过页面更新当前容器中的二进制；重新创建容器会恢复镜像内版本，因此持久升级还应更新 Compose 镜像 tag 并重新创建应用容器：
 
 ```yaml
-image: ghcr.io/caims481266251/sub2api:2.15.19
+image: ghcr.io/caims481266251/sub2api:2.15.22
 ```
 
 ```bash
@@ -78,6 +78,23 @@ docker compose up -d --no-deps app
 - 保存失败恢复已确认选项，保留现有帐号模式，防止旧轮询或探测策略响应覆盖最新配置；切换帐号后隔离旧请求。
 - 更新中英文借票说明，移除过时的传输限制文案。
 - 补充帐号编辑入口回归测试；沿用现有后端接口，无新增数据库迁移。
+
+## v2.15.22 更新
+
+Docker 帐号独立 UA 与代理连接收尾修复
+
+- OpenAI Docker 帐号使用持久的 Mac/Windows 桌面格式 UA；当前提供 1,072 个组合，同一 helper 根目录内独立分配，重启、凭据轮换和代理变更后保持稳定。UA 不包含帐号 ID、邮箱或 Sub2API 标识；唯一性不跨独立服务器，模板用尽时明确报错。
+- 启动配置与每次 Responses 调用使用同一可信 UA 和设备安装 ID；旧实例等待在途请求结束后一次性补齐，保留已有设备 ID。
+- 修复固定代理隧道在内核 EOF 后滞留的问题：允许尾部数据继续排空，连续 30 秒没有成功交付尾部数据时回收，关闭写缓冲超时后释放 socket。正常开放的静默请求不受这项排空期限影响。
+- 执行流读取失败或下游拒收时先关闭原连接，再请求取消接口；取消接口返回 404/405/501 记为 unavailable，不当作取消完成、结算或重放依据。
+- 保留 v2.15.21 的 SSE 保活、读取无进展超时及失败终态处理，修复读取超时日志被归为通用错误的问题，记录 kernel_stream_idle_timeout / stream_idle_timeout。
+- 不新增帐号并发上限，不自动重放已发送的推理，不修改 TLS 实现。
+
+验证：恢复 SSE 后 vmkernel 全包竞态检测 39 个顶层测试（含子测试 119）通过，相关 service 竞态检测 133 个顶层测试（含子测试 315）通过；后续日志分类的 2 项回归通过。UA 唯一性、持久化、迁移、代理桥 19 项回归及固定内核 16 项故障模拟已分别验证。
+
+实测边界：UA 功能本地真实请求 9/9 成功；SSE 恢复前的代理修复版本完成五分钟真实压测，5、10 并发阶段未失败，15 并发阶段出现 403、后续 no_capacity 和一次流中断，停止发压后恢复。该高并发问题尚未查明，不能宣称本版本已消除。最终恢复组合尚未重复真实上游压测，专项回归不代表线上压力验收。
+
+升级：相较 v2.15.21 无新增数据库迁移。正式发布包含五个平台主程序更新包、checksums.txt、amd64/arm64 重登录运行包、Docker host tools 与多架构镜像；Docker host tools 内含本版本 helper 和容器入口/代理桥镜像。使用现有系统在线更新流程安装，主程序与 Docker host tools 保持同版本，安装完成后重启生效。
 
 ## v2.15.21 更新
 

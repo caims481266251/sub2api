@@ -39,6 +39,8 @@ type Result struct {
 }
 
 type Binding struct {
+	// Only trusted runtime state can supply these; never caller headers.
+	UserAgent, InstallationID string
 	Socket, Token, InstanceID string
 	Generation                uint64
 	AccountID                 int64

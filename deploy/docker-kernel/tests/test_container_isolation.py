@@ -10,8 +10,8 @@ spec.loader.exec_module(common)
 class KernelIsolationTest(unittest.TestCase):
     def setUp(self):
         self.status = "Uid:\t10001 10001 10001 10001\nGid:\t10001 10001 10001 10001\nNoNewPrivs:\t1\n" + "".join(name + ":\t0000000000000000\n" for name in ("CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"))
-        self.state = {"client_identity": {"device_id": "device-a"}, "instance_id": "instance-a", "identity": {"machine_id": "machine-a", "hostname": "host-a"}}
-        self.config = {"device_id": "device-a", "vm_id": "instance-a", "credential_path": "/slot/credentials/credential.json", "socket_path": "/slot/run/kernel.sock", "proxy_required": True}
+        self.state = {"client_identity": {"device_id": "device-a", "user_agent": "codex_cli_rs/0.164.0 (Mac OS 15.1; arm64)"}, "instance_id": "instance-a", "identity": {"machine_id": "machine-a", "hostname": "host-a"}}
+        self.config = {"user_agent": "codex_cli_rs/0.164.0 (Mac OS 15.1; arm64)", "device_id": "device-a", "vm_id": "instance-a", "credential_path": "/slot/credentials/credential.json", "socket_path": "/slot/run/kernel.sock", "proxy_required": True}
 
     def check(self):
         common.verify_kernel_isolation(self.status, self.config, self.state, "machinea\n", "host-a")
@@ -27,7 +27,7 @@ class KernelIsolationTest(unittest.TestCase):
                 self.check()
 
     def test_cross_account_identity_or_proxy_bypass_rejected(self):
-        for key, value in (("device_id", "device-b"), ("vm_id", "instance-b"), ("credential_path", "/other/credential.json"), ("proxy_required", False)):
+        for key, value in (("user_agent", "caller-UA"), ("device_id", "device-b"), ("vm_id", "instance-b"), ("credential_path", "/other/credential.json"), ("proxy_required", False)):
             original = self.config.copy()
             self.config[key] = value
             with self.assertRaises(ValueError):

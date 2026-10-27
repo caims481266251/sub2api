@@ -54,7 +54,9 @@ type Identity struct {
 // ClientIdentity is the stable per-instance kernel client identity. It is never
 // accepted from account input and remains unchanged across credential refresh.
 type ClientIdentity struct {
-	DeviceID string `json:"device_id"`
+	DeviceID          string `json:"device_id"`
+	UserAgent         string `json:"user_agent,omitempty"`
+	UserAgentTemplate string `json:"user_agent_template,omitempty"`
 }
 
 // NetworkLease is allocated by the helper, never accepted from account input.

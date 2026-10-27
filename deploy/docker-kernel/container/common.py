@@ -49,6 +49,8 @@ def verify_kernel_isolation(status, config, state, machine_id, hostname):
         raise ValueError("kernel_privileges_mismatch")
     if (config.get("device_id") != state["client_identity"]["device_id"]
             or config.get("vm_id") != state["instance_id"]
+            or not state["client_identity"].get("user_agent")
+            or config.get("user_agent") != state["client_identity"]["user_agent"]
             or config.get("credential_path") != "/slot/credentials/credential.json"
             or config.get("socket_path") != "/slot/run/kernel.sock"
             or config.get("proxy_required") is not True

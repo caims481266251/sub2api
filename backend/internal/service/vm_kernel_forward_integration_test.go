@@ -78,6 +78,9 @@ func vmForwardFixture(t *testing.T, platform string, handler http.HandlerFunc, s
 		kernelPlatform = "claude"
 	}
 	state := vmruntime.State{Spec: vmruntime.Spec{Platform: kernelPlatform, Template: "default", CPU: 2, MemoryMiB: 2048, ProxyID: proxyID, ProxyRevision: vmProxyRevision(a)}, AccountID: a.ID, InstanceID: "fixture-instance", Generation: 1, Ready: true, GuestBootID: "boot-one", Capacity: 1, KernelSocket: vmForwardUDS(t, handler), InternalToken: "fixture-internal", AppliedCredentialRevision: vmCredentialRevision(a), AppliedProxyRevision: vmProxyRevision(a)}
+	if platform == PlatformOpenAI {
+		state.ClientIdentity = &vmruntime.ClientIdentity{DeviceID: "8b5d97e3-606b-4db5-b389-bb217ef72017", UserAgent: "codex_cli_rs/0.164.0 (Mac OS 15.1; arm64)", UserAgentTemplate: "desktop-v1/0.164.0/Mac OS/15.1/arm64"}
+	}
 	helperSocket := vmForwardUDS(t, func(w http.ResponseWriter, r *http.Request) {
 		var request vmruntime.Request
 		if json.NewDecoder(r.Body).Decode(&request) != nil || request.Operation != "inspect" {

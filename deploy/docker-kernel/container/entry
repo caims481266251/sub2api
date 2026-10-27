@@ -65,6 +65,7 @@ def main():
               'socket_path': '/slot/run/kernel.sock', 'internal_token': token,
               'credential_path': '/slot/credentials/credential.json',
               'proxy_url': kernel_proxy_url, 'proxy_required': True,
+              'user_agent': state['client_identity']['user_agent'],
               'max_request_bytes': 33554432, 'upstream_transport': 'prefer_websocket',
               'client_features': False, 'analytics': False, 'test_endpoints': False}
     target = Path('/slot/run/codex-kernel.json')

@@ -146,7 +146,14 @@ func vmLifecycleSetup(t *testing.T) (*VMKernelService, *Account, *vmLifecycleFix
 				fault("missing_projection")
 				return
 			}
-			fixture.state = &vmruntime.State{AccountID: a.ID, InstanceID: "lifecycle-instance", Generation: request.Generation, GuestBootID: fmt.Sprintf("boot-%d", request.Generation), Spec: *request.Spec, Capacity: 1, Ready: true, Phase: "ready", KernelSocket: kernel, InternalToken: "fixture", AppliedCredentialRevision: request.Projection.Revision, AppliedProxyRevision: request.Spec.ProxyRevision}
+			identity := &vmruntime.ClientIdentity{DeviceID: "8b5d97e3-606b-4db5-b389-bb217ef72017", UserAgent: "codex_cli_rs/0.164.0 (Mac OS 15.1; arm64)", UserAgentTemplate: "desktop-v1/0.164.0/Mac OS/15.1/arm64"}
+			if fixture.state != nil && fixture.state.ClientIdentity != nil {
+				identity.DeviceID = fixture.state.ClientIdentity.DeviceID
+				if fixture.state.ClientIdentity.UserAgent != "" {
+					*identity = *fixture.state.ClientIdentity
+				}
+			}
+			fixture.state = &vmruntime.State{ClientIdentity: identity, AccountID: a.ID, InstanceID: "lifecycle-instance", Generation: request.Generation, GuestBootID: fmt.Sprintf("boot-%d", request.Generation), Spec: *request.Spec, Capacity: 1, Ready: true, Phase: "ready", KernelSocket: kernel, InternalToken: "fixture", AppliedCredentialRevision: request.Projection.Revision, AppliedProxyRevision: request.Spec.ProxyRevision}
 		}
 		if request.Operation == "remove" {
 			fixture.state.Generation = request.Generation
@@ -324,8 +331,16 @@ func TestVMKernelUsesExistingGatewayTimeoutPolicy(t *testing.T) {
 	} {
 		cfg := &config.Config{}
 		cfg.Gateway.OpenAIResponseHeaderTimeout, cfg.Gateway.ResponseHeaderTimeout = tc.openai, tc.general
+		cfg.Gateway.StreamDataIntervalTimeout = 180
 		if got := newVMKernelClient(cfg, tc.platform).ResponseHeaderTimeout; got != tc.want {
 			t.Fatalf("platform=%s got %v want %v", tc.platform, got, tc.want)
+		}
+		wantIdle := time.Duration(0)
+		if tc.platform == PlatformOpenAI {
+			wantIdle = 180 * time.Second
+		}
+		if got := newVMKernelClient(cfg, tc.platform).StreamDataIntervalTimeout; got != wantIdle {
+			t.Fatalf("platform=%s stream idle=%v want %v", tc.platform, got, wantIdle)
 		}
 	}
 }
@@ -1211,5 +1226,59 @@ func TestVMKernelReconcileObservesAllInactiveBusinessStates(t *testing.T) {
 				t.Fatal("health inspection changed account policy")
 			}
 		})
+	}
+}
+
+func TestVMKernelDesktopUAMigrationDrainsAndRunsOnce(t *testing.T) {
+	s, a, f := vmLifecycleSetup(t)
+	s.prepare(context.Background(), a)
+	device := f.state.ClientIdentity.DeviceID
+	f.mu.Lock()
+	f.state.ClientIdentity.UserAgent = ""
+	f.state.ClientIdentity.UserAgentTemplate = ""
+	f.mu.Unlock()
+	slot := s.slot(a.ID)
+	slot.mu.Lock()
+	slot.active = 1
+	slot.mu.Unlock()
+	s.prepare(context.Background(), a)
+	if f.state.Generation != 1 || VMKernelRuntimeReady(a) {
+		t.Fatal("migration interrupted an active request or admitted new work")
+	}
+	slot.mu.Lock()
+	slot.active = 0
+	slot.mu.Unlock()
+	s.prepare(context.Background(), a)
+	if f.state.Generation != 2 || !VMKernelRuntimeReady(a) || f.state.ClientIdentity.UserAgent == "" || f.state.ClientIdentity.DeviceID != device {
+		t.Fatalf("identity backfill failed: operations=%v", f.operations())
+	}
+	identity := *f.state.ClientIdentity
+	s.prepare(context.Background(), a)
+	if f.state.Generation != 2 || *f.state.ClientIdentity != identity || !VMKernelRuntimeReady(a) {
+		t.Fatal("completed backfill restarted the container or rotated identity")
+	}
+}
+
+func TestVMKernelDesktopUARequiredForAdmission(t *testing.T) {
+	s, a, f := vmLifecycleSetup(t)
+	s.prepare(context.Background(), a)
+	identity := *f.state.ClientIdentity
+	for _, missing := range []string{"identity", "device", "ua", "template"} {
+		state := *f.state
+		copy := identity
+		state.ClientIdentity = &copy
+		switch missing {
+		case "identity":
+			state.ClientIdentity = nil
+		case "device":
+			copy.DeviceID = ""
+		case "ua":
+			copy.UserAgent = ""
+		case "template":
+			copy.UserAgentTemplate = ""
+		}
+		if s.bindingReady(a, &state) {
+			t.Fatalf("admitted missing %s", missing)
+		}
 	}
 }

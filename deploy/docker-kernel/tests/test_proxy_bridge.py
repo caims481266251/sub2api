@@ -305,6 +305,106 @@ class BridgeLifecycleTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(self.bridge().relay(waiting, Mock(), failed, Mock()), 1)
         log.assert_called_once_with('closed', 'tunnel_download', 1, 'connection_reset')
 
+    async def test_kernel_eof_bounds_silent_proxy_drain(self):
+        from unittest.mock import AsyncMock, Mock, patch
+        left, right = asyncio.StreamReader(), asyncio.StreamReader()
+        left.feed_eof()
+        local, remote = Mock(), Mock()
+        local.drain = AsyncMock(); remote.drain = AsyncMock()
+        with patch.object(proxy_bridge, 'diagnostic') as log:
+            await asyncio.wait_for(self.bridge().relay(left, local, right, remote,
+                                                       half_close_timeout=.05), 1)
+        remote.write_eof.assert_called_once()
+        log.assert_called_once_with('closed', 'tunnel_drain', 1, 'kernel_eof_idle_timeout')
+
+    async def test_open_quiet_stream_has_no_half_close_deadline(self):
+        from unittest.mock import AsyncMock, Mock, patch
+        left, right = asyncio.StreamReader(), asyncio.StreamReader()
+        local, remote = Mock(), Mock()
+        local.drain = AsyncMock(); remote.drain = AsyncMock()
+        with patch.object(proxy_bridge, 'diagnostic') as log:
+            work = asyncio.create_task(self.bridge().relay(left, local, right, remote,
+                                                           half_close_timeout=.03))
+            try:
+                await asyncio.sleep(.1)
+                self.assertFalse(work.done())
+                right.feed_data(b'late-response'); right.feed_eof(); left.feed_eof()
+                await asyncio.wait_for(work, 1)
+            finally:
+                work.cancel(); await asyncio.gather(work, return_exceptions=True)
+        local.write.assert_called_once_with(b'late-response')
+        log.assert_not_called()
+
+    async def test_half_closed_stream_keeps_draining_while_data_is_delivered(self):
+        from unittest.mock import AsyncMock, Mock, patch
+        left, right = asyncio.StreamReader(), asyncio.StreamReader()
+        left.feed_eof()
+        local, remote = Mock(), Mock()
+        local.drain = AsyncMock(); remote.drain = AsyncMock()
+        with patch.object(proxy_bridge, 'diagnostic') as log:
+            work = asyncio.create_task(self.bridge().relay(left, local, right, remote,
+                                                           half_close_timeout=.1))
+            try:
+                for i in range(6):
+                    await asyncio.sleep(.04)
+                    self.assertFalse(work.done())
+                    right.feed_data(bytes([i]))
+                right.feed_eof()
+                await asyncio.wait_for(work, 1)
+            finally:
+                work.cancel(); await asyncio.gather(work, return_exceptions=True)
+        self.assertEqual(b''.join(call.args[0] for call in local.write.call_args_list), bytes(range(6)))
+        log.assert_not_called()
+
+    async def test_kernel_eof_bounds_blocked_download_write(self):
+        from unittest.mock import AsyncMock, Mock, patch
+        left, right = asyncio.StreamReader(), asyncio.StreamReader()
+        left.feed_eof(); right.feed_data(b'undeliverable-tail')
+        local, remote = Mock(), Mock()
+        canceled = asyncio.Event()
+        async def blocked():
+            try: await asyncio.Future()
+            finally: canceled.set()
+        local.drain = blocked; remote.drain = AsyncMock()
+        with patch.object(proxy_bridge, 'diagnostic') as log:
+            await asyncio.wait_for(self.bridge().relay(left, local, right, remote,
+                                                       half_close_timeout=.05), 1)
+        self.assertTrue(canceled.is_set())
+        log.assert_called_once_with('closed', 'tunnel_drain', 1, 'kernel_eof_idle_timeout')
+
+    async def test_relay_cancellation_cleans_up_deadline_and_both_directions(self):
+        from unittest.mock import AsyncMock, Mock
+        before = asyncio.all_tasks()
+        local, remote = Mock(), Mock()
+        local.drain = AsyncMock(); remote.drain = AsyncMock()
+        work = asyncio.create_task(self.bridge().relay(asyncio.StreamReader(), local,
+                                                       asyncio.StreamReader(), remote))
+        await asyncio.sleep(0)
+        work.cancel()
+        with self.assertRaises(asyncio.CancelledError): await work
+        self.assertEqual(asyncio.all_tasks() - before, set())
+
+    async def test_close_writer_aborts_backpressured_socket(self):
+        accepted = asyncio.get_running_loop().create_future()
+        def accept(reader, writer):
+            # Keep the peer open without consuming its StreamReader buffer.
+            accepted.set_result((reader, writer))
+        server = await asyncio.start_server(accept, '127.0.0.1', 0, limit=1024)
+        reader, writer = await asyncio.open_connection('127.0.0.1', server.sockets[0].getsockname()[1])
+        _, peer = await accepted
+        sock = writer.get_extra_info('socket')
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+        peer.get_extra_info('socket').setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+        try:
+            writer.write(b'x' * (4 << 20))
+            self.assertGreater(writer.transport.get_write_buffer_size(), 0)
+            await asyncio.wait_for(proxy_bridge.close_writer(writer), 2)
+            await asyncio.sleep(0)
+            self.assertEqual(sock.fileno(), -1, 'timed-out close retained the TCP socket')
+        finally:
+            writer.transport.abort(); peer.transport.abort()
+            server.close(); await server.wait_closed()
+
 
 if __name__ == '__main__':
     unittest.main()

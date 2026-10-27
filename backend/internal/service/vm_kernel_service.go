@@ -154,6 +154,7 @@ func newVMKernelClient(cfg *config.Config, platform string) *vmkernel.Client {
 	seconds := cfg.Gateway.ResponseHeaderTimeout
 	if platform == PlatformOpenAI {
 		seconds = cfg.Gateway.OpenAIResponseHeaderTimeout
+		client.StreamDataIntervalTimeout = time.Duration(cfg.Gateway.StreamDataIntervalTimeout) * time.Second
 	}
 	client.ResponseHeaderTimeout = time.Duration(seconds) * time.Second
 	return client
@@ -481,6 +482,9 @@ func (s *VMKernelService) prepare(ctx context.Context, account *Account) {
 		spec.ProxyID = *a.ProxyID
 		spec.ProxyRevision = vmProxyRevision(a)
 		changed := state.AppliedCredentialRevision != projection.Revision || state.AppliedProxyRevision != spec.ProxyRevision
+		if a.Platform == PlatformOpenAI && (state.ClientIdentity == nil || state.ClientIdentity.UserAgent == "") {
+			changed = true // Backfill through the existing drain/apply path.
+		}
 		mutate = changed || !state.Ready || (slot.verifiedBinding != "" && slot.verifiedBinding != vmBindingKey(state))
 		if changed {
 			request.Operation = "apply-config"
@@ -543,6 +547,9 @@ func (s *VMKernelService) prepare(ctx context.Context, account *Account) {
 	s.publish(latest, state, nil)
 }
 func (s *VMKernelService) bindingReady(a *Account, state *vmruntime.State) bool {
+	if a.Platform == PlatformOpenAI && (state == nil || state.ClientIdentity == nil || state.ClientIdentity.DeviceID == "" || state.ClientIdentity.UserAgent == "" || state.ClientIdentity.UserAgentTemplate == "") {
+		return false
+	}
 	return state != nil && state.AccountID == a.ID && state.Spec.Platform == vmPlatform(a.Platform) && state.Ready && !state.DeleteRequested && state.Capacity >= 0 && state.Generation > 0 && state.InstanceID != "" && state.GuestBootID != "" && filepath.IsAbs(state.KernelSocket) && state.InternalToken != "" && state.AppliedCredentialRevision == vmCredentialRevision(a) && state.AppliedProxyRevision == vmProxyRevision(a)
 }
 
@@ -837,7 +844,11 @@ func (s *VMKernelService) execute(ctx context.Context, selected *Account, protoc
 	return result, err
 }
 func (s *VMKernelService) call(ctx context.Context, state *vmruntime.State, account *Account, protocol string, body []byte, emit func(vmkernel.Event) error) (*vmkernel.Result, error) {
-	return s.kernel.Execute(ctx, vmkernel.Binding{Socket: state.KernelSocket, Token: state.InternalToken, InstanceID: state.InstanceID, Generation: state.Generation,
+	var userAgent, installationID string
+	if account.Platform == PlatformOpenAI && state.ClientIdentity != nil {
+		userAgent, installationID = state.ClientIdentity.UserAgent, state.ClientIdentity.DeviceID
+	}
+	return s.kernel.Execute(ctx, vmkernel.Binding{UserAgent: userAgent, InstallationID: installationID, Socket: state.KernelSocket, Token: state.InternalToken, InstanceID: state.InstanceID, Generation: state.Generation,
 		AccountID: account.ID, GuestBootID: state.GuestBootID, CredentialRevision: state.AppliedCredentialRevision, ProxyRevision: state.AppliedProxyRevision},
 		vmkernel.Request{Protocol: protocol, Body: body, DisablePromptCache: account.IsVMKernel() && account.Platform == PlatformOpenAI && !account.DockerRequestCacheEnabled()}, emit)
 }

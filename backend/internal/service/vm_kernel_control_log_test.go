@@ -3,12 +3,15 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
-	"github.com/Wei-Shaw/sub2api/internal/vmkernel"
-	"github.com/Wei-Shaw/sub2api/internal/vmruntime"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
+
+	"github.com/Wei-Shaw/sub2api/internal/vmkernel"
+	"github.com/Wei-Shaw/sub2api/internal/vmruntime"
 )
 
 func TestVMKernelControlFailureLogRedactsSecrets(t *testing.T) {
@@ -17,14 +20,14 @@ func TestVMKernelControlFailureLogRedactsSecrets(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&out, nil)))
 	defer slog.SetDefault(old)
 	secret := "secret-token-body-revision"
-	for _, err := range []error{errors.New(secret), &vmkernel.AttemptError{Code: "kernel_transport_failed", Cause: errors.New(secret)}, &vmkernel.AttemptError{Code: secret}, &vmkernel.AttemptError{Code: "kernel_status_401"}, &vmkernel.AttemptError{Code: "kernel_status_401" + secret}, &vmruntime.Error{Code: secret}, context.DeadlineExceeded, context.Canceled} {
+	for _, err := range []error{errors.New(secret), &vmkernel.AttemptError{Code: "kernel_transport_failed", Cause: errors.New(secret)}, &vmkernel.AttemptError{Code: "kernel_stream_idle_timeout", Cause: errors.New(secret)}, &vmkernel.AttemptError{Code: "kernel_stream_idle_timeout" + secret}, &vmkernel.AttemptError{Code: secret}, &vmkernel.AttemptError{Code: "kernel_status_401"}, &vmkernel.AttemptError{Code: "kernel_status_401" + secret}, &vmruntime.Error{Code: secret}, context.DeadlineExceeded, context.Canceled} {
 		logVMKernelControlFailure(42, secret, 7, err)
 	}
 	raw := out.String()
 	if strings.Contains(raw, secret) {
 		t.Fatal("private error detail leaked")
 	}
-	for _, safe := range []string{"kernel_transport_failed", "kernel_status_401", "context_deadline_exceeded", "context_cancelled", "\"stage\":\"control\"", "\"generation\":7"} {
+	for _, safe := range []string{"kernel_transport_failed", "kernel_stream_idle_timeout", "kernel_status_401", "context_deadline_exceeded", "context_cancelled", "\"stage\":\"control\"", "\"generation\":7"} {
 		if !strings.Contains(raw, safe) {
 			t.Errorf("missing safe diagnostic %s", safe)
 		}
@@ -39,15 +42,30 @@ func TestVMKernelAttemptFailureLogKeepsRequestErrorsOutOfHealth(t *testing.T) {
 	secret := "secret-token-body-proxy"
 	result := &vmkernel.Result{AttemptID: "fixture", CancelStatus: "acknowledged", CancelHTTPStatus: 200}
 	logVMKernelAttemptFailure(42, 7, result, &vmkernel.AttemptError{Code: "kernel_transport_failed", Cause: context.DeadlineExceeded})
+	result.CancelStatus, result.CancelHTTPStatus = "unavailable", 404
+	logVMKernelAttemptFailure(42, 7, result, &vmkernel.AttemptError{Code: "kernel_stream_incomplete"})
+	logVMKernelAttemptFailure(42, 7, result, fmt.Errorf("wrapped: %w", &vmkernel.AttemptError{Code: "kernel_stream_idle_timeout", Cause: errors.New(secret)}))
 	result.CancelStatus = secret
 	logVMKernelAttemptFailure(42, 7, result, &vmkernel.AttemptError{Code: secret, Cause: errors.New(secret)})
 	raw := out.String()
 	if strings.Contains(raw, secret) || strings.Contains(raw, "vm_kernel_control_failed") {
 		t.Fatal("request diagnostic leaked data or became runtime health failure")
 	}
-	for _, expected := range []string{"vm_kernel_attempt_failed", "context_deadline_exceeded", "acknowledged", "not_attempted"} {
+	for _, expected := range []string{"vm_kernel_attempt_failed", "context_deadline_exceeded", "acknowledged", "unavailable", "not_attempted"} {
 		if !strings.Contains(raw, expected) {
 			t.Errorf("missing %s", expected)
 		}
+	}
+	var idle struct {
+		Code             string `json:"code"`
+		Reason           string `json:"reason"`
+		CancelStatus     string `json:"cancel_status"`
+		CancelHTTPStatus int    `json:"cancel_http_status"`
+	}
+	if err := json.Unmarshal([]byte(strings.Split(strings.TrimSpace(raw), "\n")[2]), &idle); err != nil {
+		t.Fatal(err)
+	}
+	if idle.Code != "kernel_stream_idle_timeout" || idle.Reason != "stream_idle_timeout" || idle.CancelStatus != "unavailable" || idle.CancelHTTPStatus != 404 {
+		t.Fatalf("idle timeout lost its diagnostic or cancellation classification: %+v", idle)
 	}
 }

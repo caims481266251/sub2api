@@ -26,6 +26,9 @@ const MaxEventBytes = 16 << 20
 type Client struct {
 	ResponseHeaderTimeout time.Duration
 	CancelTimeout         time.Duration
+	// Bounds a blocked response-body read, not total execution or downstream work.
+	// Set before serving requests. Zero disables this guard.
+	StreamDataIntervalTimeout time.Duration
 	// Set before serving requests. Empty uses vm2api's prefer_websocket default.
 	UpstreamTransport string
 	poolMu            sync.Mutex
@@ -45,6 +48,9 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 		startsFirstToken = func(event Event) bool {
 			return strings.Contains(event.Type, "delta") || event.Type == "content_block_start"
 		}
+	}
+	if (binding.UserAgent == "") != (binding.InstallationID == "") {
+		return nil, &AttemptError{Code: "kernel_binding_invalid", SafeToRetry: true}
 	}
 	if !filepath.IsAbs(binding.Socket) || binding.Token == "" || binding.Generation == 0 {
 		return nil, &AttemptError{Code: "kernel_binding_invalid", SafeToRetry: true}
@@ -136,7 +142,16 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 		if policy != "http" && policy != "prefer_websocket" {
 			return nil, &AttemptError{Code: "kernel_transport_policy_invalid", SafeToRetry: true}
 		}
-		envelope["options"] = map[string]string{"upstream_transport": policy}
+		options := map[string]string{"upstream_transport": policy}
+		if binding.UserAgent != "" {
+			options["user_agent"] = binding.UserAgent
+			options["installation_id"] = binding.InstallationID
+			headers["x-codex-installation-id"] = binding.InstallationID
+			metadata["x-codex-installation-id"], _ = json.Marshal(binding.InstallationID)
+			metadata["installation_id"], _ = json.Marshal(binding.InstallationID)
+			body["client_metadata"], _ = json.Marshal(metadata)
+		}
+		envelope["options"] = options
 	} else {
 		envelope["delivery_mode"] = "realtime"
 		envelope["preserve_cache_breakpoints"] = true
@@ -155,7 +170,9 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 	// Once a connection is obtained a write may partially reach the guest even
 	// without a WroteHeaders callback. Conservatively forbid replay from here.
 	trace := &httptrace.ClientTrace{GotConn: func(httptrace.GotConnInfo) { dispatched.Store(true) }}
-	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(ctx, trace), http.MethodPost, "http://guest"+endpoint, bytes.NewReader(payload))
+	readCtx, cancelRead := context.WithCancelCause(ctx)
+	defer cancelRead(nil)
+	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(readCtx, trace), http.MethodPost, "http://guest"+endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return nil, err
 	}
@@ -175,12 +192,20 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 		}
 		return result, &AttemptError{Code: "kernel_transport_failed", SafeToRetry: !dispatched.Load(), Cause: err}
 	}
+	if c.StreamDataIntervalTimeout > 0 {
+		resp.Body = &idleReadCloser{ReadCloser: resp.Body, timeout: c.StreamDataIntervalTimeout, ctx: readCtx, cancel: cancelRead}
+	}
 	defer resp.Body.Close()
 	copyPublicHeaders(result.Headers, resp.Header)
 	notifyResponseHeaders(ctx, result.Headers)
 	result.RequestID = result.Headers.Get("x-request-id")
 	if resp.StatusCode != http.StatusOK {
 		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, (64<<10)+1))
+		if errors.Is(readErr, errKernelStreamIdle) {
+			_ = resp.Body.Close()
+			result.CancelStatus, result.CancelHTTPStatus = c.cancel(binding, attemptID)
+			return result, &AttemptError{Code: "kernel_stream_idle_timeout", Cause: readErr}
+		}
 		if readErr == nil && len(raw) <= 64<<10 {
 			// This private socket reaches only the fixed synchronous kernel;
 			// the relay does not generate HTTP responses. A fully read failure
@@ -408,7 +433,14 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 		if ctx.Err() != nil {
 			result.ClientDisconnect = true
 		}
+		// Closing the execution stream does not depend on a control API.
+		// Do it before the optional control request,
+		// which may be unsupported or take its entire timeout to respond.
+		_ = resp.Body.Close()
 		result.CancelStatus, result.CancelHTTPStatus = c.cancel(binding, attemptID)
+		if errors.Is(err, errKernelStreamIdle) {
+			return result, &AttemptError{Code: "kernel_stream_idle_timeout", Cause: err}
+		}
 		return result, &AttemptError{Code: "kernel_stream_incomplete", Cause: err}
 	}
 	// A verified terminal plus normal EOF settles this HTTP attempt. A socket
@@ -418,6 +450,7 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 		return result, &AttemptError{Code: "kernel_response_failed"}
 	}
 	if result.Terminal == "" || !result.HasUsage || result.ResponseID == "" || (request.Protocol == "messages" && stopReason == "") {
+		_ = resp.Body.Close()
 		result.CancelStatus, result.CancelHTTPStatus = c.cancel(binding, attemptID)
 		return result, &AttemptError{Code: "kernel_completion_metadata_missing"}
 	}
@@ -561,6 +594,12 @@ func (c *Client) cancel(binding Binding, attempt string) (string, int) {
 	defer resp.Body.Close()
 	if _, err := io.Copy(io.Discard, io.LimitReader(resp.Body, 4096)); err != nil {
 		return "response_incomplete", resp.StatusCode
+	}
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed || resp.StatusCode == http.StatusNotImplemented {
+		// Some kernels support cancellation only through execution-stream EOF.
+		// Do not invent an alternate route, cache a missing attempt as a missing
+		// capability, or treat this response as proof of upstream settlement.
+		return "unavailable", resp.StatusCode
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "rejected", resp.StatusCode

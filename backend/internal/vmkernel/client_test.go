@@ -405,7 +405,7 @@ func TestClientHTTPProviderFailureDropsPrivateDiagnostics(t *testing.T) {
 }
 
 func TestClientCancelResponseNeverInventsSettlement(t *testing.T) {
-	for _, status := range []int{200, 202, 404, 500} {
+	for _, status := range []int{200, 202, 404, 405, 500, 501} {
 		t.Run(fmt.Sprint(status), func(t *testing.T) {
 			binding := fakeKernel(t, func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/internal/v1/cancel" {
@@ -428,6 +428,8 @@ func TestClientCancelResponseNeverInventsSettlement(t *testing.T) {
 			want := "rejected"
 			if status < 300 {
 				want = "acknowledged"
+			} else if status == 404 || status == 405 || status == 501 {
+				want = "unavailable"
 			}
 			if r.CancelStatus != want {
 				t.Fatalf("cancel status %q want %q", r.CancelStatus, want)

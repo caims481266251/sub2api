@@ -33,6 +33,7 @@ type Helper struct {
 	mu         sync.Mutex
 	bindingMu  sync.Mutex
 	networkMu  sync.Mutex
+	identityMu sync.Mutex
 	accounts   map[int64]*sync.Mutex
 	active     sync.WaitGroup
 	closing    bool

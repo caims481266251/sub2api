@@ -23,7 +23,7 @@ func vmKernelControlErrorCode(err error) string {
 	var attempt *vmkernel.AttemptError
 	if errors.As(err, &attempt) {
 		switch attempt.Code {
-		case "kernel_binding_invalid", "kernel_protocol_unsupported", "kernel_body_invalid", "kernel_transport_failed", "kernel_stream_incomplete", "kernel_response_failed", "kernel_completion_metadata_missing", "kernel_downstream_write_failed":
+		case "kernel_binding_invalid", "kernel_protocol_unsupported", "kernel_body_invalid", "kernel_transport_failed", "kernel_stream_incomplete", "kernel_stream_idle_timeout", "kernel_response_failed", "kernel_completion_metadata_missing", "kernel_downstream_write_failed":
 			return attempt.Code
 		}
 		if strings.HasPrefix(attempt.Code, "kernel_status_") {
@@ -64,6 +64,7 @@ func logVMKernelControlFailure(accountID int64, stage string, generation uint64,
 // Request diagnostics contain only bounded classifications, never raw transport
 // errors, proxy URLs, credentials, request bodies or cancellation payloads.
 func logVMKernelAttemptFailure(accountID int64, generation uint64, result *vmkernel.Result, err error) {
+	code := vmKernelControlErrorCode(err)
 	reason := "transport_or_stream_error"
 	var netErr net.Error
 	switch {
@@ -71,6 +72,8 @@ func logVMKernelAttemptFailure(accountID int64, generation uint64, result *vmker
 		reason = "context_cancelled"
 	case errors.Is(err, context.DeadlineExceeded):
 		reason = "context_deadline_exceeded"
+	case code == "kernel_stream_idle_timeout":
+		reason = "stream_idle_timeout"
 	case errors.As(err, &netErr) && netErr.Timeout():
 		reason = "transport_timeout"
 	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
@@ -78,10 +81,10 @@ func logVMKernelAttemptFailure(accountID int64, generation uint64, result *vmker
 	}
 	cancel := "not_attempted"
 	switch result.CancelStatus {
-	case "transport_failed", "response_incomplete", "rejected", "acknowledged":
+	case "transport_failed", "response_incomplete", "rejected", "acknowledged", "unavailable":
 		cancel = result.CancelStatus
 	}
 	slog.Warn("vm_kernel_attempt_failed", "account_id", accountID, "generation", generation,
-		"attempt_id", result.AttemptID, "code", vmKernelControlErrorCode(err), "reason", reason,
+		"attempt_id", result.AttemptID, "code", code, "reason", reason,
 		"duration_ms", result.Duration.Milliseconds(), "cancel_status", cancel, "cancel_http_status", result.CancelHTTPStatus)
 }
