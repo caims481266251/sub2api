@@ -266,9 +266,20 @@ func TestClientHTTPFailureSettlementContract(t *testing.T) {
 
 func TestClientCodexHTTPFailureClassification(t *testing.T) {
 	for _, tc := range []struct {
-		name, body, attemptCode, providerCode string
-		status, providerStatus                int
+		name, body, attemptCode, providerCode, providerMessage string
+		status, providerStatus                                 int
 	}{
+		{
+			name: "observed unsupported model without terminal header", status: 400,
+			body:        `{"error":{"code":"upstream_status","type":"api_error","message":"The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account."}}`,
+			attemptCode: "kernel_response_failed", providerCode: "upstream_status", providerStatus: 400,
+			providerMessage: "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.",
+		},
+		{
+			name: "upstream status code without matching envelope", status: 400,
+			body:        `{"error":{"code":"upstream_status","type":"internal_error","message":"local rejection"}}`,
+			attemptCode: "kernel_status_400",
+		},
 		{
 			name: "observed usage rejection without terminal header", status: 429,
 			body:        `{"error":{"code":"usage_limit_reached","message":"upstream status 429: {\"detail\":\"Rate limit exceeded\"}","type":"api_error"}}`,
@@ -374,6 +385,9 @@ func TestClientCodexHTTPFailureClassification(t *testing.T) {
 			if json.Unmarshal(result.ErrorEvent, &event) != nil || event.Type != "error" || event.Error.Code != tc.providerCode || event.Error.Status != tc.providerStatus || event.Error.Message == "" {
 				t.Fatalf("provider status or error semantics lost: %s", result.ErrorEvent)
 			}
+			if tc.providerMessage != "" && event.Error.Message != tc.providerMessage {
+				t.Fatalf("provider rejection message lost: %q", event.Error.Message)
+			}
 		})
 	}
 }
@@ -399,6 +413,46 @@ func TestClientHTTPProviderFailureDropsPrivateDiagnostics(t *testing.T) {
 			}
 			if bytes.Contains(result.ErrorEvent, []byte("private")) || !bytes.Contains(result.ErrorEvent, []byte("Upstream request failed")) {
 				t.Fatalf("private or unbounded diagnostics retained: %s", result.ErrorEvent)
+			}
+		})
+	}
+}
+
+func TestClientUpstreamStatusPreservesPublicError(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, want string
+	}{
+		{"direct", `{"error":{"code":"upstream_status","type":"api_error","message":"Model unavailable","param":"model","debug":"private-token"}}`, `{"code":"upstream_status","type":"api_error","message":"Model unavailable","param":"model","status":400}`},
+		{"wrapped", `{"error":{"code":"upstream_status","type":"api_error","message":"upstream status 400: {\"error\":{\"code\":\"model_not_found\",\"type\":\"invalid_request_error\",\"message\":\"Model unavailable\",\"param\":\"model\",\"debug\":\"private-token\"}}"}}`, `{"code":"model_not_found","type":"invalid_request_error","message":"Model unavailable","param":"model","status":400}`},
+		{"nullable fields", `{"error":{"code":"upstream_status","type":"api_error","message":"upstream status 400: {\"error\":{\"code\":null,\"message\":\"Invalid request\",\"param\":null}}"}}`, `{"code":null,"message":"Invalid request","param":null,"status":400}`},
+		{"missing fields", `{"error":{"code":"upstream_status","type":"api_error","message":"upstream status 400: {\"error\":{\"message\":\"Invalid request\"}}"}}`, `{"message":"Invalid request","status":400}`},
+		{"no invented inner status", `{"error":{"code":"upstream_status","type":"api_error","message":"upstream status 400: {\"error\":{\"code\":\"model_not_found\",\"message\":\"Model unavailable\",\"status\":401}}"}}`, `{"code":"model_not_found","message":"Model unavailable","status":400}`},
+		{"invalid param omitted", `{"error":{"code":"upstream_status","type":"api_error","message":"Invalid request","param":{"credential":"private-token"}}}`, `{"code":"upstream_status","type":"api_error","message":"Invalid request","status":400}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls atomic.Int32
+			binding := fakeKernel(t, func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadRequest)
+				fmt.Fprint(w, tc.body)
+			})
+			client := NewClient()
+			t.Cleanup(client.Close)
+			result, err := client.Execute(context.Background(), binding, Request{Protocol: "responses", Body: []byte(`{}`)}, nil)
+			var attempt *AttemptError
+			if !errors.As(err, &attempt) || attempt.SafeToRetry || calls.Load() != 1 || !result.Settled || !result.ProviderHTTPFailure || result.Completed || result.HasUsage {
+				t.Fatalf("rejection changed execution state: result=%+v err=%v calls=%d", result, err, calls.Load())
+			}
+			var actual struct{ Error map[string]any }
+			var expected map[string]any
+			if json.Unmarshal(result.ErrorEvent, &actual) != nil || json.Unmarshal([]byte(tc.want), &expected) != nil {
+				t.Fatal("invalid error JSON")
+			}
+			got, _ := json.Marshal(actual.Error)
+			want, _ := json.Marshal(expected)
+			if !bytes.Equal(got, want) {
+				t.Fatalf("error fields changed: got %s want %s", got, want)
 			}
 		})
 	}

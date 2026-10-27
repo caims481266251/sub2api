@@ -341,16 +341,30 @@ func TestVMKernelWSReconnectReusesOwnedHistoryWithoutCrossOwnerDispatch(t *testi
 }
 
 func TestVMKernelWSProviderFailureDeliveredOnce(t *testing.T) {
-	for _, kind := range []string{"response.failed", "error"} {
-		t.Run(kind, func(t *testing.T) {
+	for _, mode := range []string{"response.failed", "error", "http_rejection"} {
+		t.Run(mode, func(t *testing.T) {
+			kind := mode
 			payload := `{"type":"error","error":{"type":"invalid_request_error","code":"invalid_api_key","message":"provider rejected credentials"}}`
 			if kind == "response.failed" {
 				payload = `{"type":"response.failed","response":{"id":"resp_rejected","status":"failed","error":{"code":"invalid_api_key","message":"provider rejected credentials"}}}`
 			}
+			if mode == "http_rejection" {
+				kind = "error"
+				payload = `{"error":{"type":"api_error","code":"upstream_status","message":"Model unavailable","param":"model"}}`
+			}
+			var attempts atomic.Int32
 			runtime, account := vmForwardFixture(t, PlatformOpenAI, func(w http.ResponseWriter, r *http.Request) {
+				attempts.Add(1)
+				if mode == "http_rejection" {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusBadRequest)
+					fmt.Fprint(w, payload)
+					return
+				}
 				w.Header().Set("Content-Type", "text/event-stream")
 				fmt.Fprintf(w, "data: %s\n\n", payload)
 			})
+			t.Cleanup(runtime.kernel.Close)
 			s := &OpenAIGatewayService{cfg: &config.Config{}, vmKernel: runtime}
 			var after atomic.Int32
 			done := make(chan error, 1)
@@ -387,6 +401,13 @@ func TestVMKernelWSProviderFailureDeliveredOnce(t *testing.T) {
 				}
 				if gjson.GetBytes(raw, "type").String() == kind {
 					count++
+					if mode == "http_rejection" {
+						for key, want := range map[string]string{"type": "api_error", "code": "upstream_status", "message": "Model unavailable", "param": "model", "status": "400"} {
+							if got := gjson.GetBytes(raw, "error."+key).String(); got != want {
+								t.Errorf("provider %s lost: got %q want %q", key, got, want)
+							}
+						}
+					}
 				}
 			}
 			select {
@@ -397,8 +418,8 @@ func TestVMKernelWSProviderFailureDeliveredOnce(t *testing.T) {
 			case <-ctx.Done():
 				t.Fatal(ctx.Err())
 			}
-			if count != 1 || after.Load() != 1 {
-				t.Fatalf("provider frames=%d AfterTurn=%d", count, after.Load())
+			if count != 1 || after.Load() != 1 || attempts.Load() != 1 {
+				t.Fatalf("provider frames=%d AfterTurn=%d attempts=%d", count, after.Load(), attempts.Load())
 			}
 		})
 	}

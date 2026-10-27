@@ -20,6 +20,12 @@ executionMode: 'Execution mode',
       vmRuntimeUnlimited: 'Unlimited',
 
       activity: {
+        justChecked: 'Just now',
+        checkedMinutesAgo: '{count} min ago',
+        checkedHoursAgo: '{count} hr ago',
+        checkedDaysAgo: '{count} days ago',
+        previousCheck: 'Last checked {time}',
+
         quality: 'Quality check',
         description: 'Ask this account the candy question and check whether its explicit final answer is 21. Checks consume upstream quota.',
         barLabel: 'Last 16 outbound attempts, newest on the right; successful requests are colored by first-token latency, stripes indicate failure',

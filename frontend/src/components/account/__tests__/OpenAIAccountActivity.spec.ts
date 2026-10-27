@@ -5,7 +5,7 @@ import type { AccountActivity, AccountRecentRequest } from '@/api/admin/accountA
 
 vi.mock('vue-i18n', async () => ({
   ...await vi.importActual<typeof import('vue-i18n')>('vue-i18n'),
-  useI18n: () => ({ t: (key: string) => key })
+  useI18n: () => ({ t: (key: string, params?: Record<string, unknown>) => key + (params ? ' ' + JSON.stringify(params) : '') })
 }))
 
 function request(id: number, overrides: Partial<AccountRecentRequest> = {}): AccountRecentRequest {
@@ -60,5 +60,36 @@ describe('OpenAIAccountActivity', () => {
     await wrapper.get('[data-testid="open-quality-monitor"]').trigger('click')
     expect(wrapper.emitted('open-quality')).toHaveLength(1)
     wrapper.unmount()
+  })
+})
+
+describe('quality detection age', () => {
+  it('uses latest attempt and advances without fetching', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-27T10:00:00Z'))
+    const wrapper = render([])
+    try {
+      expect(wrapper.find('[data-testid="quality-checked-at"]').exists()).toBe(false)
+      const data = activity([])
+      data.quality.state = 'failed'
+      data.quality.latest_attempt = { state: 'failed', model: 'test', checked_at: '2026-10-27T09:59:30Z', duration_ms: 100 }
+      data.quality.last_valid = { state: 'passed', model: 'test', checked_at: '2026-10-26T09:00:00Z', duration_ms: 100 }
+      await wrapper.setProps({ activity: data })
+      expect(wrapper.get('[data-testid="quality-checked-at"]').text()).toContain('justChecked')
+      await vi.advanceTimersByTimeAsync(60000)
+      expect(wrapper.get('[data-testid="quality-checked-at"]').text()).toContain('"count":1')
+      await wrapper.setProps({ stale: true, activity: { ...data } })
+      expect(wrapper.get('[data-testid="quality-checked-at"]').text()).toContain('"count":1')
+      for (const state of ['paused', 'queued', 'running'] as const) {
+        await wrapper.setProps({ activity: { ...data, quality: { ...data.quality, state } } })
+        expect(wrapper.get('[data-testid="quality-checked-at"]').text()).toContain('previousCheck')
+      }
+      await wrapper.setProps({ activity: { ...data, quality: { ...data.quality, latest_attempt: { ...data.quality.latest_attempt, checked_at: 'invalid' } } } })
+      expect(wrapper.find('[data-testid="quality-checked-at"]').exists()).toBe(false)
+    } finally {
+      wrapper.unmount()
+      expect(vi.getTimerCount()).toBe(0)
+      vi.useRealTimers()
+    }
   })
 })

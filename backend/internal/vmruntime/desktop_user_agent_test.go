@@ -122,13 +122,15 @@ func TestDesktopUALegacyBackfillAndConflict(t *testing.T) {
 	}
 }
 
-func TestDesktopUARemovedContainerKeepsReservation(t *testing.T) {
+func TestDesktopUAConfirmedRemovalReturnsReservation(t *testing.T) {
 	h, root := openTest(t, &fakeDriver{})
 	a, ad := uaState(t, h, root, 1)
 	if err := h.ensureClientIdentity(ad, a); err != nil {
 		t.Fatal(err)
 	}
 	a.DeleteRequested = true
+	a.Phase = "removed"
+	a.ContainerID = ""
 	if err := h.save(ad, a); err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +138,87 @@ func TestDesktopUARemovedContainerKeepsReservation(t *testing.T) {
 	if err := h.ensureClientIdentity(bd, b); err != nil {
 		t.Fatal(err)
 	}
-	if a.ClientIdentity.UserAgent == b.ClientIdentity.UserAgent {
-		t.Fatal("deleted container UA was reused")
+	if a.ClientIdentity.UserAgent != b.ClientIdentity.UserAgent || a.ClientIdentity.DeviceID == b.ClientIdentity.DeviceID {
+		t.Fatal("confirmed removal did not return the UA to the pool")
+	}
+	before := *b.ClientIdentity
+	if err := h.ensureClientIdentity(bd, b); err != nil || *b.ClientIdentity != before {
+		t.Fatalf("reused UA was not stable for the new container: %v", err)
+	}
+	c, cd := uaState(t, h, root, 3)
+	if err := h.ensureClientIdentity(cd, c); err != nil || c.ClientIdentity.UserAgent == b.ClientIdentity.UserAgent {
+		t.Fatalf("reused UA was assigned to two live containers: %v", err)
+	}
+}
+
+func TestDesktopUAUnconfirmedRemovalKeepsReservation(t *testing.T) {
+	for _, tc := range []struct {
+		name, phase, containerID string
+		deleteRequested          bool
+	}{
+		{name: "delete_not_requested", phase: "removed"},
+		{name: "delete_pending", phase: "remove", deleteRequested: true},
+		{name: "delete_failed", phase: "error", deleteRequested: true},
+		{name: "unknown_phase", phase: "unexpected", deleteRequested: true},
+		{name: "empty_phase", deleteRequested: true},
+		{name: "container_remains", phase: "removed", containerID: "existing", deleteRequested: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, root := openTest(t, &fakeDriver{})
+			a, ad := uaState(t, h, root, 1)
+			if err := h.ensureClientIdentity(ad, a); err != nil {
+				t.Fatal(err)
+			}
+			a.DeleteRequested, a.Phase, a.ContainerID = tc.deleteRequested, tc.phase, tc.containerID
+			if err := h.save(ad, a); err != nil {
+				t.Fatal(err)
+			}
+			b, bd := uaState(t, h, root, 2)
+			if err := h.ensureClientIdentity(bd, b); err != nil {
+				t.Fatal(err)
+			}
+			if a.ClientIdentity.UserAgent == b.ClientIdentity.UserAgent {
+				t.Fatalf("unconfirmed removal released UA: %+v", tc)
+			}
+		})
+	}
+}
+
+func TestDesktopUAConcurrentAllocationAfterConfirmedRemoval(t *testing.T) {
+	h, root := openTest(t, &fakeDriver{})
+	a, ad := uaState(t, h, root, 1)
+	if err := h.ensureClientIdentity(ad, a); err != nil {
+		t.Fatal(err)
+	}
+	a.DeleteRequested, a.Phase, a.ContainerID = true, "removed", ""
+	if err := h.save(ad, a); err != nil {
+		t.Fatal(err)
+	}
+	b, bd := uaState(t, h, root, 2)
+	c, cd := uaState(t, h, root, 3)
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for _, item := range []struct {
+		state *State
+		dir   string
+	}{{b, bd}, {c, cd}} {
+		wg.Add(1)
+		go func(state *State, dir string) {
+			defer wg.Done()
+			errs <- h.ensureClientIdentity(dir, state)
+		}(item.state, item.dir)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if b.ClientIdentity.UserAgent == c.ClientIdentity.UserAgent {
+		t.Fatal("concurrent allocations returned duplicate UAs")
+	}
+	if (b.ClientIdentity.UserAgent == a.ClientIdentity.UserAgent) == (c.ClientIdentity.UserAgent == a.ClientIdentity.UserAgent) {
+		t.Fatal("exactly one concurrent allocation must receive the released UA")
 	}
 }

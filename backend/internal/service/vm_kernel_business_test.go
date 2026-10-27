@@ -229,18 +229,33 @@ func TestVMKernelBareProviderErrorPresentedOnce(t *testing.T) {
 			if w.Code != wantStatus || strings.Count(w.Body.String(), "Please retry later") != 1 {
 				t.Fatalf("wrong status or duplicate failure: %d %s", w.Code, w.Body.String())
 			}
-			if strings.Contains(w.Body.String(), "rate_limit_exceeded") {
-				t.Fatal("raw provider error escaped normalized output")
+			if !strings.Contains(w.Body.String(), "rate_limit_exceeded") {
+				t.Fatal("provider error code was lost")
 			}
 		})
 	}
 }
 
 func TestVMKernelProviderWrapperPreservesExplicitStatus(t *testing.T) {
-	for _, status := range []int{401, 403, 429, 529} {
+	for _, status := range []int{400, 401, 403, 404, 422, 429, 500, 502, 503, 504, 529} {
 		payload := []byte(fmt.Sprintf(`{"type":"error","error":{"type":"provider_error","status":%d,"message":"Provider rejected request"}}`, status))
 		if got := vmKernelProviderErrorStatus(payload); got != status {
 			t.Fatalf("provider wrapper lost status: got %d want %d", got, status)
+		}
+	}
+}
+
+func TestVMKernelProviderExplicitStatusPrecedesSemanticGuess(t *testing.T) {
+	for _, payload := range []string{
+		`{"type":"error","error":{"status":400,"type":"api_error","message":"Invalid authentication parameter"}}`,
+		`{"type":"error","error":{"status_code":400,"code":"token_revoked","message":"Invalid request"}}`,
+		`{"type":"response.failed","response":{"error":{"status":400,"code":"rate_limit_exceeded","message":"Invalid request"}}}`,
+		`{"type":"response.failed","response":{"error":{"status_code":400,"type":"permission_error","message":"Invalid request"}}}`,
+		`{"type":"error","status":400,"message":"Invalid request"}`,
+		`{"type":"error","status_code":400,"message":"Invalid request"}`,
+	} {
+		if got := vmKernelProviderErrorStatus([]byte(payload)); got != http.StatusBadRequest {
+			t.Fatalf("explicit 400 changed to %d: %s", got, payload)
 		}
 	}
 }

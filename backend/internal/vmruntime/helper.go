@@ -254,6 +254,9 @@ func (h *Helper) Do(ctx context.Context, req Request) (*State, error) {
 	if s.AccountID != req.AccountID || s.InstanceID != req.InstanceID {
 		return nil, fault("binding_mismatch")
 	}
+	// Keep the original snapshot until identity validation and reservation have
+	// succeeded. A failed migration must not publish a changed proxy spec.
+	previous := *s
 	if req.Generation == 0 && req.Operation == "inspect" {
 		req.Generation = s.Generation
 	}
@@ -305,6 +308,11 @@ func (h *Helper) Do(ctx context.Context, req Request) (*State, error) {
 	if req.Operation == "remove" && !s.DeleteRequested && req.Generation <= s.Generation {
 		return nil, fault("mutation_requires_new_generation")
 	}
+	// Once removal is confirmed its UA may have been allocated to another
+	// account. Repeated remove/inspect must not revive the reservation.
+	if (req.Operation == "remove" || req.Operation == "inspect") && s.DeleteRequested && s.Phase == "removed" && s.ContainerID == "" {
+		return s, nil
+	}
 	// Resolve and validate new configuration before persisting a new generation
 	// or stopping the running kernel. A bad proxy is not a process failure.
 	var preparedProxy []byte
@@ -317,18 +325,56 @@ func (h *Helper) Do(ctx context.Context, req Request) (*State, error) {
 			return s, err
 		}
 	}
-	s.Capacity = 0 // Business concurrency belongs to the account scheduler.
-	s.Generation = req.Generation
-	if req.Operation == "remove" {
-		s.DeleteRequested = true
+	// Existing Codex identities are validated before persisting a new fence.
+	// A legacy UA allocation saves the complete next-generation snapshot while
+	// holding the allocator's inventory lock, making the reservation and fence
+	// one durable operation. New instances and identity backfills retain their
+	// existing setup path below.
+	identityPrepared := (req.Operation == "prepare" || req.Operation == "apply-config") &&
+		s.Spec.Platform == "codex" && s.ClientIdentity != nil &&
+		(s.ClientIdentity.UserAgent != "" || s.ClientIdentity.UserAgentTemplate != "")
+	migratingIdentity := identityPrepared && DesktopUserAgentNeedsMigration(s.ClientIdentity)
+	if migratingIdentity && req.Projection == nil {
+		return nil, fault("credential_projection_required")
 	}
-	if req.Operation != "inspect" {
-		s.Ready = false
-		s.Phase = req.Operation
-	}
-	// Persist fences and deletion intent BEFORE any external side effect.
-	if err := h.save(dir, s); err != nil {
-		return nil, err
+	if identityPrepared {
+		staged := *s
+		identity := *s.ClientIdentity
+		staged.ClientIdentity = &identity
+		staged.Capacity = 0
+		staged.Generation = req.Generation
+		staged.Ready = false
+		staged.Phase = req.Operation
+		if err := h.ensureClientIdentity(dir, &staged); err != nil {
+			// Exhaustion is decided without writing anything. Other failures,
+			// including persistence I/O, can have an unknown durable outcome.
+			if errorCode(err) == "client_user_agent_pool_exhausted" {
+				return &previous, err
+			}
+			return nil, err
+		}
+		if !migratingIdentity {
+			// A valid existing identity needs no new reservation; persist only
+			// the fence, as the allocator did not write a manifest.
+			if err := h.save(dir, &staged); err != nil {
+				return nil, err
+			}
+		}
+		s = &staged
+	} else {
+		s.Capacity = 0 // Business concurrency belongs to the account scheduler.
+		s.Generation = req.Generation
+		if req.Operation == "remove" {
+			s.DeleteRequested = true
+		}
+		if req.Operation != "inspect" {
+			s.Ready = false
+			s.Phase = req.Operation
+		}
+		// Persist fences and deletion intent BEFORE any external side effect.
+		if err := h.save(dir, s); err != nil {
+			return nil, err
+		}
 	}
 	fail := func(err error) (*State, error) {
 		s.Healthy = false
@@ -340,7 +386,7 @@ func (h *Helper) Do(ctx context.Context, req Request) (*State, error) {
 		}
 		return s, err
 	}
-	if req.Operation == "prepare" || req.Operation == "apply-config" {
+	if (req.Operation == "prepare" || req.Operation == "apply-config") && !identityPrepared {
 		if err := h.ensureClientIdentity(dir, s); err != nil {
 			return fail(err)
 		}
@@ -481,10 +527,9 @@ func (h *Helper) Do(ctx context.Context, req Request) (*State, error) {
 			s.Phase = "stopped"
 		}
 		if s.DeleteRequested {
-			s.Phase = "removed"
-			if s.ContainerID != "" {
-				s.Phase = "deleting"
-			}
+			// Only Driver.Remove confirms absence. Inspect cannot release the UA
+			// after an unknown create/removal outcome, even without an ID.
+			s.Phase = "deleting"
 		}
 		s.KernelSocket = filepath.Join(dir, "run", "kernel.sock")
 	}

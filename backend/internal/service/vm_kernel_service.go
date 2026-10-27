@@ -125,6 +125,7 @@ type vmKernelSlot struct {
 	observationFailures int
 	verifiedBinding     string
 	nextProbe           time.Time
+	uaMigrationRetryAt  time.Time
 }
 type VMKernelService struct {
 	cfg                config.VMKernelConfig
@@ -475,6 +476,7 @@ func (s *VMKernelService) prepare(ctx context.Context, account *Account) {
 	spec := vmruntime.Spec{Platform: vmPlatform(a.Platform), Template: s.cfg.Template, CPU: s.cfg.CPU, MemoryMiB: s.cfg.MemoryMiB, ProxyID: *a.ProxyID, ProxyRevision: vmProxyRevision(a)}
 	request := vmruntime.Request{Operation: "prepare", AccountID: a.ID, Generation: 1, Spec: &spec, Projection: projection}
 	mutate := state == nil
+	uaMigrationOnly := false
 	if state != nil {
 		request.InstanceID = state.InstanceID
 		request.Generation = state.Generation + 1
@@ -482,8 +484,13 @@ func (s *VMKernelService) prepare(ctx context.Context, account *Account) {
 		spec.ProxyID = *a.ProxyID
 		spec.ProxyRevision = vmProxyRevision(a)
 		changed := state.AppliedCredentialRevision != projection.Revision || state.AppliedProxyRevision != spec.ProxyRevision
-		if a.Platform == PlatformOpenAI && (state.ClientIdentity == nil || state.ClientIdentity.UserAgent == "") {
-			changed = true // Backfill through the existing drain/apply path.
+		legacyUA := a.Platform == PlatformOpenAI && vmruntime.DesktopUserAgentNeedsMigration(state.ClientIdentity)
+		uaMigrationOnly = legacyUA && !changed && state.Ready
+		if legacyUA && uaMigrationOnly && time.Now().Before(slot.uaMigrationRetryAt) {
+			legacyUA = false
+		}
+		if a.Platform == PlatformOpenAI && (state.ClientIdentity == nil || state.ClientIdentity.UserAgent == "" || legacyUA) {
+			changed = true // Backfill or upgrade through the existing drain/apply path.
 		}
 		mutate = changed || !state.Ready || (slot.verifiedBinding != "" && slot.verifiedBinding != vmBindingKey(state))
 		if changed {
@@ -521,15 +528,43 @@ func (s *VMKernelService) prepare(ctx context.Context, account *Account) {
 			return
 		}
 		vmKernelReadiness.Delete(a.ID)
+		previous := state
 		state, err = s.helper.Do(ctx, request)
 		s.publishHealth(a.ID, state, err)
 		if err != nil {
+			failure := vmRuntimeErrorCode(err)
+			if uaMigrationOnly && (failure == "client_user_agent_pool_exhausted" || failure == "proxy_resolution_failed" || failure == "proxy_ipv4_required") {
+				// These failures occur before any helper mutation. Confirm the old
+				// binding before preserving normal models during backoff.
+				observed, inspectErr := s.helper.Do(ctx, vmruntime.Request{Operation: "inspect", AccountID: a.ID})
+				latest, readErr := s.repo.GetByID(ctx, a.ID)
+				if inspectErr == nil && readErr == nil && vmAccountEligible(latest) &&
+					latest.ErrorMessage != OpenAIContainerAuthRequired && latest.ErrorMessage != OpenAIContainerTwoFAEnrollmentPending && previous != nil && observed != nil &&
+					previous.ClientIdentity != nil && observed.ClientIdentity != nil && *previous.ClientIdentity == *observed.ClientIdentity &&
+					vmBindingKey(previous) == vmBindingKey(observed) && vmCredentialRevision(a) == vmCredentialRevision(latest) &&
+					vmAccountRouteRevision(a) == vmAccountRouteRevision(latest) && s.bindingReady(latest, observed) {
+					slot.uaMigrationRetryAt = time.Now().Add(time.Minute)
+					slot.verifiedBinding = vmBindingKey(observed)
+					s.publishHealth(a.ID, observed, nil)
+					s.publish(latest, observed, nil)
+					slog.Warn("vm_kernel_ua_migration_deferred", "account_id", a.ID, "reason", failure)
+					return
+				}
+			}
 			s.publish(a, state, err, request.Operation)
 			slot.nextProbe = time.Now().Add(time.Minute)
 			return
 		}
 		slot.verifiedBinding = ""
 		slot.observationFailures = 0
+		if uaMigrationOnly && state != nil && vmruntime.DesktopUserAgentNeedsMigration(state.ClientIdentity) {
+			// A mismatched helper may accept apply-config without upgrading UA.
+			// Keep its verified binding and avoid repeatedly restarting the guest.
+			slot.uaMigrationRetryAt = time.Now().Add(10 * time.Minute)
+			slog.Warn("vm_kernel_ua_migration_deferred", "account_id", a.ID, "reason", "helper_did_not_upgrade_identity")
+		} else {
+			slot.uaMigrationRetryAt = time.Time{}
+		}
 	}
 	if !s.bindingReady(a, state) {
 		s.publish(a, state, errors.New("vm_binding_not_ready"), "binding")

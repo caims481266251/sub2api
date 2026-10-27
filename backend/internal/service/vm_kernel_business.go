@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/vmkernel"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
 )
 
@@ -87,6 +89,14 @@ func (s *OpenAIGatewayService) observeVMKernelOpenAIResult(ctx context.Context, 
 }
 
 func vmKernelProviderErrorStatus(payload []byte) int {
+	// A settled provider response's explicit status takes precedence over
+	// heuristics on its message/code, including request errors such as HTTP 400.
+	for _, path := range openAIStreamErrorStatusPaths {
+		value := gjson.GetBytes(payload, path)
+		if status := value.Int(); value.Type == gjson.Number && value.Float() == float64(status) && status >= 400 && status <= 599 {
+			return int(status)
+		}
+	}
 	status := openAIStreamFailureStatus(payload, extractOpenAISSEErrorMessage(payload))
 	if status != http.StatusBadGateway {
 		return status
@@ -166,6 +176,10 @@ func reportVMKernelProviderError(c *gin.Context, account *Account, ingress strin
 	if result == nil || len(result.ErrorEvent) == 0 {
 		return
 	}
+	if account.Platform == PlatformOpenAI {
+		reportVMKernelOpenAIProviderError(c, account, ingress, result)
+		return
+	}
 	status := vmKernelProviderErrorStatus(result.ErrorEvent)
 	message := sanitizeUpstreamErrorMessage(extractOpenAISSEErrorMessage(result.ErrorEvent))
 	if message == "" {
@@ -177,4 +191,96 @@ func reportVMKernelProviderError(c *gin.Context, account *Account, ingress strin
 		c.Header("Retry-After", retry)
 	}
 	writeVMKernelRequestError(c, ingress, status, errType, message, result)
+}
+
+// Preserve provider error semantics at the Docker transport boundary. This
+// only presents the settled failure; account state and retry policy are owned
+// by observeVMKernelOpenAIResult and vmKernelBusinessError.
+func reportVMKernelOpenAIProviderError(c *gin.Context, account *Account, ingress string, result *vmkernel.Result) {
+	if c == nil || (c.Request != nil && c.Request.Context().Err() != nil) {
+		return
+	}
+	source := gjson.GetBytes(result.ErrorEvent, "response.error")
+	if !source.IsObject() {
+		source = gjson.GetBytes(result.ErrorEvent, "error")
+	}
+	nested := source.IsObject()
+	if !nested {
+		source = gjson.ParseBytes(result.ErrorEvent)
+	}
+	fields := make(map[string]any)
+	for _, key := range []string{"type", "code", "param"} {
+		if key == "type" && !nested {
+			continue // The top-level SSE type describes the event, not the error.
+		}
+		value := source.Get(key)
+		if value.Exists() && (value.Type == gjson.String || value.Type == gjson.Null) {
+			fields[key] = value.Value()
+		}
+	}
+	message := sanitizeUpstreamErrorMessage(extractOpenAISSEErrorMessage(result.ErrorEvent))
+	if message == "" {
+		message = "Upstream request failed"
+	}
+	fields["message"] = message
+	for _, key := range []string{"status", "status_code", "resets_at", "resets_in_seconds"} {
+		value := source.Get(key)
+		if value.Type == gjson.Number {
+			fields[key] = value.Value()
+		}
+	}
+	upstreamStatus := vmKernelProviderErrorStatus(result.ErrorEvent)
+	status, errType, ruleMessage, matched := applyErrorPassthroughRule(c, account.Platform, upstreamStatus, result.ErrorEvent, upstreamStatus, source.Get("type").String(), message)
+	if matched {
+		fields["type"], fields["message"] = errType, ruleMessage
+	}
+	setOpsUpstreamError(c, upstreamStatus, message, "")
+	if !c.Writer.Written() {
+		if retry := result.Headers.Get("Retry-After"); retry != "" {
+			c.Header("Retry-After", retry)
+		}
+		envelope := gin.H{"error": fields}
+		if ingress == "messages" {
+			envelope["type"] = "error"
+		}
+		c.JSON(status, envelope)
+		MarkResponseCommitted(c)
+		return
+	}
+	MarkOpsStreamFailure(c, source.Get("type").String(), source.Get("code").String(), message, upstreamStatus)
+	envelope := gin.H{"error": fields}
+	event := ""
+	if ingress == "responses" {
+		id := result.ResponseID
+		if id == "" {
+			id = "resp_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+		}
+		createdAt := gjson.GetBytes(result.Response, "created_at").Int()
+		if createdAt <= 0 {
+			createdAt = time.Now().Unix()
+		}
+		response := gin.H{"id": id, "object": "response", "created_at": createdAt, "status": "failed", "output": []any{}, "error": fields}
+		if result.Model != "" {
+			response["model"] = result.Model
+		}
+		event = "response.failed"
+		envelope = gin.H{"type": event, "sequence_number": openAIResponsesFailedSequenceNumber(result.ErrorEvent), "response": response}
+	} else if ingress == "messages" {
+		event, envelope["type"] = "error", "error"
+	}
+	raw, _ := json.Marshal(envelope)
+	var writeErr error
+	if event != "" {
+		_, writeErr = fmt.Fprintf(c.Writer, "event: %s\n", event)
+	}
+	if writeErr == nil {
+		_, writeErr = fmt.Fprintf(c.Writer, "data: %s\n\n", raw)
+	}
+	if writeErr == nil {
+		writeErr = FlushGatewayResponse(c.Writer)
+	}
+	if writeErr != nil {
+		c.Set(openAIDownstreamDisconnectedKey, true)
+	}
+	MarkResponseCommitted(c)
 }

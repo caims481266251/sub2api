@@ -20,6 +20,12 @@ executionMode: '执行模式',
       vmRuntimeUnlimited: '不限制',
 
       activity: {
+        justChecked: '刚刚',
+        checkedMinutesAgo: '{count} 分钟前',
+        checkedHoursAgo: '{count} 小时前',
+        checkedDaysAgo: '{count} 天前',
+        previousCheck: '上次检测 {time}',
+
         quality: '质量检测',
         description: '使用此帐号回答糖果题，按最终明确答案是否为 21 判定。检测会使用上游额度。',
         barLabel: '最近 16 次出口请求尝试，右侧最新；成功请求按首字延迟分色，斜纹表示失败',

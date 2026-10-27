@@ -507,6 +507,11 @@ func settledHTTPFailure(raw []byte, terminal string, httpStatus int) (json.RawMe
 		return nil, "kernel_" + e.Code
 	}
 	known := e.Code == "provider_error" || e.Type == "provider_error" || e.Code == "upstream_transport" || e.Code == "upstream_transport_error"
+	// The Codex kernel returns this envelope for upstream HTTP rejections,
+	// including model access errors, without an X-Terminal-State header.
+	if e.Code == "upstream_status" && e.Type == "api_error" {
+		known = true
+	}
 	if httpStatus == http.StatusTooManyRequests && e.Code == "usage_limit_reached" {
 		known = true
 	}
@@ -519,12 +524,44 @@ func settledHTTPFailure(raw []byte, terminal string, httpStatus int) (json.RawMe
 	if !known {
 		return nil, ""
 	}
+	var rawEnvelope map[string]json.RawMessage
+	_ = json.Unmarshal(raw, &rawEnvelope)
+	publicError := rawEnvelope["error"]
+	// A verified upstream_status wrapper may carry the original JSON error in
+	// its message. Only unwrap that exact contract, never arbitrary diagnostics.
+	if e.Code == "upstream_status" && e.Type == "api_error" {
+		prefix := fmt.Sprintf("upstream status %d: ", httpStatus)
+		if strings.HasPrefix(e.Message, prefix) {
+			var nested struct {
+				Error json.RawMessage `json:"error"`
+			}
+			var inner providerError
+			if json.Unmarshal([]byte(strings.TrimPrefix(e.Message, prefix)), &nested) == nil &&
+				json.Unmarshal(nested.Error, &inner) == nil && inner.Message != "" {
+				// The HTTP response establishes status; the inner object supplies
+				// public error fields, not a different transport classification.
+				inner.Status, inner.StatusCode = e.Status, e.StatusCode
+				e = inner
+				publicError = nested.Error
+			}
+		}
+	}
 	// Do not retain diagnostic extras or proxy URLs from transport failures.
 	message := e.Message
 	if e.Code == "upstream_transport" || e.Code == "upstream_transport_error" || strings.Contains(message, "://") || len(message) > 4096 {
 		message = "Upstream request failed"
 	}
-	fields := map[string]any{"code": e.Code, "type": e.Type, "message": message}
+	fields := map[string]any{"message": message}
+	var publicFields map[string]json.RawMessage
+	_ = json.Unmarshal(publicError, &publicFields)
+	for _, key := range []string{"code", "type", "param"} {
+		if value, exists := publicFields[key]; exists {
+			var text *string
+			if json.Unmarshal(value, &text) == nil {
+				fields[key] = text
+			}
+		}
+	}
 	for _, status := range []int{e.Status, e.StatusCode, envelope.Status, httpStatus} {
 		if status >= 400 && status <= 599 {
 			fields["status"] = status

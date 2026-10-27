@@ -3,9 +3,13 @@
     <button type="button" class="flex w-full min-w-0 items-center gap-1.5 rounded text-left text-[11px] focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary-500"
       data-testid="open-quality-monitor" @click="emit('open-quality')">
       <span class="shrink-0 text-gray-500 dark:text-dark-300">{{ t('admin.accounts.activity.quality') }}</span>
-      <span class="badge ml-auto truncate text-[10px]" :class="qualityBadgeClass(activity?.quality.state)">{{ qualityLabel }}</span>
+      <span class="badge ml-auto shrink-0 text-[10px]" :class="qualityBadgeClass(activity?.quality.state)">{{ qualityLabel }}</span>
       <Icon name="chevronRight" size="xs" class="shrink-0 text-gray-400" />
     </button>
+    <p v-if="checkedAt" class="text-right text-[10px] leading-4 text-gray-400 dark:text-dark-400"
+      data-testid="quality-checked-at" :title="t('admin.accounts.activity.checkedAt') + ': ' + formatDateTime(checkedAt)">
+      {{ checkedAgo }}
+    </p>
 
     <div class="grid grid-cols-[repeat(16,minmax(0,1fr))] gap-[2px]" role="group" :aria-label="t('admin.accounts.activity.barLabel')">
       <span v-for="empty in 16 - records.length" :key="`empty-${empty}`" aria-hidden="true" data-testid="recent-request-empty"
@@ -34,6 +38,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useQualityDisplayClock } from '@/composables/useQualityDisplayClock'
 import { useI18n } from 'vue-i18n'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import Icon from '@/components/icons/Icon.vue'
@@ -45,6 +50,22 @@ import { formatDateTime } from '@/utils/format'
 const props = defineProps<{ activity?: AccountActivity; stale?: boolean; loading?: boolean }>()
 const emit = defineEmits<{ (event: 'open-quality'): void }>()
 const { t } = useI18n()
+const now = useQualityDisplayClock()
+const checkedAt = computed(() => {
+  const value = props.activity?.quality.latest_attempt?.checked_at
+  return value && Number.isFinite(Date.parse(value)) ? value : null
+})
+const checkedAgo = computed(() => {
+  if (!checkedAt.value) return ''
+  const minutes = Math.floor(Math.max(0, now.value - Date.parse(checkedAt.value)) / 60000)
+  const prefix = 'admin.accounts.activity.'
+  const ago = minutes < 1 ? t(prefix + 'justChecked')
+    : minutes < 60 ? t(prefix + 'checkedMinutesAgo', { count: minutes })
+    : minutes < 1440 ? t(prefix + 'checkedHoursAgo', { count: Math.floor(minutes / 60) })
+    : t(prefix + 'checkedDaysAgo', { count: Math.floor(minutes / 1440) })
+  return ['running', 'queued', 'paused'].includes(props.activity?.quality.state ?? '')
+    ? t(prefix + 'previousCheck', { time: ago }) : ago
+})
 const records = computed(() => (props.activity?.recent_requests ?? []).slice(-16))
 const qualityLabel = computed(() => !props.activity && props.stale
   ? t('admin.accounts.activity.unavailable')

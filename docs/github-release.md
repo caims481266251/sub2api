@@ -1,14 +1,14 @@
 # GitHub 发布与在线更新
 
-本分支的发布仓库是 `caims481266251/sub2api`，持续发布分支为 `codex/vm-kernel-account-mode`。当前版本 `2.15.22` 包含 Docker OpenAI 容器独立 UA、代理连接收尾修复，保留 SSE 保活与读取无进展超时，并补齐读取超时的诊断分类。
+本分支的发布仓库是 `caims481266251/sub2api`，持续发布分支为 `codex/vm-kernel-account-mode`。当前版本 `2.15.23` 修复 Docker OpenAI 旧 UA 的模型兼容问题、模板池回收及上游错误透传，并显示质量检测距今时间。
 
 ## 发布方式
 
 在已验证的持续发布分支创建带说明的正式 tag，再原子推送分支与 tag：
 
 ```bash
-git tag -a v2.15.22 -m "Release v2.15.22" -m "本次更新说明"
-git push --atomic origin codex/vm-kernel-account-mode v2.15.22
+git tag -a v2.15.23 -m "Release v2.15.23" -m "本次更新说明"
+git push --atomic origin codex/vm-kernel-account-mode v2.15.23
 ```
 
 `.github/workflows/release.yml` 接收 `v*` tag，自动构建前端及 Windows AMD64、macOS AMD64/ARM64、Linux AMD64/ARM64 更新包，发布 `checksums.txt`、GitHub Release 和 GHCR 多架构镜像。正式 tag 固定完整发布，不能被仓库的 `SIMPLE_RELEASE` 变量降级为仅镜像模式。手动触发仍可选择 simple release，但该模式不提供系统内在线更新包。
@@ -24,7 +24,7 @@ git push --atomic origin codex/vm-kernel-account-mode v2.15.22
 Docker 部署可通过页面更新当前容器中的二进制；重新创建容器会恢复镜像内版本，因此持久升级还应更新 Compose 镜像 tag 并重新创建应用容器：
 
 ```yaml
-image: ghcr.io/caims481266251/sub2api:2.15.22
+image: ghcr.io/caims481266251/sub2api:2.15.23
 ```
 
 ```bash
@@ -78,6 +78,20 @@ docker compose up -d --no-deps app
 - 保存失败恢复已确认选项，保留现有帐号模式，防止旧轮询或探测策略响应覆盖最新配置；切换帐号后隔离旧请求。
 - 更新中英文借票说明，移除过时的传输限制文案。
 - 补充帐号编辑入口回归测试；沿用现有后端接口，无新增数据库迁移。
+
+## v2.15.23 更新
+
+Docker UA 模板池回收、模型兼容与错误透传修复
+
+- OpenAI Docker 帐号可分配池提供 1,067 个唯一 Mac/Windows UA；不再分配 0.150.0–0.154.0 历史客户端版本。旧身份等待在途请求结束后迁移到兼容版本，保持设备 ID，优先保留原系统和架构。
+- 帐号删除且 helper 确认容器移除后归还 UA；删除失败、结果未知或仍在删除中时保留占用，重复删除/检查不会重新占用已释放身份。
+- 迁移前池耗尽或代理解析失败时，只有重新确认原健康绑定及帐号资格后才退避并保留原可用模型；不恢复授权暂停帐号，不批量清除模型限制，不自动重放已发送请求。
+- Docker OpenAI 帐号检测及业务请求保留明确的上游 HTTP 状态、错误类型、参数和消息；修复上游 400 被改为通用 502 的问题，覆盖同步、流式和 WebSocket 错误输出。
+- 质量检测卡片显示最新一次检测距今时间及完整时间提示；所有可见行共享一个显示时钟，页面隐藏时暂停，不增加检测请求。
+
+验证：相关后端竞态回归已通过；最后的删除状态及迁移修复另通过 62 个顶层测试、38 个子用例。本地已有帐号自动迁移后，gpt-6-luna 管理检测、Responses 同步、SSE、WebSocket 全部成功，三笔网关用量记录与实际返回模型一致。删除回收通过自动回归覆盖，未删除真实业务帐号；专项验证不代表消除了既有高并发上游拒绝问题。
+
+升级：相较 v2.15.22 无新增数据库迁移。正式发布包含五个平台主程序更新包、checksums.txt、amd64/arm64 重登录运行包、Docker host tools 与多架构镜像；主程序与 Docker host tools 保持同版本，在线安装完成后重启生效。
 
 ## v2.15.22 更新
 
