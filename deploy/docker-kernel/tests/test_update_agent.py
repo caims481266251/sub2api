@@ -78,6 +78,15 @@ class AgentTest(unittest.TestCase):
             return ''
         with patch.object(m,'run',side_effect=command):
             self.assertEqual(self.agent.prepare('2.15.4')['image'],actual['Id'])
+            actual['Config'] = dict(config['config'], Hostname='', Domainname='', User='', Image='', WorkingDir='',
+                                    AttachStdin=False, AttachStdout=False, AttachStderr=False, Tty=False,
+                                    OpenStdin=False, StdinOnce=False, Cmd=None, OnBuild=None, Volumes=None)
+            self.assertEqual(self.agent.prepare('2.15.4')['image'],actual['Id'])
+            for key,value in [('User','10001'),('Cmd',['unexpected']),('Env',['PATH=/evil']),('UnknownField',False)]:
+                previous=copy.deepcopy(actual['Config'])
+                actual['Config'][key]=value
+                with self.subTest(key=key),self.assertRaisesRegex(ValueError,'loaded_image_content_mismatch'):self.agent.prepare('2.15.4')
+                actual['Config']=previous
             actual['RootFS']['Layers']=['unexpected layer']
             with self.assertRaisesRegex(ValueError,'loaded_image_content_mismatch'):self.agent.prepare('2.15.4')
 
@@ -479,8 +488,33 @@ class AgentTest(unittest.TestCase):
     def test_default_script_change_cannot_migrate_system(self):
         manifest=self.pool_manifest()
         templates=json.loads(Path(self.config['templates']).read_text())
-        with patch.object(self.agent,'default_fingerprint',side_effect=[self.fingerprint('12','a'),self.fingerprint('13','b')]):
+        previous=templates['default']['image']
+        with patch.object(self.agent,'default_fingerprint',side_effect=lambda image:self.fingerprint('12','a') if image==previous else self.fingerprint('13','b')):
             with self.assertRaisesRegex(ValueError,'system_migration_forbidden'):self.agent.assess_default_refresh(manifest,templates)
+        self.assertFalse(manifest['refresh_default'])
+
+    def test_default_alias_refresh_uses_verified_same_system_pool_image(self):
+        manifest=self.pool_manifest()
+        templates=json.loads(Path(self.config['templates']).read_text())
+        previous=templates['default']['image'];same=manifest['images']['debian-12']['image']
+        def fingerprint(image):
+            return self.fingerprint('12','a') if image==previous else self.fingerprint('12','b') if image==same else self.fingerprint('13','b')
+        with patch.object(self.agent,'default_fingerprint',side_effect=fingerprint):
+            self.agent.assess_default_refresh(manifest,templates)
+        self.assertTrue(manifest['refresh_default'])
+        self.assertEqual(manifest['image'],same)
+        self.assertEqual(self.agent.next_templates(templates,manifest)['default']['image'],same)
+        self.assertEqual(templates['default']['image'],previous)
+
+    def test_default_alias_rejects_same_system_with_stale_runtime(self):
+        manifest=self.pool_manifest()
+        templates=json.loads(Path(self.config['templates']).read_text())
+        previous=templates['default']['image'];same=manifest['images']['debian-12']['image']
+        def fingerprint(image):
+            return self.fingerprint('12','a') if image in (previous,same) else self.fingerprint('13','b')
+        with patch.object(self.agent,'default_fingerprint',side_effect=fingerprint):
+            with self.assertRaisesRegex(ValueError,'system_migration_forbidden'):
+                self.agent.assess_default_refresh(manifest,templates)
         self.assertFalse(manifest['refresh_default'])
 
     def test_missing_default_image_is_not_silently_replaced(self):

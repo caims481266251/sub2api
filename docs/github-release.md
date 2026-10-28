@@ -1,14 +1,14 @@
 # GitHub 发布与在线更新
 
-本分支的发布仓库是 `caims481266251/sub2api`，持续发布分支为 `codex/vm-kernel-account-mode`。当前发布版本为 `2.15.25`，包含 Docker 基础系统池、默认内核出口身份、请求取消及独立搜索修复。历史版本说明保留其发布时行为。
+本分支的发布仓库是 `caims481266251/sub2api`，持续发布分支为 `codex/vm-kernel-account-mode`。当前发布版本为 `2.15.26`，包含 Docker 基础系统池、默认内核出口身份、请求取消及独立搜索修复。历史版本说明保留其发布时行为。
 
 ## 发布方式
 
 在已验证的持续发布分支创建带说明的正式 tag，再原子推送分支与 tag：
 
 ```bash
-git tag -a v2.15.25 -m "Release v2.15.25" -m "本次更新说明"
-git push --atomic origin codex/vm-kernel-account-mode v2.15.25
+git tag -a v2.15.26 -m "Release v2.15.26" -m "本次更新说明"
+git push --atomic origin codex/vm-kernel-account-mode v2.15.26
 ```
 
 `.github/workflows/release.yml` 接收 `v*` tag，自动构建前端及 Windows AMD64、macOS AMD64/ARM64、Linux AMD64/ARM64 更新包，发布 `checksums.txt`、GitHub Release 和 GHCR 多架构镜像。正式 tag 固定完整发布，不能被仓库的 `SIMPLE_RELEASE` 变量降级为仅镜像模式。手动触发仍可选择 simple release，但该模式不提供系统内在线更新包。
@@ -24,7 +24,7 @@ git push --atomic origin codex/vm-kernel-account-mode v2.15.25
 Docker 部署可通过页面更新当前容器中的二进制；重新创建容器会恢复镜像内版本，因此持久升级还应更新 Compose 镜像 tag 并重新创建应用容器：
 
 ```yaml
-image: ghcr.io/caims481266251/sub2api:2.15.25
+image: ghcr.io/caims481266251/sub2api:2.15.26
 ```
 
 ```bash
@@ -78,6 +78,13 @@ docker compose up -d --no-deps app
 - 保存失败恢复已确认选项，保留现有帐号模式，防止旧轮询或探测策略响应覆盖最新配置；切换帐号后隔离旧请求。
 - 更新中英文借票说明，移除过时的传输限制文案。
 - 补充帐号编辑入口回归测试；沿用现有后端接口，无新增数据库迁移。
+
+## v2.15.26：Docker 更新兼容修复
+
+- 修复旧 Docker 在镜像 inspect 中补齐空字段导致 `loaded_image_content_mismatch` 的误拒绝。仅归一化已知空默认值，镜像摘要、分层内容、非空启动配置和未知字段仍严格核对。
+- 原默认模板若是系统池镜像的别名，升级时仅使用发布包中已校验、同系统版本且共享运行脚本一致的镜像更新，不跨发行版迁移。
+- 包含 v2.15.25 全部功能。65 项运行环境测试通过，并在目标服务器用真实发布镜像验证兼容行为；旧服务在预检期间继续运行。
+- 旧更新器需先安装本版本 bootstrap，再执行主程序及配套运行环境升级。
 
 ## v2.15.25：Docker 基础系统池
 

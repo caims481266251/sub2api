@@ -105,6 +105,22 @@ def release_images(manifest):
     return manifest['images']
 
 
+def normalized_image_config(config):
+    # Classic Docker inspect fills optional OCI fields with zero values.
+    # Ignore only known empty defaults; preserve every nonempty/unknown field.
+    normalized = dict(config)
+    defaults = {
+        'Hostname': '', 'Domainname': '', 'User': '', 'Image': '', 'WorkingDir': '',
+        'AttachStdin': False, 'AttachStdout': False, 'AttachStderr': False,
+        'Tty': False, 'OpenStdin': False, 'StdinOnce': False,
+        'Cmd': None, 'OnBuild': None, 'Volumes': None,
+    }
+    for key, value in defaults.items():
+        if key in normalized and type(normalized[key]) is type(value) and normalized[key] == value:
+            del normalized[key]
+    return normalized
+
+
 def payload_template(directory):
     payload = Path(directory)
     if not payload.is_absolute() or payload.is_symlink() or not payload.is_dir():
@@ -336,7 +352,7 @@ class Installer:
             image_config = configs[image['tag']]
             if actual['Architecture'] != self.arch or actual['Os'] != 'linux':
                 raise ValueError('image_architecture_mismatch')
-            if actual['RootFS']['Layers'] != image_config['rootfs']['diff_ids'] or actual['Config'] != image_config['config']:
+            if actual['RootFS']['Layers'] != image_config['rootfs']['diff_ids'] or normalized_image_config(actual['Config']) != normalized_image_config(image_config['config']):
                 raise ValueError('loaded_image_content_mismatch')
             if not re.fullmatch(r'sha256:[a-f0-9]{64}', actual['Id']):
                 raise ValueError('loaded_image_digest_invalid')
@@ -405,7 +421,20 @@ class Installer:
         if before['runtime_scripts'] == after['runtime_scripts']:
             return
         if before['os_release'] != after['os_release']:
-            raise ValueError('default_system_migration_forbidden')
+            # Some fresh system-pool installations used a pool image as the
+            # legacy default. Refresh that alias only from an archive-verified
+            # same-system image carrying the exact new shared runtime scripts.
+            for profile in PROFILES:
+                candidate = manifest.get('images', {}).get(profile)
+                if not candidate:
+                    continue
+                fingerprint = self.default_fingerprint(candidate['image'])
+                if fingerprint['os_release'] == before['os_release'] and fingerprint['runtime_scripts'] == after['runtime_scripts']:
+                    manifest['image'] = candidate['image']
+                    manifest['images']['default'] = dict(manifest['images']['default'], image=candidate['image'])
+                    break
+            else:
+                raise ValueError('default_system_migration_forbidden')
         manifest['refresh_default'] = True
 
     def owned_containers(self, changed):
