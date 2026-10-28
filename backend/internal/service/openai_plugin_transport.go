@@ -41,6 +41,20 @@ func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL 
 	if phaseGuard != nil && phaseGuard.ctx.Err() != nil {
 		return nil, context.Cause(phaseGuard.ctx)
 	}
+	if account.IsVMKernel() {
+		// The sole host-side Docker business endpoint is standalone search.
+		// Never route it through tickets, plugins or an alternate/direct exit.
+		if !account.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityAlphaSearch) ||
+			request.URL == nil || request.Method != http.MethodPost || request.URL.Scheme != "https" ||
+			request.URL.Host != "chatgpt.com" || request.URL.Path != "/backend-api/codex/alpha/search" ||
+			account.ProxyID == nil || account.Proxy == nil || *account.ProxyID != account.Proxy.ID ||
+			proxyURL == "" || proxyURL != account.Proxy.URL() {
+			return nil, denyOpenAITurn("account_binding_changed")
+		}
+		return s.doOpenAIProxyAttempt(request, account, runtimeProxyEgress{
+			url: proxyURL, proxyID: account.Proxy.ID, proxyName: account.Proxy.Name,
+		})
+	}
 	if account.IsSIWCEnabled() {
 		if request.URL == nil || request.URL.Scheme != "https" || request.URL.Host != "api.openai.com" || request.URL.Path != "/v1/responses" {
 			return nil, fmt.Errorf("SIWC request must use the official Responses endpoint")

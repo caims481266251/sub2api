@@ -54,7 +54,7 @@ func TestAccountExecutionModeMaintenanceUpdateDoesNotOverwriteStoredMode(t *test
 		t.Run(mode, func(t *testing.T) {
 			matcher := sqlmock.QueryMatcherFunc(func(expected, actual string) error {
 				if expected == "immutable mode update" {
-					if !strings.HasPrefix(actual, `UPDATE "accounts" SET `) || strings.Contains(actual, `"execution_mode" =`) {
+					if !strings.HasPrefix(actual, `UPDATE "accounts" SET `) || strings.Contains(actual, `"execution_mode" =`) || strings.Contains(actual, `"docker_system_profile" =`) {
 						return fmt.Errorf("maintenance update changed immutable mode: %s", actual)
 					}
 					return nil

@@ -7,6 +7,6 @@ RUN if [ "$(dpkg --print-architecture)" != amd64 ]; then dpkg --add-architecture
  && mkdir -p /slot/home /slot/run /slot/credentials /opt/kin-payload /usr/local/lib/sub2-container
 COPY container/entry container/observe container/common.py container/proxy_bridge.py /usr/local/lib/sub2-container/
 COPY container/firewall /usr/local/lib/sub2-container/firewall
-RUN chmod 755 /usr/local/lib/sub2-container/entry /usr/local/lib/sub2-container/observe /usr/local/lib/sub2-container/firewall /usr/local/lib/sub2-container/proxy_bridge.py
+RUN chmod 755 /usr/local/lib/sub2-container/entry /usr/local/lib/sub2-container/observe /usr/local/lib/sub2-container/firewall
 LABEL com.sub2api.runtime="container-v1"
 ENTRYPOINT ["/usr/local/lib/sub2-container/entry"]

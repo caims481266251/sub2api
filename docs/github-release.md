@@ -1,14 +1,14 @@
 # GitHub 发布与在线更新
 
-本分支的发布仓库是 `caims481266251/sub2api`，持续发布分支为 `codex/vm-kernel-account-mode`。当前版本 `2.15.24` 修复 Docker OpenAI GPT-6.1 Sol/Terra 在旧客户端 UA 下被上游拒绝的问题，并保留 UA 独立分配、回收、错误透传和质量检测距今时间。
+本分支的发布仓库是 `caims481266251/sub2api`，持续发布分支为 `codex/vm-kernel-account-mode`。当前发布版本为 `2.15.25`，包含 Docker 基础系统池、默认内核出口身份、请求取消及独立搜索修复。历史版本说明保留其发布时行为。
 
 ## 发布方式
 
 在已验证的持续发布分支创建带说明的正式 tag，再原子推送分支与 tag：
 
 ```bash
-git tag -a v2.15.24 -m "Release v2.15.24" -m "本次更新说明"
-git push --atomic origin codex/vm-kernel-account-mode v2.15.24
+git tag -a v2.15.25 -m "Release v2.15.25" -m "本次更新说明"
+git push --atomic origin codex/vm-kernel-account-mode v2.15.25
 ```
 
 `.github/workflows/release.yml` 接收 `v*` tag，自动构建前端及 Windows AMD64、macOS AMD64/ARM64、Linux AMD64/ARM64 更新包，发布 `checksums.txt`、GitHub Release 和 GHCR 多架构镜像。正式 tag 固定完整发布，不能被仓库的 `SIMPLE_RELEASE` 变量降级为仅镜像模式。手动触发仍可选择 simple release，但该模式不提供系统内在线更新包。
@@ -24,7 +24,7 @@ git push --atomic origin codex/vm-kernel-account-mode v2.15.24
 Docker 部署可通过页面更新当前容器中的二进制；重新创建容器会恢复镜像内版本，因此持久升级还应更新 Compose 镜像 tag 并重新创建应用容器：
 
 ```yaml
-image: ghcr.io/caims481266251/sub2api:2.15.24
+image: ghcr.io/caims481266251/sub2api:2.15.25
 ```
 
 ```bash
@@ -78,6 +78,31 @@ docker compose up -d --no-deps app
 - 保存失败恢复已确认选项，保留现有帐号模式，防止旧轮询或探测策略响应覆盖最新配置；切换帐号后隔离旧请求。
 - 更新中英文借票说明，移除过时的传输限制文案。
 - 补充帐号编辑入口回归测试；沿用现有后端接口，无新增数据库迁移。
+
+## v2.15.25：Docker 基础系统池
+
+- 新建 Docker 账号默认按已绑定数量自动均衡分配，可手动选择固定发行版。创建页显示各系统数量、可用状态和快照时间，普通模式隐藏；不触发上游用量查询。
+- 账号创建事务中原子分配并持久保存 `docker_system_profile`。已有空绑定不回填，初始化失败、重启和重新授权保持原绑定；OAuth、2FA / Session、批量、导入入口统一处理。
+- 五种固定系统镜像与架构兼容检查，发布包采用多镜像清单；宿主 updater v2 支持逐项验证、完整映射回滚和引用保护。旧更新器须先使用同版本 bootstrap 升级。
+- 新增结构迁移 312，不迁移旧账号业务数据。范围、安装要求及验收边界见 [Docker 基础系统池](docker-system-pool.md)。已完成 amd64 五系统及 ARM64 Ubuntu / Debian 的专项验收；发布时仍须核对安装包、系统映射和目标宿主运行结果。
+
+## v2.15.25：默认身份、代理与取消处理
+
+- 删除 OpenAI Docker 账号的桌面 UA 模板池、独立分配、回收、版本兼容迁移及相关初始化要求。
+- 容器启动与 Responses 请求统一默认 Codex UA 与客户端版本字段，保留可信安装 ID、会话及 turn metadata 的既有传递边界。
+- 已有实例仅兼容读取旧 UA 字段，等待在途请求结束后通过现有应用配置流程清除。清除与新运行代次、未就绪状态一起落盘，避免应用失败后将旧内核误判为更新完成。没有旧覆盖的账号不触发此流程。
+- 保留设备 ID、账号独立容器、常驻内核、代理、会话与缓存、调度、计费和重新授权机制；保留此前代理收尾、流处理、错误透传和质量检测时间显示的修复。
+- 无新增数据库迁移。需要主程序、helper 和容器镜像配套部署；源码变更不表示现有线上容器已经恢复默认 UA。随 v2.15.25 正式发布。
+
+## v2.15.25：Docker 独立搜索
+
+- Docker 标准 OpenAI OAuth 账号支持 `/alpha/search`、`/v1/alpha/search` 及 `/backend-api/codex/alpha/search`，修复 Docker 专属分组被能力筛选拒绝为 503 的问题。
+- 独立搜索复用现有账号调度、并发、RPM、错误处理和按次计费；由主程序通过账号绑定代理访问固定 Codex 搜索端点。推理继续使用容器常驻内核。
+- 搜索使用默认 Codex UA / version / originator，并原样传递 turn metadata；禁止改走插件、票据、备用出口或重定向。成功响应必须是有效 JSON。
+- OpenAI 常驻内核直接使用账号绑定代理，移除本地 SOCKS5 桥转发；保留防火墙、隔离与后台代理地址更新。
+- 同时打包请求取消与 WebSocket 关闭归因修复；不自动重放已经发送的业务请求。
+
+验证：本地搜索专项 204 个顶层测试、含子用例 484 项通过；Ubuntu / Debian 的三个搜索入口共 6 次真实调用、按次账单关联及 2 次 Responses 推理回归通过。错误状态和代理准入边界由模拟上游覆盖。正式发布与线上验收结果另记录，不能将本地结果视为线上验收。 发布前补充回归：245 个后端顶层测试（含子用例 598 项）、136 项前端测试与类型检查、63 项运行环境测试、12 项发布工具测试通过。宽匹配测试中原有借票探测 `TestCodex780ProbeUsesCanonicalClientIdentity` 的 `req.Close` 断言失败，相关源码与测试均未在本次改动；本次专项回归未将其列为通过。
 
 ## v2.15.24 更新
 

@@ -203,11 +203,12 @@ describe('admin AccountsView lite account list', () => {
   })
 
   it('keeps Docker runtime status and opens account quality details on the same row', async () => {
-    const row = { ...listRow, execution_mode: 'docker_kernel', vm_kernel: { phase: 'kernel_ready', ready: true, actual_accelerator: 'docker', capacity: 2 } }
+    const row = { ...listRow, execution_mode: 'docker_kernel', docker_system_profile: 'debian-12', vm_kernel: { phase: 'kernel_ready', ready: true, actual_accelerator: 'docker', capacity: 2 } }
     listAccounts.mockResolvedValue({ items: [row], total: 1, page: 1, page_size: 20, pages: 1 })
     const wrapper = mountView()
     await flushPromises()
     expect(wrapper.getComponent(VMKernelStatusBadge).props('status')).toEqual(row.vm_kernel)
+    expect(wrapper.get('[data-testid="docker-system-binding"]').text()).toContain('Debian 12')
     const activity = wrapper.getComponent(OpenAIAccountActivity)
     expect(activity.exists()).toBe(true)
     activity.vm.$emit('open-quality')

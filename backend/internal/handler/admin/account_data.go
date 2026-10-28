@@ -58,6 +58,7 @@ type DataProxy struct {
 // 影子的独立调度配置(priority/并发/分组/status 管理员可单独调)亦不在本备份范围,属已知局限
 // (外审第6轮裁决:保持排除 + 前端警告,而非升级格式做完整往返)。
 type DataAccount struct {
+	DockerSystemProfile *string        `json:"docker_system_profile,omitempty"`
 	ExecutionMode       string         `json:"execution_mode,omitempty"`
 	Name                string         `json:"name"`
 	Notes               *string        `json:"notes,omitempty"`
@@ -209,6 +210,7 @@ func (h *AccountHandler) ExportData(c *gin.Context) {
 			Name:                acc.Name,
 			Notes:               acc.Notes,
 			ExecutionMode:       acc.EffectiveExecutionMode(),
+			DockerSystemProfile: acc.DockerSystemProfile,
 			Platform:            acc.Platform,
 			Type:                acc.Type,
 			Credentials:         acc.Credentials,
@@ -477,6 +479,9 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 			SkipDefaultGroupBind: skipDefaultGroupBind,
 		}
 
+		if item.DockerSystemProfile != nil {
+			accountInput.DockerSystemProfile = *item.DockerSystemProfile
+		}
 		created, err := h.adminService.CreateAccount(ctx, accountInput)
 		if err != nil {
 			result.AccountFailed++

@@ -1,0 +1,17 @@
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+RUN if [ "$(dpkg --print-architecture)" = arm64 ]; then \
+      dpkg --add-architecture amd64; \
+      sed -i '/^Components:/a Architectures: arm64' /etc/apt/sources.list.d/ubuntu.sources; \
+      printf 'Types: deb\nURIs: http://archive.ubuntu.com/ubuntu\nSuites: noble noble-updates noble-security\nComponents: main universe\nArchitectures: amd64\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n' > /etc/apt/sources.list.d/amd64.sources; \
+    fi \
+ && apt-get update && apt-get install -y --no-install-recommends ca-certificates python3 util-linux nftables libc6:amd64 libgcc-s1:amd64 \
+ && rm -rf /var/lib/apt/lists/*
+RUN mkdir -p /slot/home /slot/run /slot/credentials /opt/kin-payload /usr/local/lib/sub2-container
+COPY container/entry container/observe container/common.py container/proxy_bridge.py container/check-runtime.py /usr/local/lib/sub2-container/
+COPY container/firewall /usr/local/lib/sub2-container/firewall
+ARG SYSTEM_PROFILE
+RUN chmod 755 /usr/local/lib/sub2-container/entry /usr/local/lib/sub2-container/observe /usr/local/lib/sub2-container/firewall \
+ && /usr/bin/python3 /usr/local/lib/sub2-container/check-runtime.py --profile "$SYSTEM_PROFILE"
+LABEL com.sub2api.runtime="container-v1" com.sub2api.system-profile="$SYSTEM_PROFILE"
+ENTRYPOINT ["/usr/local/lib/sub2-container/entry"]

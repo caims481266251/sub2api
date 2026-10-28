@@ -25,6 +25,23 @@ func ReleaseOperation(ctx context.Context, socket, action, version string) error
 	}}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: 12 * time.Minute, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	capabilityRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://runtime-updater/v1/capabilities", nil)
+	if err != nil {
+		return err
+	}
+	capabilityResponse, err := client.Do(capabilityRequest)
+	if err != nil {
+		return fmt.Errorf("Docker runtime updater requires the matching host bundle; run host/install-update-agent.py before updating: %w", err)
+	}
+	var capabilities struct {
+		UpdaterVersion int  `json:"updater_version"`
+		MultiImage     bool `json:"multi_image"`
+	}
+	decodeErr := json.NewDecoder(io.LimitReader(capabilityResponse.Body, 4096)).Decode(&capabilities)
+	capabilityResponse.Body.Close()
+	if capabilityResponse.StatusCode != http.StatusOK || decodeErr != nil || capabilities.UpdaterVersion < 2 || !capabilities.MultiImage {
+		return fmt.Errorf("Docker runtime updater is too old for the system pool; install the matching release host bundle with host/install-update-agent.py before updating")
+	}
 	data, _ := json.Marshal(map[string]string{"version": version})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://runtime-updater/v1/"+action, bytes.NewReader(data))
 	if err != nil {

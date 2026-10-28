@@ -31,7 +31,7 @@ func TestVMKernelTurnStateWSMetadataReconnectAndSessionChange(t *testing.T) {
 			return
 		}
 		want := map[int32]string{1: "", 2: "state-1", 3: "", 4: "state-3"}[n]
-		if env.Headers[openAICodexTurnStateHeader] != want || gjson.GetBytes(env.Body, "client_metadata.x-codex-turn-state").String() != want {
+		if env.Headers[openAICodexTurnStateHeader] != want || gjson.GetBytes(env.Body, "client_metadata").Exists() {
 			t.Errorf("turn %d state not synchronized: want %q", n, want)
 		}
 		w.Header().Set("Content-Type", "text/event-stream")

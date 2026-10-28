@@ -19,7 +19,7 @@
       </li>
     </ul>
     <div class="flex gap-3">
-      <button v-if="!busy && (!rows.length || hasPending)" type="button" class="btn btn-primary" :disabled="!encryptionReady" data-testid="two-fa-start" @click="run">
+      <button v-if="!busy && (!rows.length || hasPending)" type="button" class="btn btn-primary" :disabled="!encryptionReady || disabled" data-testid="two-fa-start" @click="run">
         {{ t(rows.length ? 'tokenGuard.twoFA.retry' : 'tokenGuard.twoFA.start') }}
       </button>
       <button v-if="busy" type="button" class="btn btn-secondary" :disabled="stopRequested" @click="stopRequested = true">
@@ -41,6 +41,7 @@ import type { TokenGuardReloginAccount } from '@/api/admin/accountTokenGuard'
 
 const props = defineProps<{
   executionMode?: 'normal' | 'docker_kernel'
+  disabled?: boolean
   importCredential: (credential: Record<string, unknown>, email: string, login: TokenGuardReloginAccount) => Promise<'created' | 'skipped'>
 }>()
 const emit = defineEmits<{ busy: [value: boolean] }>()
@@ -70,7 +71,7 @@ async function discardJob(row: Row) {
 }
 
 async function run() {
-  if (busy.value || !encryptionReady.value) return
+  if (busy.value || !encryptionReady.value || props.disabled) return
   error.value = ''
   if (!rows.value.length) {
     try {

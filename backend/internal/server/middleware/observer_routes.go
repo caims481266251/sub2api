@@ -9,6 +9,7 @@ func ObserverAccountRouteAllowed(method, route string) bool {
 }
 
 var observerAccountRoutes = map[string]struct{}{
+	"GET /api/v1/admin/accounts/docker-system-pool":                  {},
 	"POST /api/v1/admin/accounts/activity/batch":                     {},
 	"GET /api/v1/admin/accounts/:id/quality-monitor":                 {},
 	"PUT /api/v1/admin/accounts/:id/quality-monitor":                 {},

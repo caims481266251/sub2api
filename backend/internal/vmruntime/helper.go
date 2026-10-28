@@ -25,18 +25,19 @@ import (
 var revisionPattern = regexp.MustCompile(`^[a-zA-Z0-9._-]{1,128}$`)
 
 type Helper struct {
-	Version    string
-	serviceGID int
-	root       string
-	driver     Driver
-	lock       *os.File
-	mu         sync.Mutex
-	bindingMu  sync.Mutex
-	networkMu  sync.Mutex
-	identityMu sync.Mutex
-	accounts   map[int64]*sync.Mutex
-	active     sync.WaitGroup
-	closing    bool
+	Version      string
+	serviceGID   int
+	root         string
+	driver       Driver
+	lock         *os.File
+	mu           sync.Mutex
+	bindingMu    sync.Mutex
+	networkMu    sync.Mutex
+	accounts     map[int64]*sync.Mutex
+	active       sync.WaitGroup
+	closing      bool
+	proxyChecked map[int64]time.Time
+	proxyLookup  func(context.Context, string) ([]net.IP, error)
 }
 
 // OpenHelper takes an exclusive process lock for the complete lifetime. The
@@ -254,9 +255,6 @@ func (h *Helper) Do(ctx context.Context, req Request) (*State, error) {
 	if s.AccountID != req.AccountID || s.InstanceID != req.InstanceID {
 		return nil, fault("binding_mismatch")
 	}
-	// Keep the original snapshot until identity validation and reservation have
-	// succeeded. A failed migration must not publish a changed proxy spec.
-	previous := *s
 	if req.Generation == 0 && req.Operation == "inspect" {
 		req.Generation = s.Generation
 	}
@@ -308,8 +306,8 @@ func (h *Helper) Do(ctx context.Context, req Request) (*State, error) {
 	if req.Operation == "remove" && !s.DeleteRequested && req.Generation <= s.Generation {
 		return nil, fault("mutation_requires_new_generation")
 	}
-	// Once removal is confirmed its UA may have been allocated to another
-	// account. Repeated remove/inspect must not revive the reservation.
+	// Once removal is confirmed, repeated remove/inspect must not revive the
+	// completed lifecycle or touch resources that have already been released.
 	if (req.Operation == "remove" || req.Operation == "inspect") && s.DeleteRequested && s.Phase == "removed" && s.ContainerID == "" {
 		return s, nil
 	}
@@ -320,61 +318,44 @@ func (h *Helper) Do(ctx context.Context, req Request) (*State, error) {
 		if req.Operation != "prepare" && req.Operation != "apply-config" {
 			return s, fault("projection_operation_invalid")
 		}
-		preparedProxy, err = prepareProjection(dir, s, *req.Projection)
+		preparedProxy, err = prepareProjection(ctx, dir, s, *req.Projection)
 		if err != nil {
 			return s, err
 		}
 	}
-	// Existing Codex identities are validated before persisting a new fence.
-	// A legacy UA allocation saves the complete next-generation snapshot while
-	// holding the allocator's inventory lock, making the reservation and fence
-	// one durable operation. New instances and identity backfills retain their
-	// existing setup path below.
-	identityPrepared := (req.Operation == "prepare" || req.Operation == "apply-config") &&
-		s.Spec.Platform == "codex" && s.ClientIdentity != nil &&
-		(s.ClientIdentity.UserAgent != "" || s.ClientIdentity.UserAgentTemplate != "")
-	migratingIdentity := identityPrepared && DesktopUserAgentNeedsMigration(s.ClientIdentity)
-	if migratingIdentity && req.Projection == nil {
-		return nil, fault("credential_projection_required")
-	}
-	if identityPrepared {
+	if req.Operation == "prepare" || req.Operation == "apply-config" {
+		// Clearing an old override requires the normal drained apply path. Keep
+		// it on inspect/replayed prepare until the coordinator requests a new
+		// generation with a credential projection.
+		if s.ClientIdentity != nil && (s.ClientIdentity.LegacyUserAgent != "" || s.ClientIdentity.LegacyUserAgentTemplate != "") && req.Projection == nil {
+			return nil, fault("credential_projection_required")
+		}
 		staged := *s
-		identity := *s.ClientIdentity
-		staged.ClientIdentity = &identity
-		staged.Capacity = 0
-		staged.Generation = req.Generation
-		staged.Ready = false
-		staged.Phase = req.Operation
+		if s.ClientIdentity != nil {
+			identity := *s.ClientIdentity
+			staged.ClientIdentity = &identity
+		}
 		if err := h.ensureClientIdentity(dir, &staged); err != nil {
-			// Exhaustion is decided without writing anything. Other failures,
-			// including persistence I/O, can have an unknown durable outcome.
-			if errorCode(err) == "client_user_agent_pool_exhausted" {
-				return &previous, err
-			}
 			return nil, err
 		}
-		if !migratingIdentity {
-			// A valid existing identity needs no new reservation; persist only
-			// the fence, as the allocator did not write a manifest.
-			if err := h.save(dir, &staged); err != nil {
-				return nil, err
-			}
-		}
+		staged.ClientIdentity.LegacyUserAgent = ""
+		staged.ClientIdentity.LegacyUserAgentTemplate = ""
 		s = &staged
-	} else {
-		s.Capacity = 0 // Business concurrency belongs to the account scheduler.
-		s.Generation = req.Generation
-		if req.Operation == "remove" {
-			s.DeleteRequested = true
-		}
-		if req.Operation != "inspect" {
-			s.Ready = false
-			s.Phase = req.Operation
-		}
-		// Persist fences and deletion intent BEFORE any external side effect.
-		if err := h.save(dir, s); err != nil {
-			return nil, err
-		}
+	}
+	s.Capacity = 0 // Business concurrency belongs to the account scheduler.
+	s.Generation = req.Generation
+	if req.Operation == "remove" {
+		s.DeleteRequested = true
+	}
+	if req.Operation != "inspect" {
+		s.Ready = false
+		s.Phase = req.Operation
+	}
+	// Persist the new generation, readiness fence and cleared legacy override
+	// together BEFORE stopping the old kernel. Its old receipt cannot satisfy
+	// the new generation if applying configuration fails or is interrupted.
+	if err := h.save(dir, s); err != nil {
+		return nil, err
 	}
 	fail := func(err error) (*State, error) {
 		s.Healthy = false
@@ -385,14 +366,6 @@ func (h *Helper) Do(ctx context.Context, req Request) (*State, error) {
 			return s, e
 		}
 		return s, err
-	}
-	if (req.Operation == "prepare" || req.Operation == "apply-config") && !identityPrepared {
-		if err := h.ensureClientIdentity(dir, s); err != nil {
-			return fail(err)
-		}
-		if err := h.save(dir, s); err != nil {
-			return s, err
-		}
 	}
 	// New instances reserve before any external create. Unknown create
 	// outcomes retain their account lease for reconciliation.
@@ -507,6 +480,9 @@ func (h *Helper) Do(ctx context.Context, req Request) (*State, error) {
 		if err == nil {
 			s.Phase = "removed"
 			s.ContainerID = ""
+			h.mu.Lock()
+			delete(h.proxyChecked, s.AccountID)
+			h.mu.Unlock()
 		}
 	}
 	if err != nil {
@@ -519,6 +495,14 @@ func (h *Helper) Do(ctx context.Context, req Request) (*State, error) {
 		s.AppliedProxyRevision = observation.ProxyRevision
 		s.ActualAccelerator = observation.ActualAccelerator
 		s.Ready = !s.DeleteRequested && observation.Running && observation.ActualAccelerator == "docker" && observation.KernelReady && observation.GuestBootID != "" && observation.CredentialRevision == s.DesiredCredentialRevision && observation.ProxyRevision == s.Spec.ProxyRevision
+		if req.Operation == "inspect" && s.Ready {
+			h.checkProxyAddresses(ctx, s, dir)
+		} else if req.Operation != "inspect" {
+			s.ProxyAddressChanged = false
+			h.mu.Lock()
+			delete(h.proxyChecked, s.AccountID)
+			h.mu.Unlock()
+		}
 		s.Phase = "preparing"
 		if s.Ready {
 			s.Phase = "kernel_ready"
@@ -527,8 +511,8 @@ func (h *Helper) Do(ctx context.Context, req Request) (*State, error) {
 			s.Phase = "stopped"
 		}
 		if s.DeleteRequested {
-			// Only Driver.Remove confirms absence. Inspect cannot release the UA
-			// after an unknown create/removal outcome, even without an ID.
+			// Only Driver.Remove confirms absence after an unknown create/removal
+			// outcome, even when there is no container ID yet.
 			s.Phase = "deleting"
 		}
 		s.KernelSocket = filepath.Join(dir, "run", "kernel.sock")
@@ -571,7 +555,7 @@ func (h *Helper) save(dir string, s *State) error {
 	copy.InternalToken = ""
 	return atomicJSON(filepath.Join(dir, "manifest.json"), copy)
 }
-func prepareProjection(dir string, s *State, p Projection) ([]byte, error) {
+func prepareProjection(ctx context.Context, dir string, s *State, p Projection) ([]byte, error) {
 	projectionDir := filepath.Join(dir, "credentials")
 	sum := sha256.Sum256(p.Credential)
 	stampPath := filepath.Join(projectionDir, "revision.json")
@@ -592,16 +576,11 @@ func prepareProjection(dir string, s *State, p Projection) ([]byte, error) {
 		if e != nil || u.Hostname() == "" || u.Port() == "" || (u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "socks5" && u.Scheme != "socks5h") || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
 			return nil, fault("proxy_url_invalid")
 		}
-		addresses, e := net.LookupIP(u.Hostname())
+		addresses, e := lookupProxyAddresses(ctx, u.Hostname())
 		if e != nil {
 			return nil, fault("proxy_resolution_failed")
 		}
-		ips := []string{}
-		for _, ip := range addresses {
-			if ip.To4() != nil && !ip.IsLoopback() && !ip.IsUnspecified() && !ip.IsMulticast() {
-				ips = append(ips, ip.String())
-			}
-		}
+		ips := proxyIPv4Set(addresses)
 		if len(ips) == 0 {
 			return nil, fault("proxy_ipv4_required")
 		}

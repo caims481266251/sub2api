@@ -87,36 +87,30 @@ vm-runtime-helper --enabled --root /opt/sub2api-docker/instances \
 - 默认 helper 状态目录与旧部署不同。未获得迁移指令前不得指向旧 VM root。
 - 内存和启动速度由实测说明，不能用内存上限或镜像体积代替实际占用。Docker 不提供独立宿主内核或独有 TLS 指纹。
 
-## 容器独立 User-Agent
+## OpenAI 内核身份与会话
 
-OpenAI Docker 帐号在 helper 首次准备时获得一个持久桌面 UA，保存在
-`manifest.json` 的 `client_identity.user_agent` 与 `user_agent_template`。
-当前可分配池包含 **1,113** 个不同组合：7 个明确版本的 Codex CLI
-（0.159.0 至 0.164.0，含 0.162.1）×
-（78 个 macOS 版本 × arm64/x86_64 + 3 个 Windows build × x86_64）。
-格式例如 `codex_cli_rs/0.164.0 (Mac OS 15.1; arm64)` 或
-`codex_cli_rs/0.164.0 (Windows 10.0.26100; x86_64)`；不附加账号 ID、
-邮箱、UUID、哈希或 Sub2API 标记。版本表是兼容性配置，不能删除已有条目或改写其 UA。
+Docker OpenAI 链路对齐 vm2api 的显式客户端配置：容器启动的 `user_agent`
+与每次请求的 `options.user_agent` 均为 `codex_cli_rs/0.160.0 (linux x86_64)`。
+所有基础系统使用相同 UA；不恢复桌面 UA 模板池，不透传调用方 UA。
+Python 启动常量与 Go 请求常量由 `test_container_isolation.py` 校验一致。
 
-- 同一个 helper 状态目录内强制一容器一 UA。分配在全局锁内检查并原子持久化；
-  helper 的独占目录锁阻止第二个进程同时分配。容器重建、主程序/helper 重启、
-  凭据轮换及代理更换均复用原分配。帐号删除且 helper 确认容器移除后，
-  UA 归还池中供新帐号复用；删除失败、结果未知或尚未完成时继续占用。
-  墓碑保留历史身份，但确认删除后的重复删除/检查不会重新占用已归还 UA。
-- 不同服务器/独立 helper 根目录没有共享分配中心，因此不保证跨服务器不重复。
-  本实现最多支持 1,113 个未释放的独立分配；用尽明确返回
-  `client_user_agent_pool_exhausted`，不会退回重复 UA。新增容量必须扩展明确模板。
-- 新帐号及迁移优先选择最新的兼容客户端版本；已有兼容身份保持稳定。
-- 启动配置与每次 Responses 调用均使用同一 UA。调用方无法覆盖 UA 或安装 ID；
-  安装 ID 来自原有持久 `device_id`，不改变会话、线程、请求 ID 的语义。
-- 旧容器通过既有排空/应用配置流程补齐 UA；0.150.0–0.158.0 的历史身份
-  也在请求排空后迁移到兼容池，优先保留原 OS、版本和架构，保持设备 ID 不变。
-  历史模板仍可校验，但不再分配；兼容身份保持稳定，不因每次请求而轮换。
-  迁移前池耗尽或代理解析失败时，仅在重新确认原健康绑定和帐号状态后退避，
-  保留原本可用的模型；不清除模型级冷却，也不自动重放已发送的业务请求。
-  主程序、helper 和容器镜像需配套更新；仅修改源码不会更改现有运行容器。
-- Mac/Windows 表示模拟的客户端配置，不改变容器的真实 Linux 系统，也不证明
-  TLS 指纹等同真实 Mac/Windows；内核不支持的管理接口仍遵循既有行为边界。
+- 账号持久 UUID 不变：启动使用 `device_id`，请求使用 `options.installation_id`。
+  删除客户端安装请求头，不再向 `client_metadata` 重复注入安装 ID。
+  初始化后的身份缺失仍报错，重启或重新授权不生成新身份。
+- `client_features=false`、`analytics=false` 同时写入启动与请求选项。
+  固定内核在此默认配置下不发送上游安装 ID；仅传入 options 不等于上游可见。
+  隔离验证中打开 client_features 后，HTTP/WS 均使用 options 中的安装 ID。
+- 在业务层完成现有会话解析、缓存开关、turn-state 归属校验后，再清理内核请求体。
+  会话通过 `session.session_id` 和 `headers.session-id` 传入，缓存开启时保留
+  现有 `prompt_cache_key` 规则；关闭缓存不改变会话。`previous_response_id` 不变。
+- 清除 `client_metadata`、调用方连接/身份覆盖字段及 `metadata` 中的
+  `user_id/device_id/installation_id`；保留其他业务 metadata。
+  turn-state / turn-metadata 仅通过经过校验的请求头交给内核，响应回传与跨账号
+  保护继续复用现有流程。HTTP/WS 出口已用固定真实内核和本地假上游验证。
+- 旧实例的遗留 UA 模板仍经原流程清除，保留 device_id。新镜像校验固定 UA。
+  发布时必须配套主程序与全部可用系统镜像，并通过现有排空/重建流程更新旧容器；
+  仅更新主程序不能保证常驻内核启动配置也已同步。
+- 不更换内核/TLS 实现，不承诺每账号拥有唯一 TLS 指纹，不改变普通账号链路。
 
 ## 验证
 
@@ -134,6 +128,42 @@ Docker 标签只反映本地容器进程和内核 socket 健康。请求准入�
 
 首次升级旧部署需要 root 安装 `host/install-update-agent.py`，指定已有 helper socket、独立 Docker 实例目录、模板和服务 UID/GID。只更新主程序不能替代这一次引导安装。
 
-后续后台更新先校验主程序校验和，再由固定仓库的本机更新代理预装同 tag 运行包；任一文件缺失、损坏或版本错误都会在替换主程序前失败。后台显示需重启后，重启的新程序在监听业务端口之前激活运行包。激活必须获得旧进程持有的协调锁，之后重建属于本实例目录的账号容器，保留身份、网络租约、凭据和用户业务数据。helper 健康和版本验证失败会恢复旧 helper 配置，主程序停止启动并显示具体错误；可选择上一完整版本回退，不会宣称更新成功或接受错误环境的请求。
+后续后台更新先校验主程序校验和，再由固定仓库的本机更新代理预装同 tag 运行包；任一文件缺失、损坏或版本错误都会在替换主程序前失败。后台显示需重启后，重启的新程序在监听业务端口之前激活运行包。激活必须获得旧进程持有的协调锁，保留身份、网络租约、凭据和用户业务数据。单独安装系统池时，default 运行脚本相同就保留其现有镜像与容器；本轮删除旧 UA 覆写需要更新运行脚本时，升级器先离线比对旧、新 default 的真实 `/etc/os-release` ID、VERSION_ID，以及 entry、common.py、observe、firewall、proxy_bridge.py 摘要，仅基础系统一致才按正常升级流程重建受影响的 default 实例。基础系统不同且脚本需要更新时明确拒绝，不迁移旧账号的系统绑定。其他系统同样只重建镜像发生变化的实例。helper 健康和版本验证失败会恢复完整旧模板表、激活记录及 helper 配置，主程序停止启动并显示具体错误；可选择上一完整版本回退，不会宣称更新成功或接受错误环境的请求。
 
 发布流程先创建 draft，上传所有运行包后再公开 Release，避免后台提前看到只有主程序的版本。首次从 VM 切换 Docker 不迁移旧 VM 实例。
+
+## Docker 系统镜像池
+
+账号选择的系统标识对应真实发行版镜像和包管理器，不能通过修改 os-release 假冒。
+构建输入统一在 container/profiles/profiles.json：官方基础镜像使用不可变 digest；
+Arch 同时固定到 2026-10-25 软件仓库快照。amd64 构建 CentOS Stream 9、Ubuntu 24.04、
+Debian 12、Arch Linux、Fedora 44；arm64 首版只构建 Ubuntu/Debian。
+所有镜像保留同一常驻内核启动方式、账号身份、凭据投影、独立网段、防火墙与代理链路。
+发行版差异不会更换宿主 Linux 内核，也不保证不同 TLS/HTTP 指纹。
+
+发布包的 runtime-release.json 使用 manifest_version: 2、minimum_updater: 2，
+images 包含 default 兼容镜像和本机架构支持的系统镜像。kernel-image.tar 一次保存全部镜像，
+统一校验归档、镜像标签、架构、镜像配置和层；私有内核 payload 不进入公开包。
+旧单镜像更新包仍可读取。安装新池前必须先升级宿主更新器：校验并解压同 tag 的
+docker-kernel-updater-bootstrap-VERSION-linux-ARCH.tar.gz，用现有路径参数执行
+host/install-update-agent.py，确认 GET /v1/capabilities 返回
+updater_version: 2 和 multi_image: true 后再准备新运行包。
+已有部署可追加 --version VERSION 只预装；确认主程序已停止后才使用 --activate 激活。
+全新部署还需要 --payload-dir 指向已提供的私有内核目录，并传 --version VERSION；
+安装器创建 default 模板后才能激活系统池。已有模板不接受 --payload-dir 重新绑定。
+普通业务更新不会自行更改宿主更新器或对缺失的系统镜像静默降级。
+
+helper 启动后后台验证系统目录；验证完成前新系统暂不可选，旧 default 账号继续工作。
+验证仅使用本地固定镜像、校验后的 payload、无网络临时容器：检查发行版、Python、
+setpriv、nftables、CA 信任及内核健康。GET /v1/system-profiles 只读取已验证快照，
+不扫描账号、不向上游发请求。失败系统不进入账号分配池，其余系统仍可用。
+发布脚本要求原生架构 Docker 主机并执行 Netlink 防火墙测试；QEMU 模拟启动成功
+不等同于原生网络验证。构建前检查宿主与 Docker 数据盘空间，禁止为腾空间全局清理业务资源。
+
+### 绑定代理直连
+
+OpenAI Docker 账号的常驻内核直接使用账号绑定代理，与 vm2api 的 Codex 路径一致；不再运行容器内 SOCKS5 桥。SOCKS5 统一为 socks5h，由代理解析目标域名；HTTP/HTTPS 代理仍交给内核。继承的代理环境变量被清除，防火墙仅允许绑定代理地址和端口。没有额外的桥层重试，也不会自动换代理或直连。
+
+代理域名由 helper 解析并固定到容器 hosts/防火墙。在现有后台观察中最多每账号每 5 分钟检查一次 IPv4 地址集合；固定 IP 无 DNS 查询。地址变化交给原有调度排空、apply-config 流程更新，保留账号身份和系统绑定。解析临时失败或没有有效 IPv4 时保留原地址，不将网络问题标记为容器故障。该检查不发生在模型请求路径。内核连接池行为仍由内核负责；本地 Unix Socket 连接池不代表上游 TCP/TLS 复用。
+
+为兼容已安装的 v2 更新器镜像校验，保留 `proxy_bridge.py` 同名占位文件；它不包含网络转发逻辑、不会由启动或观察流程执行，误执行时直接退出。这样升级无需额外安装新版本更新器。

@@ -139,6 +139,7 @@ func NewAccountHandler(
 
 // CreateAccountRequest represents create account request
 type CreateAccountRequest struct {
+	DockerSystemProfile     string         `json:"docker_system_profile,omitempty"`
 	ExecutionMode           string         `json:"execution_mode"`
 	Name                    string         `json:"name" binding:"required"`
 	Notes                   *string        `json:"notes"`
@@ -1118,6 +1119,7 @@ func (h *AccountHandler) Create(c *gin.Context) {
 			Name:                  req.Name,
 			Notes:                 req.Notes,
 			ExecutionMode:         req.ExecutionMode,
+			DockerSystemProfile:   req.DockerSystemProfile,
 			Platform:              req.Platform,
 			Type:                  req.Type,
 			Credentials:           req.Credentials,
@@ -2287,6 +2289,7 @@ func (h *AccountHandler) BatchCreate(c *gin.Context) {
 				Name:                  item.Name,
 				Notes:                 item.Notes,
 				ExecutionMode:         item.ExecutionMode,
+				DockerSystemProfile:   item.DockerSystemProfile,
 				Platform:              item.Platform,
 				Type:                  item.Type,
 				Credentials:           item.Credentials,

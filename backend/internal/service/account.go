@@ -36,11 +36,15 @@ type Account struct {
 	HostingIdentity           *string
 	InitialAdmissionPlan      *ScheduledTestPlan `json:"-"`
 	// InitialQualityPlan is internal create-only state, never imported or exported.
-	InitialQualityPlan      *ScheduledTestPlan `json:"-"`
-	ID                      int64
-	Name                    string
-	Notes                   *string
-	ExecutionMode           string
+	InitialQualityPlan *ScheduledTestPlan `json:"-"`
+	ID                 int64
+	Name               string
+	Notes              *string
+	ExecutionMode      string
+	// DockerSystemProfile is assigned once at creation. Nil retains the legacy template.
+	DockerSystemProfile *string
+	// DockerSystemSelection is validated create-only state, never cached or exported.
+	DockerSystemSelection   *DockerSystemSelection `json:"-"`
 	Platform                string
 	Type                    string
 	Credentials             map[string]any
@@ -1972,6 +1976,12 @@ func (a *Account) GetOpenAISessionID() string {
 
 func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapability) bool {
 	if a.IsVMKernel() {
+		// Standalone Codex search is a host-side OAuth request through the
+		// account's bound proxy, as in vm2api; it is not a kernel protocol.
+		if capability == OpenAIEndpointCapabilityAlphaSearch {
+			return a.ExecutionMode == AccountExecutionModeDockerKernel && a.Platform == PlatformOpenAI &&
+				a.Type == AccountTypeOAuth && ValidateVMKernelAccount(a) == nil
+		}
 		return capability == "" || capability == OpenAIEndpointCapabilityChatCompletions || capability == OpenAIEndpointCapabilityResponses
 	}
 	if a == nil {

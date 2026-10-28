@@ -23,9 +23,13 @@ type Result struct {
 	DispatchedCredentialsHash string `json:"-"`
 	// Settled means the attempt ended at the guest, including a provider rejection.
 	// It is deliberately independent of successful completion and usage presence.
-	// Cancellation only records the control response; HTTP 2xx alone never proves settlement.
-	CancelStatus                                                string
-	CancelHTTPStatus                                            int
+	// Cancellation records local transport cleanup or the control response;
+	// neither execution-stream closure nor HTTP 2xx proves settlement.
+	CancelStatus     string
+	CancelHTTPStatus int
+	// ExecutionTransportCanceled means this attempt's local HTTP context was
+	// canceled and any response body closed. It does not prove upstream stopped.
+	ExecutionTransportCanceled                                  bool
 	Settled                                                     bool
 	RequestID                                                   string
 	ErrorEvent                                                  json.RawMessage
@@ -38,9 +42,21 @@ type Result struct {
 	Response                                                    json.RawMessage
 }
 
+// CancellationMode is selected by trusted runtime configuration, never request
+// protocol, caller headers, or a previous 404 response.
+type CancellationMode string
+
+const (
+	// The zero value retains control-route compatibility for existing callers.
+	CancellationModeDefault     CancellationMode = ""
+	CancellationModeControl     CancellationMode = "control"
+	CancellationModeStreamClose CancellationMode = "stream_close"
+)
+
 type Binding struct {
-	// Only trusted runtime state can supply these; never caller headers.
-	UserAgent, InstallationID string
+	// Only trusted runtime state can supply this; never caller headers.
+	InstallationID            string
+	CancellationMode          CancellationMode
 	Socket, Token, InstanceID string
 	Generation                uint64
 	AccountID                 int64

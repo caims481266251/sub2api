@@ -180,6 +180,8 @@ type OpenAIRefreshTokenRequest struct {
 }
 
 type OpenAICodexPATCreateRequest struct {
+	ExecutionMode           string         `json:"execution_mode"`
+	DockerSystemProfile     string         `json:"docker_system_profile,omitempty"`
 	AccessToken             string         `json:"access_token" binding:"required"`
 	Name                    string         `json:"name"`
 	Notes                   *string        `json:"notes"`
@@ -307,15 +309,17 @@ func (h *OpenAIOAuthHandler) RefreshAccountToken(c *gin.Context) {
 // POST /api/v1/admin/openai/create-from-oauth
 func (h *OpenAIOAuthHandler) CreateAccountFromOAuth(c *gin.Context) {
 	var req struct {
-		SessionID   string  `json:"session_id" binding:"required"`
-		Code        string  `json:"code" binding:"required"`
-		State       string  `json:"state" binding:"required"`
-		RedirectURI string  `json:"redirect_uri"`
-		ProxyID     *int64  `json:"proxy_id"`
-		Name        string  `json:"name"`
-		Concurrency int     `json:"concurrency"`
-		Priority    int     `json:"priority"`
-		GroupIDs    []int64 `json:"group_ids"`
+		ExecutionMode       string  `json:"execution_mode"`
+		DockerSystemProfile string  `json:"docker_system_profile,omitempty"`
+		SessionID           string  `json:"session_id" binding:"required"`
+		Code                string  `json:"code" binding:"required"`
+		State               string  `json:"state" binding:"required"`
+		RedirectURI         string  `json:"redirect_uri"`
+		ProxyID             *int64  `json:"proxy_id"`
+		Name                string  `json:"name"`
+		Concurrency         int     `json:"concurrency"`
+		Priority            int     `json:"priority"`
+		GroupIDs            []int64 `json:"group_ids"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
@@ -351,15 +355,17 @@ func (h *OpenAIOAuthHandler) CreateAccountFromOAuth(c *gin.Context) {
 
 	// Create account
 	account, err := h.adminService.CreateAccount(c.Request.Context(), &service.CreateAccountInput{
-		Name:        name,
-		Platform:    platform,
-		Type:        "oauth",
-		Credentials: credentials,
-		Extra:       nil,
-		ProxyID:     req.ProxyID,
-		Concurrency: req.Concurrency,
-		Priority:    req.Priority,
-		GroupIDs:    req.GroupIDs,
+		ExecutionMode:       req.ExecutionMode,
+		DockerSystemProfile: req.DockerSystemProfile,
+		Name:                name,
+		Platform:            platform,
+		Type:                "oauth",
+		Credentials:         credentials,
+		Extra:               nil,
+		ProxyID:             req.ProxyID,
+		Concurrency:         req.Concurrency,
+		Priority:            req.Priority,
+		GroupIDs:            req.GroupIDs,
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -441,6 +447,8 @@ func (h *OpenAIOAuthHandler) CreateAccountFromCodexPAT(c *gin.Context) {
 	}
 
 	account, err := h.adminService.CreateAccount(c.Request.Context(), &service.CreateAccountInput{
+		ExecutionMode:         req.ExecutionMode,
+		DockerSystemProfile:   req.DockerSystemProfile,
 		Name:                  buildOpenAICodexPATAccountName(req.Name, tokenInfo),
 		Notes:                 req.Notes,
 		Platform:              service.PlatformOpenAI,

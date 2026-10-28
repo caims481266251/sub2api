@@ -49,10 +49,12 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 			return strings.Contains(event.Type, "delta") || event.Type == "content_block_start"
 		}
 	}
-	if (binding.UserAgent == "") != (binding.InstallationID == "") {
+	if !filepath.IsAbs(binding.Socket) || binding.Token == "" || binding.Generation == 0 {
 		return nil, &AttemptError{Code: "kernel_binding_invalid", SafeToRetry: true}
 	}
-	if !filepath.IsAbs(binding.Socket) || binding.Token == "" || binding.Generation == 0 {
+	switch binding.CancellationMode {
+	case CancellationModeDefault, CancellationModeControl, CancellationModeStreamClose:
+	default:
 		return nil, &AttemptError{Code: "kernel_binding_invalid", SafeToRetry: true}
 	}
 	endpoint := ""
@@ -84,6 +86,10 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 	}
 	envelope := map[string]any{"request_id": attemptID, "body": body, "stream": true, "headers": headers}
 	if request.Protocol == "responses" {
+		stripCodexIdentity(body)
+		// Installation identity is account-owned. Never forward the caller's
+		// installation header alongside the trusted options value.
+		delete(headers, "x-codex-installation-id")
 		sessionID, _ := ctx.Value(sessionKey).(string)
 		var cacheKey string
 		_ = json.Unmarshal(body["prompt_cache_key"], &cacheKey)
@@ -102,28 +108,8 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 			}
 			headers["session-id"] = sessionID
 		}
-		// Headers are the resolved/guarded context. Do not let an older body
-		// value bypass account provenance or override a newer WS turn-state.
-		var metadata map[string]json.RawMessage
-		_ = json.Unmarshal(body["client_metadata"], &metadata)
-		if metadata == nil {
-			metadata = map[string]json.RawMessage{}
-		}
-		if sessionID != "" {
-			metadata["session_id"], _ = json.Marshal(sessionID)
-		}
-		for _, name := range []string{"x-codex-turn-state", "x-codex-turn-metadata"} {
-			if value := headers[name]; value != "" {
-				metadata[name], _ = json.Marshal(value)
-			} else {
-				delete(metadata, name)
-			}
-		}
-		if len(metadata) > 0 {
-			body["client_metadata"], _ = json.Marshal(metadata)
-		} else {
-			delete(body, "client_metadata")
-		}
+		// The service has resolved/guarded turn headers. The pinned kernel
+		// consumes them directly for HTTP and WS; no body metadata mirror.
 		var model, tier string
 		_ = json.Unmarshal(body["model"], &model)
 		_ = json.Unmarshal(body["service_tier"], &tier)
@@ -142,14 +128,14 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 		if policy != "http" && policy != "prefer_websocket" {
 			return nil, &AttemptError{Code: "kernel_transport_policy_invalid", SafeToRetry: true}
 		}
-		options := map[string]string{"upstream_transport": policy}
-		if binding.UserAgent != "" {
-			options["user_agent"] = binding.UserAgent
+		options := map[string]any{
+			"upstream_transport": policy,
+			"user_agent":         DefaultCodexUserAgent,
+			"client_features":    false,
+			"analytics":          false,
+		}
+		if binding.InstallationID != "" {
 			options["installation_id"] = binding.InstallationID
-			headers["x-codex-installation-id"] = binding.InstallationID
-			metadata["x-codex-installation-id"], _ = json.Marshal(binding.InstallationID)
-			metadata["installation_id"], _ = json.Marshal(binding.InstallationID)
-			body["client_metadata"], _ = json.Marshal(metadata)
 		}
 		envelope["options"] = options
 	} else {
@@ -185,10 +171,28 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 	req.Header.Set("x-internal-token", binding.Token)
 	result := &Result{AttemptID: attemptID, Headers: make(http.Header)}
 	defer func() { result.Duration = time.Since(started); result.Dispatched = dispatched.Load() }()
+	cancelExecution := func(body io.Closer, cause error) {
+		// Cancel only this request, including the wait for response headers.
+		// Never close the account's shared pool or restart its resident kernel.
+		cancelRead(cause)
+		if body != nil {
+			_ = body.Close()
+		}
+		result.ExecutionTransportCanceled = true
+		if binding.CancellationMode == CancellationModeStreamClose {
+			// The pinned Codex kernel observes its execution stream closing;
+			// it has no /cancel route. This is local cleanup, not settlement or
+			// evidence that a remote provider stopped computing.
+			result.CancelStatus = "stream_closed"
+			return
+		}
+		result.CancelStatus, result.CancelHTTPStatus = c.cancel(binding, attemptID)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
+		result.ClientDisconnect = ctx.Err() != nil
 		if dispatched.Load() {
-			result.CancelStatus, result.CancelHTTPStatus = c.cancel(binding, attemptID)
+			cancelExecution(nil, err)
 		}
 		return result, &AttemptError{Code: "kernel_transport_failed", SafeToRetry: !dispatched.Load(), Cause: err}
 	}
@@ -201,9 +205,11 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 	result.RequestID = result.Headers.Get("x-request-id")
 	if resp.StatusCode != http.StatusOK {
 		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, (64<<10)+1))
+		if readErr != nil || len(raw) > 64<<10 {
+			result.ClientDisconnect = ctx.Err() != nil
+			cancelExecution(resp.Body, readErr)
+		}
 		if errors.Is(readErr, errKernelStreamIdle) {
-			_ = resp.Body.Close()
-			result.CancelStatus, result.CancelHTTPStatus = c.cancel(binding, attemptID)
 			return result, &AttemptError{Code: "kernel_stream_idle_timeout", Cause: readErr}
 		}
 		if readErr == nil && len(raw) <= 64<<10 {
@@ -227,7 +233,7 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 		}
 		// Truncated/oversized errors remain unknown. Local auth/protocol
 		// responses settle the handler without becoming provider auth errors.
-		return result, &AttemptError{Code: fmt.Sprintf("kernel_status_%d", resp.StatusCode)}
+		return result, &AttemptError{Code: fmt.Sprintf("kernel_status_%d", resp.StatusCode), Cause: readErr}
 	}
 	// Stage metadata until a public event is committed. A rejected attempt must
 	// not turn into HTTP 200 just because the kernel returned transport headers.
@@ -433,11 +439,7 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 		if ctx.Err() != nil {
 			result.ClientDisconnect = true
 		}
-		// Closing the execution stream does not depend on a control API.
-		// Do it before the optional control request,
-		// which may be unsupported or take its entire timeout to respond.
-		_ = resp.Body.Close()
-		result.CancelStatus, result.CancelHTTPStatus = c.cancel(binding, attemptID)
+		cancelExecution(resp.Body, err)
 		if errors.Is(err, errKernelStreamIdle) {
 			return result, &AttemptError{Code: "kernel_stream_idle_timeout", Cause: err}
 		}
@@ -450,8 +452,7 @@ func (c *Client) Execute(ctx context.Context, binding Binding, request Request, 
 		return result, &AttemptError{Code: "kernel_response_failed"}
 	}
 	if result.Terminal == "" || !result.HasUsage || result.ResponseID == "" || (request.Protocol == "messages" && stopReason == "") {
-		_ = resp.Body.Close()
-		result.CancelStatus, result.CancelHTTPStatus = c.cancel(binding, attemptID)
+		cancelExecution(resp.Body, nil)
 		return result, &AttemptError{Code: "kernel_completion_metadata_missing"}
 	}
 	if err := flushMetadata(); err != nil {

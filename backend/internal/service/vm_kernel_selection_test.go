@@ -52,12 +52,12 @@ func TestVMKernelSelectionTransportAndCapabilities(t *testing.T) {
 			t.Fatalf("VM transport rejected: %s", transport)
 		}
 	}
-	for _, capability := range []OpenAIEndpointCapability{OpenAIEndpointCapabilityChatCompletions, OpenAIEndpointCapabilityResponses} {
+	for _, capability := range []OpenAIEndpointCapability{OpenAIEndpointCapabilityChatCompletions, OpenAIEndpointCapabilityResponses, OpenAIEndpointCapabilityAlphaSearch} {
 		if !account.SupportsOpenAIEndpointCapability(capability) {
-			t.Fatalf("text capability rejected: %s", capability)
+			t.Fatalf("supported capability rejected: %s", capability)
 		}
 	}
-	for _, capability := range []OpenAIEndpointCapability{OpenAIEndpointCapabilityResponsesCompact, OpenAIEndpointCapabilityAlphaSearch, OpenAIEndpointCapabilityEmbeddings, OpenAIEndpointCapabilityLive} {
+	for _, capability := range []OpenAIEndpointCapability{OpenAIEndpointCapabilityResponsesCompact, OpenAIEndpointCapabilityEmbeddings, OpenAIEndpointCapabilityLive} {
 		if account.SupportsOpenAIEndpointCapability(capability) {
 			t.Fatalf("unsupported capability accepted: %s", capability)
 		}
@@ -88,6 +88,9 @@ func TestVMKernelSchedulerMetadataRevisionFences(t *testing.T) {
 	metadata.Credentials, metadata.Proxy, metadata.ProxyID = nil, nil, nil
 	if !metadata.IsSchedulable() {
 		t.Fatal("secret-free scheduler projection lost valid readiness")
+	}
+	if !metadata.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityAlphaSearch) {
+		t.Fatal("secret-free scheduler projection lost standalone search capability")
 	}
 	a.Credentials["access_token"] = "fixture-rotated"
 	publish()

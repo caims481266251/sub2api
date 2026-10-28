@@ -172,6 +172,7 @@ func newOpenAIWSLocalAdmissionCloseError(reason string) error {
 
 func shouldReportOpenAIWSProxyAccountFailure(err error) bool {
 	return err != nil &&
+		!service.IsOpenAIWSClientReadDisconnect(err) &&
 		!errors.Is(err, errOpenAIWSUnsupportedModelSwitch) &&
 		!errors.Is(err, errOpenAIWSLocalAdmissionRejected) &&
 		!service.IsOpenAIWSSessionPreemptedError(err)
@@ -181,15 +182,15 @@ func shouldReportOpenAIWSProxyAccountFailure(err error) bool {
 // ended the way a healthy client ends one, rather than through an upstream or
 // account fault.
 //
-// Three error shapes describe that same benign outcome and only the first was
-// recognised:
+// Client read disconnects carry a marker attached at the downstream socket.
+// This covers abrupt TCP closes without exempting an identical upstream EOF.
+// The earlier normal-close and cancellation cases remain supported:
 //
 //   - *service.OpenAIWSClientCloseError carrying 1000 — the gateway closing the
 //     socket on its own terms, e.g. the inter-turn idle timeout.
 //   - a bare coderws.CloseError{Code: 1000} — what coder/websocket returns when
-//     the client closes cleanly. ReadOpenAIWSClientMessage hands conn.Read's
-//     error back verbatim, so nothing ever wraps it into the type above and an
-//     errors.As against that type cannot see it.
+//     the client closes cleanly. It is not an OpenAIWSClientCloseError, so an
+//     errors.As against that gateway control type cannot see it.
 //   - context.Canceled — the client went away mid-turn. That path closes with
 //     StatusGoingAway (1001) and carries the cancellation as its cause, so a
 //     check for 1000 alone never matched it either.
@@ -214,6 +215,9 @@ func shouldReportOpenAIWSProxyAccountFailure(err error) bool {
 // other deadline is a genuine stall worth reporting.
 func openAIWSIngressEndedByClient(err error) bool {
 	if err == nil {
+		return true
+	}
+	if service.IsOpenAIWSClientReadDisconnect(err) {
 		return true
 	}
 	var closeErr *service.OpenAIWSClientCloseError

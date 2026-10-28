@@ -439,13 +439,13 @@ func (s *OpenAIGatewayService) proxyVMKernelWebSocket(ctx context.Context, c *gi
 			if !requestedCancel || clientErr != nil || ctx.Err() != nil {
 				return turnErr
 			}
-			errorFrame := []byte(`{"type":"error","error":{"type":"invalid_request_error","code":"response_cancelled","message":"Response cancelled; reconnect after runtime recovery","reconnect_required":true}}`)
+			errorFrame := []byte(`{"type":"error","error":{"type":"invalid_request_error","code":"response_cancelled","message":"Response cancelled; reconnect to start a new response","reconnect_required":true}}`)
 			if err = conn.Write(ctx, coderws.MessageText, errorFrame); err != nil {
 				return err
 			}
-			// Cancellation is best effort: no attempt-bound drain ACK exists.
-			// Execute quarantines dispatched incomplete work; a new connection
-			// must bind after recovery rather than reuse this generation.
+			// No attempt-bound provider drain ACK exists. End this WS session
+			// so the caller explicitly starts its next response on a fresh
+			// connection; independent attempts and the resident kernel stay live.
 			_ = conn.Close(coderws.StatusPolicyViolation, "response cancelled; reconnect required")
 			return turnErr
 		}

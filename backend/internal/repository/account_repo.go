@@ -137,7 +137,7 @@ func newAccountRepositoryWithSQL(client *dbent.Client, sqlq sqlExecutor, schedul
 func (r *accountRepository) Create(ctx context.Context, account *service.Account) error {
 	client := r.client
 	var tx *dbent.Tx
-	if account != nil && (account.InitialQualityPlan != nil || account.InitialAdmissionPlan != nil) {
+	if account != nil && (account.InitialQualityPlan != nil || account.InitialAdmissionPlan != nil || account.IsVMKernel()) {
 		var err error
 		tx, err = r.client.Tx(ctx)
 		if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
@@ -166,6 +166,9 @@ func createAccountRecord(ctx context.Context, client *dbent.Client, account *ser
 	if account == nil {
 		return service.ErrAccountNilInput
 	}
+	if err := assignDockerSystemProfile(ctx, client, account); err != nil {
+		return err
+	}
 
 	builder := client.Account.Create().
 		SetNillableOwnerUserID(account.OwnerUserID).
@@ -174,6 +177,7 @@ func createAccountRecord(ctx context.Context, client *dbent.Client, account *ser
 		SetName(account.Name).
 		SetNillableNotes(account.Notes).
 		SetExecutionMode(account.EffectiveExecutionMode()).
+		SetNillableDockerSystemProfile(account.DockerSystemProfile).
 		SetPlatform(account.Platform).
 		SetType(account.Type).
 		SetCredentials(normalizeJSONMap(account.Credentials)).
@@ -4125,6 +4129,7 @@ func accountEntityToService(m *dbent.Account) *service.Account {
 		Name:                    m.Name,
 		Notes:                   m.Notes,
 		ExecutionMode:           m.ExecutionMode,
+		DockerSystemProfile:     cloneStringPtr(m.DockerSystemProfile),
 		Platform:                m.Platform,
 		Type:                    m.Type,
 		Credentials:             copyJSONMap(m.Credentials),

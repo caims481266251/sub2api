@@ -189,6 +189,7 @@ func TestVMKernelSSERequestCancellationJoinsWorker(t *testing.T) {
 
 func TestVMKernelSSEEventFlushFailureJoinsAfterTrailingHeaders(t *testing.T) {
 	var attempts, cancels atomic.Int32
+	streamClosed := make(chan struct{})
 	runtime, account := vmForwardFixture(t, PlatformOpenAI, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/internal/v1/cancel" {
 			cancels.Add(1)
@@ -200,6 +201,11 @@ func TestVMKernelSSEEventFlushFailureJoinsAfterTrailingHeaders(t *testing.T) {
 		for _, event := range vmForwardEvents("responses") {
 			_, _ = fmt.Fprintf(w, "data: %s\n\n", event)
 		}
+		w.(http.Flusher).Flush()
+		// Keep this handler alive so r.Context cancellation proves the host
+		// closed the executing stream, not normal fixture handler completion.
+		<-r.Context().Done()
+		close(streamClosed)
 	})
 	defer runtime.kernel.Close()
 	cfg := &config.Config{}
@@ -217,13 +223,22 @@ func TestVMKernelSSEEventFlushFailureJoinsAfterTrailingHeaders(t *testing.T) {
 	slot.mu.Lock()
 	active := slot.active
 	slot.mu.Unlock()
-	if active != 0 || attempts.Load() != 1 || cancels.Load() != 1 {
+	select {
+	case <-streamClosed:
+	case <-ctx.Done():
+		t.Fatal("event failure did not close the executing kernel stream")
+	}
+	if !result.ExecutionTransportCanceled || result.CancelStatus != "stream_closed" || result.CancelHTTPStatus != 0 || result.Settled {
+		t.Fatalf("event failure invented cancellation acknowledgement or settlement: %+v", result)
+	}
+	if active != 0 || attempts.Load() != 1 || cancels.Load() != 0 {
 		t.Fatalf("event failure leaked or replayed: active=%d attempts=%d cancels=%d", active, attempts.Load(), cancels.Load())
 	}
 }
 
 func TestVMKernelSSEHeartbeatDoesNotExtendReadIdle(t *testing.T) {
 	var attempts, cancels atomic.Int32
+	streamClosed := make(chan struct{})
 	runtime, account := vmForwardFixture(t, PlatformOpenAI, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/internal/v1/cancel" {
 			cancels.Add(1)
@@ -234,6 +249,7 @@ func TestVMKernelSSEHeartbeatDoesNotExtendReadIdle(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.(http.Flusher).Flush()
 		<-r.Context().Done()
+		close(streamClosed)
 	})
 	defer runtime.kernel.Close()
 	runtime.kernel.StreamDataIntervalTimeout = 2500 * time.Millisecond
@@ -260,7 +276,15 @@ func TestVMKernelSSEHeartbeatDoesNotExtendReadIdle(t *testing.T) {
 	slot.mu.Lock()
 	active := slot.active
 	slot.mu.Unlock()
-	if active != 0 || attempts.Load() != 1 || cancels.Load() != 1 || !VMKernelRuntimeReady(account) {
+	select {
+	case <-streamClosed:
+	case <-ctx.Done():
+		t.Fatal("read idle timeout did not close the executing kernel stream")
+	}
+	if !result.ExecutionTransportCanceled || result.CancelStatus != "stream_closed" || result.CancelHTTPStatus != 0 || result.Settled {
+		t.Fatalf("read idle timeout invented cancellation acknowledgement or settlement: %+v", result)
+	}
+	if active != 0 || attempts.Load() != 1 || cancels.Load() != 0 || !VMKernelRuntimeReady(account) {
 		t.Fatalf("timeout leaked concurrency, replayed, or poisoned runtime: active=%d attempts=%d cancels=%d", active, attempts.Load(), cancels.Load())
 	}
 	if !reportVMKernelIdleTimeout(c, "responses", err) {

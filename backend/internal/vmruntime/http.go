@@ -15,6 +15,11 @@ type inventoryReply struct {
 	Error  *Error  `json:"error,omitempty"`
 }
 
+type systemProfilesReply struct {
+	Profiles []SystemProfile `json:"profiles"`
+	Error    *Error          `json:"error,omitempty"`
+}
+
 type reply struct {
 	State *State `json:"state,omitempty"`
 	Error *Error `json:"error,omitempty"`
@@ -25,6 +30,10 @@ func (h *Helper) Handler() http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/v1/version" && r.Method == http.MethodGet {
 			json.NewEncoder(w).Encode(map[string]any{"version": h.Version, "runtime": "container-v1", "protocol": ProtocolVersion})
+			return
+		}
+		if r.URL.Path == "/v1/system-profiles" && r.Method == http.MethodGet {
+			json.NewEncoder(w).Encode(systemProfilesReply{Profiles: h.SystemProfiles()})
 			return
 		}
 		if r.URL.Path == "/v1/inventory" && r.Method == http.MethodGet {
@@ -131,4 +140,28 @@ func (c *Client) Inventory(ctx context.Context) ([]State, error) {
 		return nil, fault("helper_response_invalid")
 	}
 	return out.States, nil
+}
+
+// SystemProfiles returns a verified local catalog over the fixed helper UDS.
+func (c *Client) SystemProfiles(ctx context.Context) ([]SystemProfile, error) {
+	r, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://runtime-helper/v1/system-profiles", nil)
+	if err != nil {
+		return nil, err
+	}
+	res, err := c.http.Do(r)
+	if err != nil {
+		return nil, fault("helper_transport_unknown")
+	}
+	defer res.Body.Close()
+	var out systemProfilesReply
+	if json.NewDecoder(io.LimitReader(res.Body, 65536)).Decode(&out) != nil {
+		return nil, fault("helper_response_invalid")
+	}
+	if out.Error != nil {
+		return nil, out.Error
+	}
+	if res.StatusCode != http.StatusOK || out.Profiles == nil {
+		return nil, fault("helper_response_invalid")
+	}
+	return out.Profiles, nil
 }

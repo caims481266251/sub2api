@@ -10,6 +10,7 @@ export { getCodexHarvestControls, saveCodexHarvestControls, getCodexHarvestNodes
 import type { OpenAIReferralRefreshResult, OpenAIReferralSendResult } from '@/types/openaiReferrals'
 import type {
   Account,
+  DockerSystemPool,
   AccountListItem,
   CreateAccountRequest,
   UpdateAccountRequest,
@@ -1454,7 +1455,14 @@ export async function getOpenAIRequestTimezones(): Promise<{ default: string; ti
   return data
 }
 
+/** Read deployment availability and stored bindings; does not probe providers. */
+export async function getDockerSystemPool(): Promise<DockerSystemPool> {
+  const { data } = await apiClient.get<DockerSystemPool>('/admin/accounts/docker-system-pool')
+  return data
+}
+
 export const accountsAPI = {
+  getDockerSystemPool,
   getOpenAIRequestTimezones,
   list,
   listWithEtag,

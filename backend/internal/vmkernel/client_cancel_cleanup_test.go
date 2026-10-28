@@ -37,6 +37,7 @@ func TestClientClosesExecutionBeforeWaitingForCancel(t *testing.T) {
 				<-r.Context().Done()
 				close(streamClosed)
 			})
+			binding.CancellationMode = CancellationModeControl
 			client := NewClient()
 			defer client.Close()
 			client.CancelTimeout = 2 * time.Second
@@ -73,7 +74,7 @@ func TestClientClosesExecutionBeforeWaitingForCancel(t *testing.T) {
 				want = "unavailable"
 			}
 			var attempt *AttemptError
-			if !errors.As(err, &attempt) || attempt.SafeToRetry || result.Completed || result.Settled || result.CancelStatus != want || result.CancelHTTPStatus != status {
+			if !errors.As(err, &attempt) || attempt.SafeToRetry || result.Completed || result.Settled || !result.ExecutionTransportCanceled || result.CancelStatus != want || result.CancelHTTPStatus != status {
 				t.Fatalf("incorrect cancellation result: %+v %v", result, err)
 			}
 		})
@@ -107,7 +108,7 @@ func TestClientIdleTimeoutClosesExecutionWithUnavailableCancel(t *testing.T) {
 			result, err := client.Execute(ctx, binding, Request{Protocol: "responses", Body: json.RawMessage(`{}`)}, nil)
 			var attempt *AttemptError
 			if !errors.As(err, &attempt) || attempt.Code != "kernel_stream_idle_timeout" || attempt.SafeToRetry ||
-				result.Completed || result.Settled || result.ClientDisconnect || ctx.Err() != nil ||
+				result.Completed || result.Settled || result.ClientDisconnect || !result.ExecutionTransportCanceled || ctx.Err() != nil ||
 				result.CancelStatus != "unavailable" || result.CancelHTTPStatus != http.StatusNotFound {
 				t.Fatalf("idle timeout lost cancellation compatibility: result=%+v err=%v", result, err)
 			}

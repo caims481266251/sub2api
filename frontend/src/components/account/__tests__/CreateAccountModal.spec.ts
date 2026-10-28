@@ -26,6 +26,7 @@ const {
   createOpenAICodexPATMock,
   createCredentialOperationsMock,
   managementCapabilitiesMock,
+  dockerSystemPoolMock,
   authIsSimpleMode,
 } = vi.hoisted(() => ({
   createAccountMock: vi.fn(),
@@ -39,6 +40,7 @@ const {
   createOpenAICodexPATMock: vi.fn(),
   createCredentialOperationsMock: vi.fn(),
   managementCapabilitiesMock: vi.fn(),
+  dockerSystemPoolMock: vi.fn(),
   authIsSimpleMode: { value: true },
 }))
 
@@ -62,6 +64,7 @@ vi.mock('@/api/admin', () => ({
   adminAPI: {
     accounts: {
       getManagementCapabilities: managementCapabilitiesMock,
+      getDockerSystemPool: dockerSystemPoolMock,
       create: createAccountMock,
       generateAuthUrl: generateAuthUrlMock,
       exchangeCode: exchangeCodeMock,
@@ -474,6 +477,10 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
   beforeEach(() => {
     authIsSimpleMode.value = true
     managementCapabilitiesMock.mockReset().mockResolvedValue({ vm_kernel_enabled: false })
+    dockerSystemPoolMock.mockReset().mockResolvedValue({ profiles: [
+      { profile_id: 'debian-12', display_name: 'Debian 12', available: true, bound_account_count: 7 },
+      { profile_id: 'ubuntu-24.04', display_name: 'Ubuntu 24.04', available: true, bound_account_count: 3 },
+    ], legacy_bound_account_count: 2, count_scope: 'all', checked_at: '2026-10-27T10:00:00Z' })
     createAccountMock.mockReset().mockResolvedValue({ id: 42, platform: 'openai', type: 'apikey' })
     generateAuthUrlMock.mockReset().mockResolvedValue({
       auth_url: 'https://example.test/auth?state=test-state', session_id: 'test-session',
@@ -501,6 +508,86 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
   })
 
   afterEach(() => vi.useRealTimers())
+
+  it('places the single system selector directly below execution mode and preserves it during 2FA', async () => {
+    managementCapabilitiesMock.mockResolvedValue({ vm_kernel_enabled: true })
+    const wrapper = mountModal()
+    await flushPromises()
+    const selector = () => wrapper.get('[data-testid="docker-system-selector"]')
+    const mode = wrapper.get('[data-testid="account-execution-mode"]')
+    expect(mode.element.parentElement?.nextElementSibling).toBe(selector().element)
+    expect(wrapper.findAll('[data-testid="docker-system-selector"]')).toHaveLength(1)
+    await wrapper.get('[data-testid="docker-system-ubuntu-24.04"]').setValue(true)
+    await wrapper.get('[data-testid="openai-two-fa"]').trigger('click')
+    wrapper.getComponent({ name: 'ProxySelector' }).vm.$emit('update:modelValue', 7)
+    const callsBeforeNextStep = dockerSystemPoolMock.mock.calls.length
+    const selectorBeforeNextStep = selector().element
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="account-execution-mode"]').exists()).toBe(false)
+    expect(wrapper.findAll('[data-testid="docker-system-selector"]')).toHaveLength(1)
+    expect(selector().element).toBe(selectorBeforeNextStep)
+    expect(wrapper.get<HTMLInputElement>('[data-testid="docker-system-ubuntu-24.04"]').element.checked).toBe(true)
+    expect(dockerSystemPoolMock).toHaveBeenCalledTimes(callsBeforeNextStep)
+    const importer = wrapper.getComponent(OpenAITwoFAImport)
+    importer.vm.$emit('busy', true)
+    await flushPromises()
+    expect(selector().findAll('input[type="radio"]').every(input => input.attributes('disabled') !== undefined)).toBe(true)
+    importer.vm.$emit('busy', false)
+    await flushPromises()
+    expect(wrapper.get('[data-testid="docker-system-ubuntu-24.04"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('blocks Docker creation on pool errors and refreshes explicitly without affecting normal mode', async () => {
+    managementCapabilitiesMock.mockResolvedValue({ vm_kernel_enabled: true })
+    dockerSystemPoolMock.mockRejectedValue(new Error('unavailable'))
+    const wrapper = mountModal()
+    await flushPromises()
+    expect(wrapper.get('[data-tour="account-form-submit"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[role="alert"]').text()).toBe('admin.accounts.dockerSystem.loadFailed')
+    await wrapper.get('[data-testid="docker-system-refresh"]').trigger('click')
+    await flushPromises()
+    expect(dockerSystemPoolMock).toHaveBeenCalledTimes(2)
+    await wrapper.get('[data-testid="account-execution-mode"]').setValue('normal')
+    expect(wrapper.find('[data-testid="docker-system-selector"]').exists()).toBe(false)
+    expect(wrapper.get('[data-tour="account-form-submit"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('sends manual system selection on Session creation and resets it when reopened', async () => {
+    managementCapabilitiesMock.mockResolvedValue({ vm_kernel_enabled: true })
+    const wrapper = mountModal()
+    await flushPromises()
+    await wrapper.get('[data-testid="docker-system-ubuntu-24.04"]').setValue(true)
+    wrapper.getComponent({ name: 'ProxySelector' }).vm.$emit('update:modelValue', 7)
+    await wrapper.get('[data-tour="account-form-name"]').setValue('System choice')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+    await wrapper.get('[data-testid="import-codex-session"]').trigger('click')
+    await flushPromises()
+    expect(importCodexSessionMock.mock.calls[0][0]).toMatchObject({ docker_system_profile: 'ubuntu-24.04', update_existing: true })
+    expect(dockerSystemPoolMock).toHaveBeenCalledTimes(2)
+    await wrapper.setProps({ show: false })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    expect(wrapper.get<HTMLInputElement>('[data-testid="docker-system-auto"]').element.checked).toBe(true)
+    expect(dockerSystemPoolMock).toHaveBeenCalledTimes(3)
+  })
+
+  it.each(['auto', 'debian-12'])('passes %s separately to every RT batch account and refreshes counts', async (system) => {
+    managementCapabilitiesMock.mockResolvedValue({ vm_kernel_enabled: true })
+    const wrapper = mountModal()
+    await flushPromises()
+    await wrapper.get('[data-testid="docker-system-' + system + '"]').setValue(true)
+    wrapper.getComponent({ name: 'ProxySelector' }).vm.$emit('update:modelValue', 7)
+    await wrapper.get('[data-tour="account-form-name"]').setValue('Batch')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+    wrapper.getComponent(OAuthAuthorizationFlowStub).vm.$emit('validate-refresh-token', 'rt-one\nrt-two')
+    await flushPromises()
+    expect(createAccountMock).toHaveBeenCalledTimes(2)
+    for (const [payload] of createAccountMock.mock.calls) expect(payload).toMatchObject({ docker_system_profile: system, execution_mode: 'docker_kernel' })
+    expect(dockerSystemPoolMock).toHaveBeenCalledTimes(3)
+  })
 
   it('defaults OpenAI OAuth and 2FA to Docker when the deployment supports it', async () => {
     managementCapabilitiesMock.mockResolvedValue({ vm_kernel_enabled: true })
@@ -578,8 +665,25 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     await wrapper.get('form#create-account-form').trigger('submit.prevent')
     await wrapper.get('[data-testid="import-codex-session"]').trigger('click')
     await flushPromises()
-    expect(importCodexSessionMock).toHaveBeenCalledWith(expect.objectContaining({ execution_mode: 'docker_kernel', concurrency: 23, proxy_id: 7 }))
+    expect(importCodexSessionMock).toHaveBeenCalledWith(expect.objectContaining({ execution_mode: 'docker_kernel', docker_system_profile: 'auto', concurrency: 23, proxy_id: 7 }))
     wrapper.unmount()
+  })
+
+  it('shows the actual system returned after 2FA import instead of the automatic selection', async () => {
+    managementCapabilitiesMock.mockResolvedValue({ vm_kernel_enabled: true })
+    importCodexSessionMock.mockResolvedValue({ created: 1, updated: 0, skipped: 0, failed: 0,
+      items: [{ action: 'created', account_id: 42, name: 'Imported', docker_system_profile: 'ubuntu-24.04' }] })
+    const wrapper = mountModal()
+    await flushPromises()
+    await wrapper.get('[data-testid="openai-two-fa"]').trigger('click')
+    wrapper.getComponent({ name: 'ProxySelector' }).vm.$emit('update:modelValue', 7)
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+    const importer = wrapper.getComponent(OpenAITwoFAImport)
+    await importer.props('importCredential')({ access_token: 'fixture' }, 'user@example.com', { email: 'user@example.com', password: 'fixture', mfa_secret: 'fixture' })
+    await flushPromises()
+    expect(wrapper.get('[data-testid="docker-system-binding"]').text()).toContain('Ubuntu 24.04')
+    expect(importCodexSessionMock.mock.calls[0][0].docker_system_profile).toBe('auto')
   })
 
   it('rejects API key creation in VM mode before sending a request', async () => {
@@ -615,6 +719,9 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
       content: JSON.stringify(credential), name: 'user@example.com', update_existing: false, skip_existing: true,
       execution_mode: executionMode, initialize_openai_two_fa: true, concurrency: 10, group_ids: [], proxy_id: proxyID,
     }))
+    const importPayload = importCodexSessionMock.mock.calls[0][0]
+    if (executionMode === 'docker_kernel') expect(importPayload.docker_system_profile).toBe('auto')
+    else expect(importPayload).not.toHaveProperty('docker_system_profile')
     expect(wrapper.emitted('created')).toHaveLength(1)
     expect(wrapper.emitted('close')).toBeUndefined()
     expect(createCredentialOperationsMock).toHaveBeenCalledWith({

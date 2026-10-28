@@ -425,6 +425,7 @@ type UpdateGroupInput struct {
 
 type CreateAccountInput struct {
 	ExecutionMode        string
+	DockerSystemProfile  string
 	InitialOpenAITwoFA   bool               `json:"-"`
 	InitialAdmissionPlan *ScheduledTestPlan `json:"-"`
 	InitialQualityPlan   *ScheduledTestPlan `json:"-"`
@@ -726,6 +727,7 @@ var ErrRPMStatusUnavailable = infraerrors.New(http.StatusNotImplemented, "RPM_ST
 
 // adminServiceImpl implements AdminService
 type adminServiceImpl struct {
+	dockerSystemPool     DockerSystemPoolProvider
 	mihomoProxyMu        sync.Mutex
 	excelOAuthReauth     *OpenAIOAuthReauthService
 	cfg                  *config.Config
@@ -805,6 +807,7 @@ func NewAdminService(
 		groupDuplicateRepo:   groupRepo,
 		emptyGroupDeleteRepo: groupRepo,
 		accountRepo:          accountRepo,
+		dockerSystemPool:     dockerSystemRuntimeProvider{},
 		accountDuplicateRepo: accountRepo,
 		accountBillingRepo:   accountRepo,
 		proxyRepo:            proxyRepo,

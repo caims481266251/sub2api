@@ -1,4 +1,7 @@
-import os
+import contextlib
+import hashlib
+import io
+import json
 from pathlib import Path
 import runpy
 import sys
@@ -10,38 +13,53 @@ sys.path.insert(0, str(CONTAINER))
 observe = runpy.run_path(str(CONTAINER / 'observe'), run_name='test_observe')
 
 
-class BridgeHealthTest(unittest.TestCase):
-    def check(self, argv=None, replies=(b'\x05\x00', b'\x05\x08'), ready=True):
-        if argv is None:
-            argv = b'/usr/bin/python3\0/usr/local/lib/sub2-container/proxy_bridge.py\0'
-        probe = MagicMock()
-        probe.__enter__.return_value = probe
-        probe.recv.side_effect = replies
-        # The production root health check has no CAP_KILL and the bridge runs
-        # as UID 10001. Signal permission is not evidence of process health.
-        with patch.object(os, 'kill', side_effect=PermissionError()) as kill, \
-             patch.object(Path, 'read_text', return_value='17'), \
-             patch.object(Path, 'read_bytes', return_value=argv), \
-             patch.object(Path, 'is_file', return_value=ready), \
-             patch('socket.create_connection', return_value=probe):
-            observe['check_proxy_bridge']()
-            kill.assert_not_called()
+class DirectProxyHealthTest(unittest.TestCase):
+    def check(self, proxy='socks5h://proxy.invalid:1080', healthy=True, applied=True):
+        config_bytes = b'fixed kernel configuration'
+        proof = {'config_digest': hashlib.sha256(config_bytes).hexdigest(),
+                 'generation': 1, 'credential_revision': 2, 'proxy_revision': 3}
+        config = {'proxy_url': 'socks5h://proxy.invalid:1080'}
+        values = {'/run/sub2-container-applied.json': proof,
+                  '/slot/run/codex-kernel.json': config,
+                  '/slot/credentials/proxy.json': {'url': proxy},
+                  '/slot/run/instance.json': {}}
+        response = MagicMock(status=200)
+        response.read.return_value = json.dumps({'healthy': healthy}).encode()
+        conn = MagicMock()
+        conn.getresponse.return_value = response
+        projection = MagicMock(return_value=(None, None, {'proxy_revision': 3 if applied else 4}))
+        output = io.StringIO()
+        bindings = {'read': lambda name: values[name], 'LocalHTTP': MagicMock(return_value=conn),
+                    'process_identity': lambda: 'stable-kernel-process', 'projection': projection,
+                    'verify_kernel_isolation': MagicMock(), 'verify_kernel_identity_receipt': MagicMock()}
+        with patch.dict(observe['main'].__globals__, bindings), \
+             patch.object(Path, 'read_bytes', return_value=config_bytes), \
+             patch.object(Path, 'read_text', return_value='fixture'), \
+             patch('subprocess.run') as firewall, \
+             patch('socket.create_connection', side_effect=AssertionError('health must stay local')), \
+             contextlib.redirect_stdout(output):
+            observe['main']()
+        firewall.assert_called_once()
+        conn.close.assert_called_once()
+        return json.loads(output.getvalue())
 
-    def test_healthy_bridge_without_signal_permission(self):
-        self.check()
+    def test_healthy_kernel_needs_no_proxy_bridge_or_upstream_probe(self):
+        result = self.check()
+        self.assertTrue(result['kernel_ready'])
+        self.assertTrue(result['configuration_applied'])
 
-    def test_reused_pid_is_not_a_healthy_bridge(self):
-        with self.assertRaisesRegex(ValueError, 'proxy_bridge_not_ready'):
-            self.check(argv=b'/usr/bin/python3\0/unrelated.py\0')
+    def test_bound_proxy_mismatch_is_not_ready(self):
+        with self.assertRaisesRegex(ValueError, 'kernel_proxy_mismatch'):
+            self.check(proxy='socks5h://other.invalid:1080')
 
-    def test_missing_ready_marker(self):
-        with self.assertRaisesRegex(ValueError, 'proxy_bridge_not_ready'):
-            self.check(ready=False)
+    def test_unhealthy_kernel_is_not_ready(self):
+        with self.assertRaisesRegex(ValueError, 'kernel_not_ready'):
+            self.check(healthy=False)
 
-    def test_unresponsive_or_wrong_listener(self):
-        for replies in [(b'',), (b'NO',), (b'\x05\x00', b'NO')]:
-            with self.subTest(replies=replies), self.assertRaisesRegex(ValueError, 'proxy_bridge_not_ready'):
-                self.check(replies=replies)
+    def test_pending_projection_does_not_mark_kernel_unhealthy(self):
+        result = self.check(applied=False)
+        self.assertTrue(result['kernel_ready'])
+        self.assertFalse(result['configuration_applied'])
 
 
 if __name__ == '__main__':

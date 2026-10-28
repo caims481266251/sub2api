@@ -972,6 +972,9 @@ func (_u *AccountUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if value, ok := _u.mutation.ExecutionMode(); ok {
 		_spec.SetField(account.FieldExecutionMode, field.TypeString, value)
 	}
+	if _u.mutation.DockerSystemProfileCleared() {
+		_spec.ClearField(account.FieldDockerSystemProfile, field.TypeString)
+	}
 	if value, ok := _u.mutation.Credentials(); ok {
 		_spec.SetField(account.FieldCredentials, field.TypeJSON, value)
 	}
@@ -2293,6 +2296,9 @@ func (_u *AccountUpdateOne) sqlSave(ctx context.Context) (_node *Account, err er
 	}
 	if value, ok := _u.mutation.ExecutionMode(); ok {
 		_spec.SetField(account.FieldExecutionMode, field.TypeString, value)
+	}
+	if _u.mutation.DockerSystemProfileCleared() {
+		_spec.ClearField(account.FieldDockerSystemProfile, field.TypeString)
 	}
 	if value, ok := _u.mutation.Credentials(); ok {
 		_spec.SetField(account.FieldCredentials, field.TypeJSON, value)

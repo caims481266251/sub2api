@@ -134,6 +134,8 @@ deploy/docker-compose.override.yml
 .gocache/
 vite.config.js
 docs/*
+!docs/docker-system-pool.md
+!docs/docker-alpha-search.md
 !docs/hosting-openai-parity.md
 !docs/security-penalties.md
 !docs/ip-risk-control.md

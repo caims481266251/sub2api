@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "verified_on": "2026-10-27",
+  "profiles": {
+    "centos-stream-9": {"display_name": "CentOS Stream 9", "dockerfile": "Dockerfile.rpm", "bases": {"amd64": "quay.io/centos/centos@sha256:e3b31ea6407bd164d326a733044298d5d08382b6ca76348b77d41c416523cdf8"}},
+    "ubuntu-24.04": {"display_name": "Ubuntu 24.04 LTS", "dockerfile": "Dockerfile.ubuntu", "bases": {"amd64": "docker.io/library/ubuntu@sha256:78d4744ead1f5b19b04d0df558ab182a5300903900755e515b2ca4d10eb2044d", "arm64": "docker.io/library/ubuntu@sha256:19cad59657037cffa0ac9a48107019b768900ff1071140965827513ac866bd5e"}},
+    "debian-12": {"display_name": "Debian 12", "dockerfile": "Dockerfile.debian", "bases": {"amd64": "docker.io/library/debian@sha256:ec31d744f83f4a73447ba045aaab9409997efe5cc706eca4890c1be36cc1606a", "arm64": "docker.io/library/debian@sha256:991827bb788d78bbc130dcb851913beecff43296360f48838aca7cbdfae4375c"}},
+    "archlinux": {"display_name": "Arch Linux", "dockerfile": "Dockerfile.archlinux", "snapshot": "2026/10/25", "bases": {"amd64": "docker.io/library/archlinux@sha256:dfb01267da058e5d08ffdc543bf484c9b404655b0bac1d0201d972bf950cdfd0"}},
+    "fedora-44": {"display_name": "Fedora 44", "dockerfile": "Dockerfile.rpm", "bases": {"amd64": "registry.fedoraproject.org/fedora@sha256:de3396aa9d2452c5affd4a0b6eff9d3d0a7f3af58e243827790963c30e2d5e2c"}}
+  }
+}

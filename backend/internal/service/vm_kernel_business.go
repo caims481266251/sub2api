@@ -51,6 +51,7 @@ func vmKernelBusinessError(ctx context.Context, result *vmkernel.Result, err err
 	}
 	switch attempt.Code {
 	case "kernel_transport_failed", "vm_runtime_busy", "vm_runtime_unavailable", "vm_runtime_not_ready", "vm_binding_not_ready":
+		logVMKernelPreDispatchFailure(ctx, attempt.Code, result)
 		return &UpstreamFailoverError{StatusCode: http.StatusServiceUnavailable,
 			ResponseBody: []byte(`{"error":{"type":"upstream_unavailable","message":"VM execution is temporarily unavailable"}}`)}
 	default:

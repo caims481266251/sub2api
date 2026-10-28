@@ -117,7 +117,10 @@ func TestVMKernelWSUDSReplayHooksAndUsageOnce(t *testing.T) {
 	}
 	client.CloseNow()
 	select {
-	case <-done:
+	case err := <-done:
+		if !IsOpenAIWSClientReadDisconnect(err) {
+			t.Fatalf("successful turns followed by abrupt client close lost downstream provenance: %v", err)
+		}
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
@@ -128,23 +131,28 @@ func TestVMKernelWSUDSReplayHooksAndUsageOnce(t *testing.T) {
 }
 
 func TestVMKernelWSUDSCancelKeepsAttemptAndPartialUsage(t *testing.T) {
-	cancelled := make(chan string, 1)
-	var attemptID string
+	started, closed := make(chan string, 1), make(chan string, 1)
+	var attempts, controls atomic.Int32
 	runtime, a := vmForwardFixture(t, PlatformOpenAI, func(w http.ResponseWriter, r *http.Request) {
 		var env map[string]json.RawMessage
 		json.NewDecoder(r.Body).Decode(&env)
 		var id string
 		json.Unmarshal(env["request_id"], &id)
 		if r.URL.Path == "/internal/v1/cancel" {
-			cancelled <- id
+			controls.Add(1)
 			return
 		}
-		attemptID = id
+		attempts.Add(1)
+		started <- id
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_cancel\",\"model\":\"gpt-5\",\"usage\":{\"input_tokens\":2,\"output_tokens\":0}}}\n\n")
 		w.(http.Flusher).Flush()
 		<-r.Context().Done()
+		// Preserve the exact executing attempt ID through its own stream
+		// closure; an unsupported account-wide control call is not evidence.
+		closed <- id
 	})
+	defer runtime.kernel.Close()
 	s := &OpenAIGatewayService{cfg: &config.Config{}, vmKernel: runtime}
 	done := make(chan error, 1)
 	afterCount := 0
@@ -152,6 +160,9 @@ func TestVMKernelWSUDSCancelKeepsAttemptAndPartialUsage(t *testing.T) {
 		afterCount++
 		if err == nil || result == nil || !result.VMKernelUsageAuthoritative || !result.streamReadIncomplete {
 			t.Errorf("bad cancellation result %+v %v", result, err)
+		}
+		if result != nil && (result.RequestID != "resp_cancel" || result.Usage.InputTokens != 2 || result.Usage.OutputTokens != 0) {
+			t.Errorf("cancellation lost response identity or partial usage: %+v", result)
 		}
 	}}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -176,6 +187,15 @@ func TestVMKernelWSUDSCancelKeepsAttemptAndPartialUsage(t *testing.T) {
 	if _, _, err = client.Read(ctx); err != nil {
 		t.Fatal(err)
 	}
+	var attemptID string
+	select {
+	case attemptID = <-started:
+		if len(attemptID) != 32 {
+			t.Fatalf("missing executing attempt identity: %q", attemptID)
+		}
+	case <-ctx.Done():
+		t.Fatal("kernel execution did not start")
+	}
 	if err = client.Write(ctx, coderws.MessageText, []byte(`{"type":"response.cancel"}`)); err != nil {
 		t.Fatal(err)
 	}
@@ -195,15 +215,19 @@ func TestVMKernelWSUDSCancelKeepsAttemptAndPartialUsage(t *testing.T) {
 		t.Fatal(ctx.Err())
 	}
 	select {
-	case id := <-cancelled:
+	case id := <-closed:
 		if id != attemptID {
-			t.Fatalf("wrong cancel %q/%q", id, attemptID)
+			t.Fatalf("wrong execution stream closed %q/%q", id, attemptID)
 		}
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
-	if afterCount != 1 {
-		t.Fatalf("usage callbacks %d", afterCount)
+	slot := runtime.slot(a.ID)
+	slot.mu.Lock()
+	active := slot.active
+	slot.mu.Unlock()
+	if afterCount != 1 || attempts.Load() != 1 || controls.Load() != 0 || active != 0 || !VMKernelRuntimeReady(a) {
+		t.Fatalf("cancellation leaked, replayed or used a control route: usage=%d attempts=%d controls=%d active=%d", afterCount, attempts.Load(), controls.Load(), active)
 	}
 }
 

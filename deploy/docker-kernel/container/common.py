@@ -3,6 +3,8 @@ import hashlib
 import json
 from pathlib import Path
 
+# Must match vmkernel.DefaultCodexUserAgent; checked by the release tests.
+DEFAULT_CODEX_USER_AGENT = 'codex_cli_rs/0.160.0 (linux x86_64)'
 
 def read(path):
     return json.loads(Path(path).read_text())
@@ -49,8 +51,7 @@ def verify_kernel_isolation(status, config, state, machine_id, hostname):
         raise ValueError("kernel_privileges_mismatch")
     if (config.get("device_id") != state["client_identity"]["device_id"]
             or config.get("vm_id") != state["instance_id"]
-            or not state["client_identity"].get("user_agent")
-            or config.get("user_agent") != state["client_identity"]["user_agent"]
+            or config.get("user_agent") != DEFAULT_CODEX_USER_AGENT
             or config.get("credential_path") != "/slot/credentials/credential.json"
             or config.get("socket_path") != "/slot/run/kernel.sock"
             or config.get("proxy_required") is not True

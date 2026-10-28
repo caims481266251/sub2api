@@ -976,6 +976,7 @@ func buildSchedulerMetadataAccount(account service.Account) service.Account {
 		HostingIdentity:           account.HostingIdentity,
 		Name:                      account.Name,
 		ExecutionMode:             account.EffectiveExecutionMode(),
+		DockerSystemProfile:       cloneStringPtr(account.DockerSystemProfile),
 		Platform:                  account.Platform,
 		Type:                      account.Type,
 		Concurrency:               account.Concurrency,

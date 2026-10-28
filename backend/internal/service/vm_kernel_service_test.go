@@ -48,8 +48,7 @@ type vmLifecycleFixture struct {
 	inspectError              string
 	inspectErrorWithState     bool
 	mutationError             string
-	inspectAfterMutationError string
-	disableIdentityUpgrade    bool
+	disableIdentityReset      bool
 	kernelCalls               int
 	kernelFail                bool
 	kernelKnownFailure        bool
@@ -146,7 +145,6 @@ func vmLifecycleSetup(t *testing.T) (*VMKernelService, *Account, *vmLifecycleFix
 		}
 		if request.Operation == "prepare" || request.Operation == "apply-config" {
 			if request.Operation == "apply-config" && fixture.mutationError != "" {
-				fixture.inspectError = fixture.inspectAfterMutationError
 				fault(fixture.mutationError)
 				return
 			}
@@ -154,10 +152,10 @@ func vmLifecycleSetup(t *testing.T) (*VMKernelService, *Account, *vmLifecycleFix
 				fault("missing_projection")
 				return
 			}
-			identity := &vmruntime.ClientIdentity{DeviceID: "8b5d97e3-606b-4db5-b389-bb217ef72017", UserAgent: "codex_cli_rs/0.164.0 (Mac OS 15.1; arm64)", UserAgentTemplate: "desktop-v1/0.164.0/Mac OS/15.1/arm64"}
+			identity := &vmruntime.ClientIdentity{DeviceID: "8b5d97e3-606b-4db5-b389-bb217ef72017"}
 			if fixture.state != nil && fixture.state.ClientIdentity != nil {
 				identity.DeviceID = fixture.state.ClientIdentity.DeviceID
-				if fixture.state.ClientIdentity.UserAgent != "" && (fixture.disableIdentityUpgrade || !vmruntime.DesktopUserAgentNeedsMigration(fixture.state.ClientIdentity)) {
+				if fixture.disableIdentityReset {
 					*identity = *fixture.state.ClientIdentity
 				}
 			}
@@ -1237,197 +1235,116 @@ func TestVMKernelReconcileObservesAllInactiveBusinessStates(t *testing.T) {
 	}
 }
 
-func TestVMKernelDesktopUAMigrationDrainsAndRunsOnce(t *testing.T) {
+func TestVMKernelDefaultUserAgentDoesNotTriggerUpdates(t *testing.T) {
 	s, a, f := vmLifecycleSetup(t)
-	s.prepare(context.Background(), a)
-	device := f.state.ClientIdentity.DeviceID
-	f.mu.Lock()
-	f.state.ClientIdentity.UserAgent = ""
-	f.state.ClientIdentity.UserAgentTemplate = ""
-	f.mu.Unlock()
-	slot := s.slot(a.ID)
-	slot.mu.Lock()
-	slot.active = 1
-	slot.mu.Unlock()
-	s.prepare(context.Background(), a)
-	if f.state.Generation != 1 || VMKernelRuntimeReady(a) {
-		t.Fatal("migration interrupted an active request or admitted new work")
-	}
-	slot.mu.Lock()
-	slot.active = 0
-	slot.mu.Unlock()
-	s.prepare(context.Background(), a)
-	if f.state.Generation != 2 || !VMKernelRuntimeReady(a) || f.state.ClientIdentity.UserAgent == "" || f.state.ClientIdentity.DeviceID != device {
-		t.Fatalf("identity backfill failed: operations=%v", f.operations())
-	}
+	s.prepare(t.Context(), a)
 	identity := *f.state.ClientIdentity
-	s.prepare(context.Background(), a)
-	if f.state.Generation != 2 || *f.state.ClientIdentity != identity || !VMKernelRuntimeReady(a) {
-		t.Fatal("completed backfill restarted the container or rotated identity")
+	if vmKernelHasLegacyUserAgent(f.state) || !VMKernelRuntimeReady(a) {
+		t.Fatal("kernel default identity was not admitted")
+	}
+	s.prepare(t.Context(), a)
+	if f.state.Generation != 1 || *f.state.ClientIdentity != identity || !VMKernelRuntimeReady(a) {
+		t.Fatal("default UA triggered an unnecessary configuration update")
+	}
+	result, err := s.Execute(t.Context(), a, "responses", []byte(`{"model":"fixture"}`), nil)
+	if err != nil || result == nil || !result.Completed || f.kernelCalls != 1 {
+		t.Fatalf("default UA request failed: %v", err)
 	}
 }
 
-func TestVMKernelLegacyDesktopUAMigrationDrainsAndRunsOnce(t *testing.T) {
-	for _, version := range []string{"0.150.0", "0.155.0", "0.158.0"} {
-		t.Run(version, func(t *testing.T) {
+func TestVMKernelLegacyUserAgentRemovalDrainsAndRunsOnce(t *testing.T) {
+	for _, legacy := range []struct{ name, ua, template string }{
+		{"old-version", "codex_cli_rs/0.150.0 (Mac OS 14.0; arm64)", "desktop-v1/0.150.0/Mac OS/14.0/arm64"},
+		{"recent-version", "codex_cli_rs/0.164.0 (Mac OS 15.1; arm64)", "desktop-v1/0.164.0/Mac OS/15.1/arm64"},
+		{"ua-only", "arbitrary-old-value", ""},
+		{"template-only", "", "retired-template"},
+	} {
+		t.Run(legacy.name, func(t *testing.T) {
 			s, a, f := vmLifecycleSetup(t)
-			s.prepare(context.Background(), a)
+			s.prepare(t.Context(), a)
 			device := f.state.ClientIdentity.DeviceID
-			oldProxy := f.state.AppliedProxyRevision
-			f.mu.Lock()
-			f.state.ClientIdentity.UserAgent = "codex_cli_rs/" + version + " (Mac OS 14.0; arm64)"
-			f.state.ClientIdentity.UserAgentTemplate = "desktop-v1/" + version + "/Mac OS/14.0/arm64"
-			f.mu.Unlock()
+			proxyRevision, credentialRevision := f.state.AppliedProxyRevision, f.state.AppliedCredentialRevision
+			f.state.ClientIdentity.LegacyUserAgent = legacy.ua
+			f.state.ClientIdentity.LegacyUserAgentTemplate = legacy.template
 			slot := s.slot(a.ID)
-			slot.mu.Lock()
 			slot.active = 2
-			slot.mu.Unlock()
-			s.prepare(context.Background(), a)
+			s.prepare(t.Context(), a)
 			if f.state.Generation != 1 || VMKernelRuntimeReady(a) || f.kernelCalls != 0 {
-				t.Fatal("migration interrupted in-flight requests or admitted new work")
+				t.Fatal("reset interrupted in-flight requests or admitted new work")
 			}
-			slot.mu.Lock()
 			slot.active = 0
-			slot.mu.Unlock()
-			s.prepare(context.Background(), a)
-			if f.state.Generation != 2 || !VMKernelRuntimeReady(a) || vmruntime.DesktopUserAgentNeedsMigration(f.state.ClientIdentity) || f.state.ClientIdentity.DeviceID != device || f.state.AppliedProxyRevision != oldProxy {
-				t.Fatalf("identity upgrade failed: operations=%v", f.operations())
+			s.prepare(t.Context(), a)
+			if f.state.Generation != 2 || !VMKernelRuntimeReady(a) || vmKernelHasLegacyUserAgent(f.state) ||
+				f.state.ClientIdentity.DeviceID != device || f.state.AppliedProxyRevision != proxyRevision ||
+				f.state.AppliedCredentialRevision != credentialRevision {
+				t.Fatalf("legacy override removal changed unrelated identity: operations=%v", f.operations())
 			}
 			identity := *f.state.ClientIdentity
-			s.prepare(context.Background(), a)
+			s.prepare(t.Context(), a)
 			if f.state.Generation != 2 || *f.state.ClientIdentity != identity || !VMKernelRuntimeReady(a) {
-				t.Fatal("upgraded identity did not remain stable")
+				t.Fatal("completed reset restarted the container or rotated identity")
 			}
 		})
 	}
 }
 
-func TestVMKernelLegacyUAPoolExhaustionPreservesReadyBinding(t *testing.T) {
+func TestVMKernelLegacyUserAgentResetFailureUsesExistingBackoff(t *testing.T) {
 	s, a, f := vmLifecycleSetup(t)
-	s.prepare(context.Background(), a)
-	f.mu.Lock()
-	f.state.ClientIdentity.UserAgent = "codex_cli_rs/0.150.0 (Mac OS 14.0; arm64)"
-	f.state.ClientIdentity.UserAgentTemplate = "desktop-v1/0.150.0/Mac OS/14.0/arm64"
-	f.mutationError = "client_user_agent_pool_exhausted"
-	f.mu.Unlock()
-	s.prepare(context.Background(), a)
-	if f.state.Generation != 1 || !VMKernelRuntimeReady(a) || s.slot(a.ID).uaMigrationRetryAt.IsZero() {
-		t.Fatal("pool exhaustion did not retain the verified old binding")
-	}
-	before := len(f.operations())
-	s.prepare(context.Background(), a)
-	if len(f.operations()) != before+1 || f.operations()[before] != "inspect:0" || !VMKernelRuntimeReady(a) {
-		t.Fatal("migration backoff blocked or restarted the healthy binding")
-	}
-	result, err := s.Execute(context.Background(), a, "responses", []byte(`{"model":"gpt-5.6-terra"}`), nil)
-	if err != nil || result == nil || !result.Completed || f.kernelCalls != 1 {
-		t.Fatalf("normal request failed during migration backoff: %v", err)
-	}
-	f.mu.Lock()
-	f.mutationError = ""
-	f.mu.Unlock()
-	s.slot(a.ID).uaMigrationRetryAt = time.Time{}
-	s.prepare(context.Background(), a)
-	if f.state.Generation != 2 || !VMKernelRuntimeReady(a) || vmruntime.DesktopUserAgentNeedsMigration(f.state.ClientIdentity) {
-		t.Fatal("migration did not resume after a profile became available")
-	}
-}
-
-func TestVMKernelLegacyUAPoolExhaustionRequiresFreshInspection(t *testing.T) {
-	s, a, f := vmLifecycleSetup(t)
-	s.prepare(context.Background(), a)
-	f.mu.Lock()
-	f.state.ClientIdentity.UserAgent = "codex_cli_rs/0.150.0 (Mac OS 14.0; arm64)"
-	f.state.ClientIdentity.UserAgentTemplate = "desktop-v1/0.150.0/Mac OS/14.0/arm64"
-	f.mutationError = "client_user_agent_pool_exhausted"
-	f.inspectAfterMutationError = "helper_transport_unknown"
-	f.mu.Unlock()
-	s.prepare(context.Background(), a)
-	if VMKernelRuntimeReady(a) || !s.slot(a.ID).uaMigrationRetryAt.IsZero() {
-		t.Fatal("unverified old binding was restored after failed inspection")
-	}
-}
-
-func TestVMKernelLegacyUAPreflightFailurePreservesReadyBinding(t *testing.T) {
-	for _, code := range []string{"proxy_resolution_failed", "proxy_ipv4_required"} {
-		t.Run(code, func(t *testing.T) {
-			s, a, f := vmLifecycleSetup(t)
-			s.prepare(context.Background(), a)
-			f.mu.Lock()
-			f.state.ClientIdentity.UserAgent = "codex_cli_rs/0.150.0 (Mac OS 14.0; arm64)"
-			f.state.ClientIdentity.UserAgentTemplate = "desktop-v1/0.150.0/Mac OS/14.0/arm64"
-			f.mutationError = code
-			f.mu.Unlock()
-			s.prepare(context.Background(), a)
-			if f.state.Generation != 1 || !VMKernelRuntimeReady(a) || s.slot(a.ID).uaMigrationRetryAt.IsZero() {
-				t.Fatal("preflight failure blocked a verified healthy binding")
-			}
-		})
-	}
-}
-
-func TestVMKernelLegacyUAFallbackDoesNotRestoreAuthPausedAccount(t *testing.T) {
-	s, a, f := vmLifecycleSetup(t)
-	s.prepare(context.Background(), a)
-	f.mu.Lock()
-	f.state.ClientIdentity.UserAgent = "codex_cli_rs/0.150.0 (Mac OS 14.0; arm64)"
-	f.state.ClientIdentity.UserAgentTemplate = "desktop-v1/0.150.0/Mac OS/14.0/arm64"
-	f.mutationError = "client_user_agent_pool_exhausted"
-	f.mu.Unlock()
-	paused := *a
-	paused.Status = StatusError
-	paused.ErrorMessage = OpenAIContainerAuthRequired
-	paused.Schedulable = false
-	calls := 0
-	s.repo.(*vmLifecycleRepo).get = func() (*Account, error) {
-		calls++
-		if calls >= 3 {
-			return &paused, nil
-		}
-		return a, nil
-	}
-	s.prepare(context.Background(), a)
-	if VMKernelRuntimeReady(&paused) || !s.slot(a.ID).uaMigrationRetryAt.IsZero() {
-		t.Fatal("fallback restored readiness while authentication was paused")
-	}
-}
-
-func TestVMKernelLegacyUAOldHelperDoesNotRestartRepeatedly(t *testing.T) {
-	s, a, f := vmLifecycleSetup(t)
-	s.prepare(context.Background(), a)
-	f.mu.Lock()
-	f.state.ClientIdentity.UserAgent = "codex_cli_rs/0.150.0 (Mac OS 14.0; arm64)"
-	f.state.ClientIdentity.UserAgentTemplate = "desktop-v1/0.150.0/Mac OS/14.0/arm64"
-	f.disableIdentityUpgrade = true
-	f.mu.Unlock()
-	s.prepare(context.Background(), a)
-	if f.state.Generation != 2 || !VMKernelRuntimeReady(a) || s.slot(a.ID).uaMigrationRetryAt.IsZero() {
-		t.Fatal("old helper did not leave a verified binding in backoff")
-	}
-	before := len(f.operations())
-	s.prepare(context.Background(), a)
-	if len(f.operations()) != before+1 || f.operations()[before] != "inspect:0" || f.state.Generation != 2 || !VMKernelRuntimeReady(a) {
-		t.Fatal("old helper caused an immediate repeated restart")
-	}
-}
-
-func TestVMKernelDesktopUARequiredForAdmission(t *testing.T) {
-	s, a, f := vmLifecycleSetup(t)
-	s.prepare(context.Background(), a)
+	s.prepare(t.Context(), a)
+	f.state.ClientIdentity.LegacyUserAgent = "retired-ua"
 	identity := *f.state.ClientIdentity
-	for _, missing := range []string{"identity", "device", "ua", "template"} {
+	f.mutationError = "proxy_resolution_failed"
+	s.prepare(t.Context(), a)
+	if VMKernelRuntimeReady(a) || f.state.Generation != 1 || *f.state.ClientIdentity != identity {
+		t.Fatal("failed reset was reported as complete or changed identity")
+	}
+	before := len(f.operations())
+	s.prepare(t.Context(), a)
+	if got := f.operations()[before:]; fmt.Sprint(got) != "[inspect:0]" {
+		t.Fatalf("failed reset retried before the existing backoff: %v", got)
+	}
+	f.mutationError = ""
+	s.slot(a.ID).nextProbe = time.Time{}
+	s.prepare(t.Context(), a)
+	if f.state.Generation != 2 || vmKernelHasLegacyUserAgent(f.state) || !VMKernelRuntimeReady(a) || f.state.ClientIdentity.DeviceID != identity.DeviceID {
+		t.Fatal("reset did not resume safely")
+	}
+}
+
+func TestVMKernelDefaultUserAgentOldHelperBacksOff(t *testing.T) {
+	s, a, f := vmLifecycleSetup(t)
+	s.prepare(t.Context(), a)
+	f.state.ClientIdentity.LegacyUserAgent = "retired-ua"
+	f.disableIdentityReset = true
+	s.prepare(t.Context(), a)
+	if f.state.Generation != 2 || VMKernelRuntimeReady(a) || s.slot(a.ID).nextProbe.IsZero() {
+		t.Fatal("old helper was accepted as using the kernel default")
+	}
+	status, ok := vmKernelReadiness.Load(a.ID)
+	if !ok || status.(vmRuntimeStatus).state.ErrorCode != "vm_runtime_update_required" {
+		t.Fatal("old helper did not report the required runtime update")
+	}
+	before := len(f.operations())
+	s.prepare(t.Context(), a)
+	if got := f.operations()[before:]; fmt.Sprint(got) != "[inspect:0]" || f.state.Generation != 2 {
+		t.Fatalf("old helper caused an immediate repeated restart: %v", got)
+	}
+}
+
+func TestVMKernelDeviceIdentityRequiredForAdmission(t *testing.T) {
+	s, a, f := vmLifecycleSetup(t)
+	s.prepare(t.Context(), a)
+	if !s.bindingReady(a, f.state) {
+		t.Fatal("device identity without a custom UA was rejected")
+	}
+	for _, missing := range []string{"identity", "device"} {
 		state := *f.state
-		copy := identity
-		state.ClientIdentity = &copy
-		switch missing {
-		case "identity":
+		identity := *state.ClientIdentity
+		state.ClientIdentity = &identity
+		if missing == "identity" {
 			state.ClientIdentity = nil
-		case "device":
-			copy.DeviceID = ""
-		case "ua":
-			copy.UserAgent = ""
-		case "template":
-			copy.UserAgentTemplate = ""
+		} else {
+			identity.DeviceID = ""
 		}
 		if s.bindingReady(a, &state) {
 			t.Fatalf("admitted missing %s", missing)

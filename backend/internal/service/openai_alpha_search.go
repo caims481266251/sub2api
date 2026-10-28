@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
+	"github.com/Wei-Shaw/sub2api/internal/vmkernel"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
@@ -38,6 +40,21 @@ func (s *OpenAIGatewayService) ForwardAlphaSearch(ctx context.Context, c *gin.Co
 	requestedModel := strings.TrimSpace(modelResult.String())
 	if modelResult.Type != gjson.String || requestedModel == "" {
 		return nil, fmt.Errorf("model is required")
+	}
+	if account.IsVMKernel() {
+		// Search uses the host HTTP transport, but must still obey the same
+		// current account/group/model and runtime readiness gates as inference.
+		latest, err := s.admitOpenAITurn(ctx, c, account, account.GetMappedModel(requestedModel))
+		if err != nil {
+			return nil, markOpenAIInitialAdmissionForContext(ctx, err)
+		}
+		if !latest.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityAlphaSearch) || !latest.IsSchedulable() {
+			return nil, denyOpenAITurn("account_ineligible")
+		}
+		if latest.ProxyID == nil || latest.Proxy == nil || *latest.ProxyID != latest.Proxy.ID {
+			return nil, denyOpenAITurn("account_binding_changed")
+		}
+		account = latest
 	}
 
 	upstreamModel := normalizeOpenAIModelForUpstream(account, account.GetMappedModel(requestedModel))
@@ -115,6 +132,9 @@ func (s *OpenAIGatewayService) ForwardAlphaSearch(ctx context.Context, c *gin.Co
 		}
 	}
 
+	if account.IsVMKernel() && !json.Valid(respBody) {
+		return nil, fmt.Errorf("alpha search upstream returned invalid JSON")
+	}
 	if !account.IsShadow() {
 		s.UpdateCodexUsageSnapshotFromHeaders(ctx, account.ID, resp.Header)
 	}
@@ -378,6 +398,28 @@ func (s *OpenAIGatewayService) buildOpenAIAlphaSearchRequest(ctx context.Context
 		return nil, err
 	}
 	req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAI))
+
+	if account.IsVMKernel() {
+		// Match vm2api's standalone SearchClient identity. Caller headers,
+		// ordinary-account UA overrides and Responses session rewriting do not
+		// apply to this endpoint. The container still owns model inference.
+		req = req.WithContext(WithHTTPUpstreamRedirectsDisabled(req.Context()))
+		req.Host = "chatgpt.com"
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("User-Agent", vmkernel.DefaultCodexUserAgent)
+		originator, _, _ := openai.PairCodexClientIdentity(vmkernel.DefaultCodexUserAgent)
+		req.Header.Set("Originator", originator)
+		req.Header.Set("Version", openai.CodexUserAgentVersion(vmkernel.DefaultCodexUserAgent))
+		if accountID := strings.TrimSpace(account.GetChatGPTAccountID()); accountID != "" {
+			req.Header.Set("ChatGPT-Account-ID", accountID)
+		}
+		if metadata := openAIAlphaSearchInboundHeader(c, "X-Codex-Turn-Metadata"); metadata != "" {
+			req.Header.Set("X-Codex-Turn-Metadata", metadata)
+		}
+		return req, nil
+	}
 
 	authHeaders, err := s.buildOpenAIAuthenticationHeaders(ctx, account, token)
 	if err != nil {

@@ -61,6 +61,15 @@ func writeOpenAIWSExecutionScopeRequest(t *testing.T, conn *coderws.Conn, body s
 // ctx_pool 下的 turn state 绑定与 store=false 的上游连接绑定必须落在执行作用域键下，
 // 不能落在按 session-id 算出的会话哈希下，否则子智能体会覆盖父线程的绑定。
 func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_StateBoundToExecutionScope(t *testing.T) {
+	testOpenAIWSIngressExecutionScopeAfterClientClose(t, false)
+}
+
+func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_AbruptCloseAfterCompletedTurn(t *testing.T) {
+	testOpenAIWSIngressExecutionScopeAfterClientClose(t, true)
+}
+
+func testOpenAIWSIngressExecutionScopeAfterClientClose(t *testing.T, abrupt bool) {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 	cfg := newOpenAIWSExecutionScopeTestConfig()
 
@@ -137,7 +146,11 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_StateBoundToExec
 	cancelRead()
 	require.NoError(t, readErr)
 	require.Equal(t, "resp_exec_scope", gjson.GetBytes(completed, "response.id").String())
-	require.NoError(t, clientConn.Close(coderws.StatusNormalClosure, "done"))
+	if abrupt {
+		require.NoError(t, clientConn.CloseNow())
+	} else {
+		require.NoError(t, clientConn.Close(coderws.StatusNormalClosure, "done"))
+	}
 
 	select {
 	case serverErr := <-serverErrCh:

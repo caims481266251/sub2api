@@ -1,0 +1,16 @@
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+# The base and package repository are immutable release inputs.
+RUN printf 'Server = https://archive.archlinux.org/repos/2026/10/25/$repo/os/$arch\n' > /etc/pacman.d/mirrorlist \
+ && pacman -Syyuu --noconfirm \
+ && pacman -S --needed --noconfirm ca-certificates python util-linux nftables glibc gcc-libs \
+ && pacman -Scc --noconfirm \
+ && printf '2026/10/25\n' > /etc/sub2api-arch-snapshot
+RUN mkdir -p /slot/home /slot/run /slot/credentials /opt/kin-payload /usr/local/lib/sub2-container
+COPY container/entry container/observe container/common.py container/proxy_bridge.py container/check-runtime.py /usr/local/lib/sub2-container/
+COPY container/firewall /usr/local/lib/sub2-container/firewall
+ARG SYSTEM_PROFILE
+RUN chmod 755 /usr/local/lib/sub2-container/entry /usr/local/lib/sub2-container/observe /usr/local/lib/sub2-container/firewall \
+ && /usr/bin/python3 /usr/local/lib/sub2-container/check-runtime.py --profile "$SYSTEM_PROFILE"
+LABEL com.sub2api.runtime="container-v1" com.sub2api.system-profile="$SYSTEM_PROFILE"
+ENTRYPOINT ["/usr/local/lib/sub2-container/entry"]

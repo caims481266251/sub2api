@@ -231,7 +231,7 @@ func TestVMKernelRequestCacheDispatchToggle(t *testing.T) {
 				require.Equal(t, key, session)
 			}
 			require.Equal(t, session, gjson.GetBytes(env, "headers.session-id").String())
-			require.Equal(t, session, gjson.GetBytes(env, "body.client_metadata.session_id").String())
+			require.False(t, gjson.GetBytes(env, "body.client_metadata").Exists())
 			require.Contains(t, gjson.GetBytes(env, "body.input").Raw, "context must survive")
 		}
 		require.Equal(t, initialCredential, vmCredentialRevision(account))

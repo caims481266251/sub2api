@@ -4,7 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	coderws "github.com/coder/websocket"
@@ -18,8 +23,8 @@ import (
 // shouldReportOpenAIWSProxyAccountFailure —— 而它只排除已标记的本地策略与连接抢占，
 // 不会自动识别连接结束。于是客户端干净关闭（底层直接回裸 coderws.CloseError{1000}）
 // 与客户端中途断开（context.Canceled，收尾用 1001 关闭）都会喂给
-// ObserveOpenAIAPIKeyHealthFailure 与 scheduler.ReportResult(success=false)，
-// 累积到阈值即把上游账号熔断出调度池。
+// scheduler.ReportResult(success=false)，使账号受到错误的调度失败处罚。
+// API-key 账号另有健康池处理；不能把这套熔断机制等同于 OAuth Docker 账号状态。
 //
 // 这些用例钉住判定本身，与既有的 TestShouldReportOpenAIWSProxyAccountFailure 同一层级：
 // 调用点位于一个需要真实上游 WS 才能进入的巨型 handler 循环内，仓库既有约定就是直接测判定函数。
@@ -105,6 +110,14 @@ func TestOpenAIWSIngressEndedByClient_AbnormalClosuresStillReportAccountFailure(
 			err:  coderws.CloseError{Code: coderws.StatusAbnormalClosure, Reason: "connection reset"},
 		},
 		{
+			name: "unmarked_upstream_eof",
+			err:  fmt.Errorf("upstream websocket read: %w", io.EOF),
+		},
+		{
+			name: "unmarked_upstream_unexpected_eof",
+			err:  io.ErrUnexpectedEOF,
+		},
+		{
 			name: "generic_read_failure",
 			err:  errors.New("upstream websocket read failed"),
 		},
@@ -120,6 +133,39 @@ func TestOpenAIWSIngressEndedByClient_AbnormalClosuresStillReportAccountFailure(
 			require.False(t, openAIWSIngressEndedByClient(tc.err))
 			require.True(t, shouldReportOpenAIWSProxyAccountFailure(tc.err))
 		})
+	}
+}
+
+func TestOpenAIWSIngressEndedByClient_AbruptDownstreamDisconnectIsNotAccountFailure(t *testing.T) {
+	result := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := coderws.Accept(w, r, nil)
+		if err != nil {
+			result <- err
+			return
+		}
+		defer conn.CloseNow()
+		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+		defer cancel()
+		_, _, err = service.ReadOpenAIWSClientMessage(ctx, conn, 0, 0, "")
+		result <- err
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	client, _, err := coderws.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	require.NoError(t, err)
+	defer client.CloseNow()
+	require.NoError(t, client.CloseNow())
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, io.EOF)
+		for _, wrapped := range []error{err, fmt.Errorf("read next turn: %w", err), errors.Join(io.EOF, err)} {
+			require.True(t, openAIWSIngressEndedByClient(wrapped))
+			require.False(t, shouldReportOpenAIWSProxyAccountFailure(wrapped))
+		}
+	case <-ctx.Done():
+		t.Fatal("downstream reader did not terminate after abrupt disconnect")
 	}
 }
 

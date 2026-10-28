@@ -4,13 +4,22 @@ import ipaddress
 import json
 import os
 from pathlib import Path
-import socket
 import subprocess
-import time
 import uuid
 import traceback
 from urllib.parse import urlparse
-from common import projection
+from common import projection, DEFAULT_CODEX_USER_AGENT
+
+
+def build_kernel_config(state, device, token, proxy_url):
+    # One client version across profiles; never revive per-account legacy UA.
+    return {'vm_id': state['instance_id'], 'device_id': device,
+            'user_agent': DEFAULT_CODEX_USER_AGENT,
+            'socket_path': '/slot/run/kernel.sock', 'internal_token': token,
+            'credential_path': '/slot/credentials/credential.json',
+            'proxy_url': proxy_url, 'proxy_required': True,
+            'max_request_bytes': 33554432, 'upstream_transport': 'prefer_websocket',
+            'client_features': False, 'analytics': False, 'test_endpoints': False}
 
 
 def main():
@@ -31,43 +40,9 @@ def main():
     # Rules are initialized as root, then every capability is dropped before
     # executing the model kernel. Only the configured proxy can be reached.
     subprocess.run(['/usr/local/lib/sub2-container/firewall'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    kernel_proxy_url = proxy['url']
-    parsed_proxy = urlparse(kernel_proxy_url)
-    if parsed_proxy.scheme in ('socks5', 'socks5h'):
-        ready = Path('/tmp/sub2-proxy-bridge.pid')
-        ready.unlink(missing_ok=True)
-        bridge = subprocess.Popen([
-            '/usr/bin/setpriv','--reuid=10001','--regid=10001','--clear-groups',
-            '--bounding-set=-all','--inh-caps=-all','--ambient-caps=-all','--no-new-privs',
-            '/usr/bin/python3','/usr/local/lib/sub2-container/proxy_bridge.py',str(ready),
-        ], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, close_fds=True, start_new_session=True)
-        ready_mode = Path('/tmp/sub2-proxy-bridge.ready')
-        for _ in range(100):
-            if ready_mode.exists() and ready.exists():
-                break
-            if bridge.poll() is not None:
-                raise ValueError('proxy_bridge_start_failed')
-            time.sleep(0.05)
-        else:
-            bridge.terminate()
-            raise ValueError('proxy_bridge_start_timeout')
-        try:
-            with socket.create_connection(('127.0.0.1',1081),timeout=1) as probe:
-                probe.settimeout(1); probe.sendall(b'\x05\x01\x00')
-                if probe.recv(2) != b'\x05\x00': raise ValueError('proxy_bridge_protocol_invalid')
-                probe.sendall(b'\x05\x01\x00\xff')
-                if probe.recv(2) != b'\x05\x08': raise ValueError('proxy_bridge_protocol_invalid')
-        except (OSError, ValueError) as error:
-            bridge.terminate()
-            raise ValueError('proxy_bridge_listener_failed') from error
-        kernel_proxy_url = 'socks5h://127.0.0.1:1081'
-    config = {'vm_id': state['instance_id'], 'device_id': device,
-              'socket_path': '/slot/run/kernel.sock', 'internal_token': token,
-              'credential_path': '/slot/credentials/credential.json',
-              'proxy_url': kernel_proxy_url, 'proxy_required': True,
-              'user_agent': state['client_identity']['user_agent'],
-              'max_request_bytes': 33554432, 'upstream_transport': 'prefer_websocket',
-              'client_features': False, 'analytics': False, 'test_endpoints': False}
+    # Match vm2api: the resident kernel owns the bound proxy connection.
+    # No local SOCKS hop, bridge retries or alternate/direct exit.
+    config = build_kernel_config(state, device, token, proxy['url'])
     target = Path('/slot/run/codex-kernel.json')
     if target.is_symlink(): raise ValueError('config_path_invalid')
     if target.exists(): os.chown(target,0,0)

@@ -432,7 +432,7 @@ func TestClientUpstreamTransportPolicy(t *testing.T) {
 				if err := json.NewDecoder(r.Body).Decode(&envelope); err != nil {
 					t.Error(err)
 				}
-				var options map[string]string
+				var options map[string]any
 				if err := json.Unmarshal(envelope["options"], &options); err != nil {
 					t.Error(err)
 				}

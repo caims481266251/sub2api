@@ -165,6 +165,8 @@ func (d *DockerDriver) containerEnsure(ctx context.Context, s State, dir string)
 		return "", err
 	}
 	args := []string{"run", "-d", "--pull=never", "--name", containerName(s), "--hostname", s.Identity.Hostname,
+		// Do not inherit an unbounded daemon logging policy for resident kernels.
+		"--log-driver=json-file", "--log-opt", "max-size=10m", "--log-opt", "max-file=3",
 		"--network=" + s.Network.NetworkName, "--mac-address=" + s.Identity.MAC, "--ip=" + s.Network.Address, "--sysctl=net.ipv6.conf.all.disable_ipv6=1",
 		"--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=32m", "--tmpfs", "/run:rw,nosuid,size=16m",
 		"--cap-drop=ALL", "--cap-add=NET_ADMIN", "--cap-add=CHOWN", "--cap-add=SETUID", "--cap-add=SETGID", "--cap-add=DAC_OVERRIDE", "--cap-add=SETPCAP",

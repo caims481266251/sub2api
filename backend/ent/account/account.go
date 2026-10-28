@@ -38,6 +38,8 @@ const (
 	FieldType = "type"
 	// FieldExecutionMode holds the string denoting the execution_mode field in the database.
 	FieldExecutionMode = "execution_mode"
+	// FieldDockerSystemProfile holds the string denoting the docker_system_profile field in the database.
+	FieldDockerSystemProfile = "docker_system_profile"
 	// FieldCredentials holds the string denoting the credentials field in the database.
 	FieldCredentials = "credentials"
 	// FieldExtra holds the string denoting the extra field in the database.
@@ -152,6 +154,7 @@ var Columns = []string{
 	FieldPlatform,
 	FieldType,
 	FieldExecutionMode,
+	FieldDockerSystemProfile,
 	FieldCredentials,
 	FieldExtra,
 	FieldProxyID,
@@ -221,6 +224,8 @@ var (
 	DefaultExecutionMode string
 	// ExecutionModeValidator is a validator for the "execution_mode" field. It is called by the builders before save.
 	ExecutionModeValidator func(string) error
+	// DockerSystemProfileValidator is a validator for the "docker_system_profile" field. It is called by the builders before save.
+	DockerSystemProfileValidator func(string) error
 	// DefaultCredentials holds the default value on creation for the "credentials" field.
 	DefaultCredentials func() map[string]interface{}
 	// DefaultExtra holds the default value on creation for the "extra" field.
@@ -332,6 +337,11 @@ func ByType(opts ...sql.OrderTermOption) OrderOption {
 // ByExecutionMode orders the results by the execution_mode field.
 func ByExecutionMode(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldExecutionMode, opts...).ToFunc()
+}
+
+// ByDockerSystemProfile orders the results by the docker_system_profile field.
+func ByDockerSystemProfile(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldDockerSystemProfile, opts...).ToFunc()
 }
 
 // ByProxyID orders the results by the proxy_id field.

@@ -54,9 +54,12 @@ type Identity struct {
 // ClientIdentity is the stable per-instance kernel client identity. It is never
 // accepted from account input and remains unchanged across credential refresh.
 type ClientIdentity struct {
-	DeviceID          string `json:"device_id"`
-	UserAgent         string `json:"user_agent,omitempty"`
-	UserAgentTemplate string `json:"user_agent_template,omitempty"`
+	DeviceID string `json:"device_id"`
+	// Legacy overrides are retained while reading/inspecting old instances so
+	// the coordinator can drain them before applying the shared Codex UA policy.
+	// New instances never write these fields.
+	LegacyUserAgent         string `json:"user_agent,omitempty"`
+	LegacyUserAgentTemplate string `json:"user_agent_template,omitempty"`
 }
 
 // NetworkLease is allocated by the helper, never accepted from account input.
@@ -89,12 +92,15 @@ type State struct {
 	DesiredCredentialRevision string          `json:"desired_credential_revision,omitempty"`
 	AppliedCredentialRevision string          `json:"applied_credential_revision,omitempty"`
 	AppliedProxyRevision      string          `json:"applied_proxy_revision,omitempty"`
-	KernelSocket              string          `json:"kernel_socket,omitempty"`
-	InternalToken             string          `json:"internal_token,omitempty"` // private UDS response only; never publish/log
-	DeleteRequested           bool            `json:"delete_requested"`
-	DataRetained              bool            `json:"data_retained"`
-	ErrorCode                 string          `json:"error_code,omitempty"`
-	UpdatedAt                 time.Time       `json:"updated_at"`
+	// A DNS address change requests the existing drained apply flow. It is not
+	// a container health failure and never interrupts an active model request.
+	ProxyAddressChanged bool      `json:"proxy_address_changed,omitempty"`
+	KernelSocket        string    `json:"kernel_socket,omitempty"`
+	InternalToken       string    `json:"internal_token,omitempty"` // private UDS response only; never publish/log
+	DeleteRequested     bool      `json:"delete_requested"`
+	DataRetained        bool      `json:"data_retained"`
+	ErrorCode           string    `json:"error_code,omitempty"`
+	UpdatedAt           time.Time `json:"updated_at"`
 }
 
 type Error struct {

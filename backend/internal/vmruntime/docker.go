@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 type Template struct {
@@ -42,6 +43,8 @@ func (d ExecDocker) Run(ctx context.Context, args ...string) ([]byte, error) {
 }
 
 type DockerDriver struct {
+	profileMu   sync.RWMutex
+	profiles    []SystemProfile
 	NetworkCIDR string
 	ServiceGID  int
 	Templates   map[string]Template

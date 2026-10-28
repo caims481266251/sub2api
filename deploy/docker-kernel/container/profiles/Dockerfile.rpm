@@ -1,0 +1,12 @@
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+RUN dnf install -y --setopt=install_weak_deps=False ca-certificates python3 util-linux-core /usr/bin/setpriv nftables glibc libgcc \
+ && dnf clean all && rm -rf /var/cache/dnf
+RUN mkdir -p /slot/home /slot/run /slot/credentials /opt/kin-payload /usr/local/lib/sub2-container
+COPY container/entry container/observe container/common.py container/proxy_bridge.py container/check-runtime.py /usr/local/lib/sub2-container/
+COPY container/firewall /usr/local/lib/sub2-container/firewall
+ARG SYSTEM_PROFILE
+RUN chmod 755 /usr/local/lib/sub2-container/entry /usr/local/lib/sub2-container/observe /usr/local/lib/sub2-container/firewall \
+ && /usr/bin/python3 /usr/local/lib/sub2-container/check-runtime.py --profile "$SYSTEM_PROFILE"
+LABEL com.sub2api.runtime="container-v1" com.sub2api.system-profile="$SYSTEM_PROFILE"
+ENTRYPOINT ["/usr/local/lib/sub2-container/entry"]

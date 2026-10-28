@@ -226,6 +226,7 @@
             <span class="font-mono text-xs text-gray-500 dark:text-gray-400">#{{ value }}</span>
           </template>
           <template #cell-name="{ row, value }">
+            <DockerSystemProfileLabel v-if="row.execution_mode === 'docker_kernel'" :profile="row.docker_system_profile" class="mb-1 block" />
             <VMKernelStatusBadge v-if="row.execution_mode === 'docker_kernel'" :status="row.vm_kernel" class="mb-1" />
             <div class="flex flex-col">
               <HelpTooltip
@@ -505,6 +506,7 @@
 
 <script setup lang="ts">
 import VMKernelStatusBadge from '@/components/account/VMKernelStatusBadge.vue'
+import DockerSystemProfileLabel from '@/components/account/DockerSystemProfileLabel.vue'
 import { isValidAccountCostMultiplier } from '@/utils/accountCost'
 import { ref, reactive, computed, onMounted, onUnmounted, toRaw, watch } from 'vue'
 import { useIntervalFn } from '@vueuse/core'

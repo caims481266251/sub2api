@@ -182,3 +182,49 @@ func TestDockerCommandDoesNotInheritEmulatedPlatform(t *testing.T) {
 		t.Fatalf("platform override inherited: %q %v", out, err)
 	}
 }
+
+func TestContainerCreateExplicitlyBoundsResidentKernelLogs(t *testing.T) {
+	driver, state, commands := networkDriverFixture()
+	identity, err := newIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Identity = identity
+	dir := t.TempDir()
+	template := driver.Templates[state.Spec.Template]
+	template.PayloadDir = filepath.Join(dir, "payload")
+	driver.Templates[state.Spec.Template] = template
+	id, err := driver.Ensure(context.Background(), state, dir)
+	if err != nil || id != "container-id" {
+		t.Fatalf("create: id=%q err=%v", id, err)
+	}
+	var runs [][]string
+	for _, args := range commands.calls {
+		if len(args) > 0 && args[0] == "run" {
+			runs = append(runs, args)
+		}
+	}
+	if len(runs) != 1 {
+		t.Fatalf("expected one account container create, got %d", len(runs))
+	}
+	args := runs[0]
+	if args[len(args)-1] != template.Image {
+		t.Fatal("logging flags must be Docker options before the pinned image")
+	}
+	driverCount := 0
+	options := map[string]int{}
+	for i, arg := range args[:len(args)-1] {
+		if strings.HasPrefix(arg, "--log-driver=") {
+			driverCount++
+			if arg != "--log-driver=json-file" {
+				t.Fatalf("unexpected logging driver %q", arg)
+			}
+		}
+		if arg == "--log-opt" {
+			options[args[i+1]]++
+		}
+	}
+	if driverCount != 1 || len(options) != 2 || options["max-size=10m"] != 1 || options["max-file=3"] != 1 {
+		t.Fatalf("account logs inherit an unbounded or conflicting daemon policy: drivers=%d options=%v", driverCount, options)
+	}
+}

@@ -155,6 +155,20 @@ func (_c *AccountCreate) SetNillableExecutionMode(v *string) *AccountCreate {
 	return _c
 }
 
+// SetDockerSystemProfile sets the "docker_system_profile" field.
+func (_c *AccountCreate) SetDockerSystemProfile(v string) *AccountCreate {
+	_c.mutation.SetDockerSystemProfile(v)
+	return _c
+}
+
+// SetNillableDockerSystemProfile sets the "docker_system_profile" field if the given value is not nil.
+func (_c *AccountCreate) SetNillableDockerSystemProfile(v *string) *AccountCreate {
+	if v != nil {
+		_c.SetDockerSystemProfile(*v)
+	}
+	return _c
+}
+
 // SetCredentials sets the "credentials" field.
 func (_c *AccountCreate) SetCredentials(v map[string]interface{}) *AccountCreate {
 	_c.mutation.SetCredentials(v)
@@ -707,6 +721,11 @@ func (_c *AccountCreate) check() error {
 			return &ValidationError{Name: "execution_mode", err: fmt.Errorf(`ent: validator failed for field "Account.execution_mode": %w`, err)}
 		}
 	}
+	if v, ok := _c.mutation.DockerSystemProfile(); ok {
+		if err := account.DockerSystemProfileValidator(v); err != nil {
+			return &ValidationError{Name: "docker_system_profile", err: fmt.Errorf(`ent: validator failed for field "Account.docker_system_profile": %w`, err)}
+		}
+	}
 	if _, ok := _c.mutation.Credentials(); !ok {
 		return &ValidationError{Name: "credentials", err: errors.New(`ent: missing required field "Account.credentials"`)}
 	}
@@ -822,6 +841,10 @@ func (_c *AccountCreate) createSpec() (*Account, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.ExecutionMode(); ok {
 		_spec.SetField(account.FieldExecutionMode, field.TypeString, value)
 		_node.ExecutionMode = value
+	}
+	if value, ok := _c.mutation.DockerSystemProfile(); ok {
+		_spec.SetField(account.FieldDockerSystemProfile, field.TypeString, value)
+		_node.DockerSystemProfile = &value
 	}
 	if value, ok := _c.mutation.Credentials(); ok {
 		_spec.SetField(account.FieldCredentials, field.TypeJSON, value)
@@ -1654,6 +1677,9 @@ func (u *AccountUpsertOne) UpdateNewValues() *AccountUpsertOne {
 	u.create.conflict = append(u.create.conflict, sql.ResolveWith(func(s *sql.UpdateSet) {
 		if _, exists := u.create.mutation.CreatedAt(); exists {
 			s.SetIgnore(account.FieldCreatedAt)
+		}
+		if _, exists := u.create.mutation.DockerSystemProfile(); exists {
+			s.SetIgnore(account.FieldDockerSystemProfile)
 		}
 	}))
 	return u
@@ -2550,6 +2576,9 @@ func (u *AccountUpsertBulk) UpdateNewValues() *AccountUpsertBulk {
 		for _, b := range u.create.builders {
 			if _, exists := b.mutation.CreatedAt(); exists {
 				s.SetIgnore(account.FieldCreatedAt)
+			}
+			if _, exists := b.mutation.DockerSystemProfile(); exists {
+				s.SetIgnore(account.FieldDockerSystemProfile)
 			}
 		}
 	}))

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"io"
 	"log/slog"
@@ -12,6 +13,23 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/vmkernel"
 	"github.com/Wei-Shaw/sub2api/internal/vmruntime"
 )
+
+// Keep the local rejection classification before business failover presents a
+// generic 503. Never log the wrapped cause, request, or private runtime binding.
+func logVMKernelPreDispatchFailure(ctx context.Context, code string, result *vmkernel.Result) {
+	switch code {
+	case "kernel_transport_failed", "vm_runtime_busy", "vm_runtime_unavailable", "vm_runtime_not_ready", "vm_binding_not_ready":
+	default:
+		return
+	}
+	attrs := []any{"stage", "pre_dispatch", "code", code}
+	if result != nil && len(result.AttemptID) == 32 && result.AttemptID == strings.ToLower(result.AttemptID) {
+		if _, err := hex.DecodeString(result.AttemptID); err == nil {
+			attrs = append(attrs, "attempt_id", result.AttemptID)
+		}
+	}
+	slog.WarnContext(ctx, "vm_kernel_pre_dispatch_failed", attrs...)
+}
 
 func vmKernelControlErrorCode(err error) string {
 	if errors.Is(err, context.DeadlineExceeded) {
@@ -81,10 +99,18 @@ func logVMKernelAttemptFailure(accountID int64, generation uint64, result *vmker
 	}
 	cancel := "not_attempted"
 	switch result.CancelStatus {
-	case "transport_failed", "response_incomplete", "rejected", "acknowledged", "unavailable":
+	case "transport_failed", "response_incomplete", "rejected", "acknowledged", "unavailable", "stream_closed":
 		cancel = result.CancelStatus
 	}
-	slog.Warn("vm_kernel_attempt_failed", "account_id", accountID, "generation", generation,
+	attrs := []any{"account_id", accountID, "generation", generation,
 		"attempt_id", result.AttemptID, "code", code, "reason", reason,
-		"duration_ms", result.Duration.Milliseconds(), "cancel_status", cancel, "cancel_http_status", result.CancelHTTPStatus)
+		"duration_ms", result.Duration.Milliseconds(), "cancel_status", cancel, "cancel_http_status", result.CancelHTTPStatus,
+		"execution_transport_canceled", result.ExecutionTransportCanceled}
+	if errors.Is(err, context.Canceled) && result.ClientDisconnect && result.ExecutionTransportCanceled {
+		// An explicitly canceled caller is an expected request outcome. Keep
+		// cleanup visible without treating it as container/account ill health.
+		slog.Info("vm_kernel_attempt_cancelled", attrs...)
+		return
+	}
+	slog.Warn("vm_kernel_attempt_failed", attrs...)
 }

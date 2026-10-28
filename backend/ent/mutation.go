@@ -2653,6 +2653,7 @@ type AccountMutation struct {
 	platform                    *string
 	_type                       *string
 	execution_mode              *string
+	docker_system_profile       *string
 	credentials                 *map[string]interface{}
 	extra                       *map[string]interface{}
 	proxy_fallback_origin_id    *int64
@@ -3300,6 +3301,55 @@ func (m *AccountMutation) OldExecutionMode(ctx context.Context) (v string, err e
 // ResetExecutionMode resets all changes to the "execution_mode" field.
 func (m *AccountMutation) ResetExecutionMode() {
 	m.execution_mode = nil
+}
+
+// SetDockerSystemProfile sets the "docker_system_profile" field.
+func (m *AccountMutation) SetDockerSystemProfile(s string) {
+	m.docker_system_profile = &s
+}
+
+// DockerSystemProfile returns the value of the "docker_system_profile" field in the mutation.
+func (m *AccountMutation) DockerSystemProfile() (r string, exists bool) {
+	v := m.docker_system_profile
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDockerSystemProfile returns the old "docker_system_profile" field's value of the Account entity.
+// If the Account object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccountMutation) OldDockerSystemProfile(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDockerSystemProfile is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDockerSystemProfile requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDockerSystemProfile: %w", err)
+	}
+	return oldValue.DockerSystemProfile, nil
+}
+
+// ClearDockerSystemProfile clears the value of the "docker_system_profile" field.
+func (m *AccountMutation) ClearDockerSystemProfile() {
+	m.docker_system_profile = nil
+	m.clearedFields[account.FieldDockerSystemProfile] = struct{}{}
+}
+
+// DockerSystemProfileCleared returns if the "docker_system_profile" field was cleared in this mutation.
+func (m *AccountMutation) DockerSystemProfileCleared() bool {
+	_, ok := m.clearedFields[account.FieldDockerSystemProfile]
+	return ok
+}
+
+// ResetDockerSystemProfile resets all changes to the "docker_system_profile" field.
+func (m *AccountMutation) ResetDockerSystemProfile() {
+	m.docker_system_profile = nil
+	delete(m.clearedFields, account.FieldDockerSystemProfile)
 }
 
 // SetCredentials sets the "credentials" field.
@@ -4782,7 +4832,7 @@ func (m *AccountMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *AccountMutation) Fields() []string {
-	fields := make([]string, 0, 36)
+	fields := make([]string, 0, 37)
 	if m.created_at != nil {
 		fields = append(fields, account.FieldCreatedAt)
 	}
@@ -4815,6 +4865,9 @@ func (m *AccountMutation) Fields() []string {
 	}
 	if m.execution_mode != nil {
 		fields = append(fields, account.FieldExecutionMode)
+	}
+	if m.docker_system_profile != nil {
+		fields = append(fields, account.FieldDockerSystemProfile)
 	}
 	if m.credentials != nil {
 		fields = append(fields, account.FieldCredentials)
@@ -4921,6 +4974,8 @@ func (m *AccountMutation) Field(name string) (ent.Value, bool) {
 		return m.GetType()
 	case account.FieldExecutionMode:
 		return m.ExecutionMode()
+	case account.FieldDockerSystemProfile:
+		return m.DockerSystemProfile()
 	case account.FieldCredentials:
 		return m.Credentials()
 	case account.FieldExtra:
@@ -5002,6 +5057,8 @@ func (m *AccountMutation) OldField(ctx context.Context, name string) (ent.Value,
 		return m.OldType(ctx)
 	case account.FieldExecutionMode:
 		return m.OldExecutionMode(ctx)
+	case account.FieldDockerSystemProfile:
+		return m.OldDockerSystemProfile(ctx)
 	case account.FieldCredentials:
 		return m.OldCredentials(ctx)
 	case account.FieldExtra:
@@ -5137,6 +5194,13 @@ func (m *AccountMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetExecutionMode(v)
+		return nil
+	case account.FieldDockerSystemProfile:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDockerSystemProfile(v)
 		return nil
 	case account.FieldCredentials:
 		v, ok := value.(map[string]interface{})
@@ -5457,6 +5521,9 @@ func (m *AccountMutation) ClearedFields() []string {
 	if m.FieldCleared(account.FieldNotes) {
 		fields = append(fields, account.FieldNotes)
 	}
+	if m.FieldCleared(account.FieldDockerSystemProfile) {
+		fields = append(fields, account.FieldDockerSystemProfile)
+	}
 	if m.FieldCleared(account.FieldProxyID) {
 		fields = append(fields, account.FieldProxyID)
 	}
@@ -5530,6 +5597,9 @@ func (m *AccountMutation) ClearField(name string) error {
 		return nil
 	case account.FieldNotes:
 		m.ClearNotes()
+		return nil
+	case account.FieldDockerSystemProfile:
+		m.ClearDockerSystemProfile()
 		return nil
 	case account.FieldProxyID:
 		m.ClearProxyID()
@@ -5616,6 +5686,9 @@ func (m *AccountMutation) ResetField(name string) error {
 		return nil
 	case account.FieldExecutionMode:
 		m.ResetExecutionMode()
+		return nil
+	case account.FieldDockerSystemProfile:
+		m.ResetDockerSystemProfile()
 		return nil
 	case account.FieldCredentials:
 		m.ResetCredentials()

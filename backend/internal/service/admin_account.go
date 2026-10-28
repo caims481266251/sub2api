@@ -446,6 +446,9 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 	if err != nil {
 		return nil, err
 	}
+	if _, err := normalizeDockerSystemSelection(mode, input.DockerSystemProfile); err != nil {
+		return nil, err
+	}
 	if mode == AccountExecutionModeVMKernel {
 		if input.ProxyID == nil || *input.ProxyID <= 0 {
 			return nil, infraerrors.BadRequest("VM_KERNEL_PROXY_REQUIRED", "Docker kernel accounts require a configured proxy")
@@ -618,15 +621,19 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if err != nil {
 		return nil, err
 	}
+	if err := s.prepareDockerSystemSelection(ctx, input, account); err != nil {
+		return nil, err
+	}
 	if err := s.validateExcelBPS403GroupSettings(ctx, account); err != nil {
 		return nil, err
 	}
 	if err := s.ValidateAccountGroupBindings(ctx, groupIDs); err != nil {
 		return nil, err
 	}
-	if account.InitialAdmissionPlan != nil && s.accountDuplicateRepo != nil {
-		// Publish the initially blocked account, its groups and both background
-		// plans atomically; the worker cannot race a partially bound import.
+	if (account.InitialAdmissionPlan != nil || account.IsVMKernel()) && s.accountDuplicateRepo != nil {
+		// Docker system allocation and group binding share the account transaction;
+		// a failed group insert must not leave a counted, partially created account.
+		// Initial admission also publishes both plans atomically with its groups.
 		groups := make([]AccountGroup, 0, len(groupIDs))
 		for _, id := range groupIDs {
 			groups = append(groups, AccountGroup{GroupID: id, Priority: 50})

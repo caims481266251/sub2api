@@ -11,6 +11,7 @@
       @submit.prevent="handleSubmit"
       class="space-y-5"
     >
+      <DockerSystemProfileLabel v-if="account.execution_mode === 'docker_kernel'" :profile="account.docker_system_profile" />
       <VMKernelStatusBadge v-if="account?.execution_mode === 'docker_kernel'" :status="account.vm_kernel" />
       <p v-if="account?.execution_mode === 'docker_kernel'" class="text-sm text-blue-700 dark:text-blue-300">{{ t('admin.accounts.executionModeVM') }} — {{ t('admin.accounts.executionModeVMHint') }}</p>
       <DockerRequestCacheField v-if="account.platform === 'openai' && account.execution_mode === 'docker_kernel'" v-model="dockerRequestCache" />
@@ -3471,6 +3472,7 @@
 
 <script setup lang="ts">
 import VMKernelStatusBadge from '@/components/account/VMKernelStatusBadge.vue'
+import DockerSystemProfileLabel from './DockerSystemProfileLabel.vue'
 import OpenAIRequestTimezoneField from '@/components/account/OpenAIRequestTimezoneField.vue'
 import SIWCAccountSettings from './SIWCAccountSettings.vue'
 import ExcelBPSCredentialStatus from './ExcelBPSCredentialStatus.vue'

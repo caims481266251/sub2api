@@ -3,11 +3,41 @@ package service
 import (
 	"context"
 	"errors"
-	"github.com/Wei-Shaw/sub2api/internal/requestcapture"
+	"net"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/requestcapture"
 	coderws "github.com/coder/websocket"
 )
+
+// This marker is attached only at a read of the downstream client socket.
+// An identical EOF from an upstream connection must remain an account failure.
+type openAIWSClientReadDisconnectError struct{ err error }
+
+func (e *openAIWSClientReadDisconnectError) Error() string { return e.err.Error() }
+func (e *openAIWSClientReadDisconnectError) Unwrap() error { return e.err }
+
+func markOpenAIWSClientReadDisconnect(err error) error {
+	if err == nil || IsOpenAIWSClientReadDisconnect(err) || errors.Is(err, context.DeadlineExceeded) || !isOpenAIWSClientReadDisconnect(err) {
+		return err
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return err
+	}
+	return &openAIWSClientReadDisconnectError{err: err}
+}
+
+// IsOpenAIWSClientReadDisconnect requires downstream read provenance. It does
+// not classify a bare EOF, a local control close or an upstream read timeout.
+func IsOpenAIWSClientReadDisconnect(err error) bool {
+	var localClose *OpenAIWSClientCloseError
+	if errors.As(err, &localClose) {
+		return false
+	}
+	var disconnected *openAIWSClientReadDisconnectError
+	return errors.As(err, &disconnected)
+}
 
 type openAIWSClientReadResult struct {
 	messageType coderws.MessageType
@@ -57,7 +87,7 @@ func readOpenAIWSClientMessageWithTimeoutStart(
 	readDone := make(chan openAIWSClientReadResult, 1)
 	go func() {
 		messageType, payload, err := conn.Read(context.Background())
-		readDone <- openAIWSClientReadResult{messageType: messageType, payload: payload, err: err}
+		readDone <- openAIWSClientReadResult{messageType: messageType, payload: payload, err: markOpenAIWSClientReadDisconnect(err)}
 	}()
 
 	var timer *time.Timer

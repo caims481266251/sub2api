@@ -75,6 +75,7 @@ func (Account) Fields() []ent.Field {
 			NotEmpty(),
 
 		field.String("execution_mode").Default("normal").MaxLen(20),
+		field.String("docker_system_profile").Optional().Nillable().Immutable().MaxLen(64),
 
 		// credentials: 认证凭证，以 JSONB 格式存储
 		// 结构取决于 type 字段：

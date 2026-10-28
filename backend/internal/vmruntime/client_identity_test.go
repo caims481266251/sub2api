@@ -25,9 +25,8 @@ func TestClientIdentityPersistsAcrossRestartAndCredentialRotation(t *testing.T) 
 		t.Fatalf("prepare did not bind client identity: %v", e)
 	}
 	device := s.ClientIdentity.DeviceID
-	userAgent := s.ClientIdentity.UserAgent
-	if userAgent == "" {
-		t.Fatal("missing container UA")
+	if s.ClientIdentity.LegacyUserAgent != "" || s.ClientIdentity.LegacyUserAgentTemplate != "" {
+		t.Fatal("new instance received a legacy UA override")
 	}
 	if parsed, e := uuid.Parse(device); e != nil || parsed.String() != device {
 		t.Fatal("client identity not canonical UUID")
@@ -44,7 +43,7 @@ func TestClientIdentityPersistsAcrossRestartAndCredentialRotation(t *testing.T) 
 	req.Operation, req.Generation = "apply-config", 2
 	req.Projection.Revision = "c2"
 	s, e = h.Do(context.Background(), req)
-	if e != nil || s.ClientIdentity == nil || s.ClientIdentity.DeviceID != device || s.ClientIdentity.UserAgent != userAgent {
+	if e != nil || s.ClientIdentity == nil || s.ClientIdentity.DeviceID != device {
 		t.Fatalf("credential update changed client identity: %v", e)
 	}
 	req.Generation = 3
@@ -52,13 +51,13 @@ func TestClientIdentityPersistsAcrossRestartAndCredentialRotation(t *testing.T) 
 	req.Spec.ProxyRevision = "px2"
 	req.Projection.ProxyURL = "http://192.0.2.2:3128"
 	s, e = h.Do(context.Background(), req)
-	if e != nil || s.ClientIdentity.DeviceID != device || s.ClientIdentity.UserAgent != userAgent {
+	if e != nil || s.ClientIdentity.DeviceID != device {
 		t.Fatalf("proxy update changed client identity: %v", e)
 	}
 	other := desktopIdentityRequest()
 	other.AccountID++
 	second, e := h.Do(context.Background(), other)
-	if e != nil || second.ClientIdentity == nil || second.ClientIdentity.DeviceID == device || second.ClientIdentity.UserAgent == userAgent {
+	if e != nil || second.ClientIdentity == nil || second.ClientIdentity.DeviceID == device {
 		t.Fatalf("accounts did not receive independent identities: %v", e)
 	}
 }

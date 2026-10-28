@@ -375,6 +375,8 @@ jobs:
           for arch in ('amd64','arm64'):
               base='docker-kernel-tools-%s-linux-%s.tar.gz' % (sys.argv[2],arch)
               assert {base,base+'.sha256'} <= names, 'incomplete runtime release'
+              bootstrap='docker-kernel-updater-bootstrap-%s-linux-%s.tar.gz' % (sys.argv[2],arch)
+              assert {bootstrap,bootstrap+'.sha256'} <= names, 'missing system-pool updater bootstrap'
           PYASSETS
           gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false
       - name: Upload dry-run checksums and metadata

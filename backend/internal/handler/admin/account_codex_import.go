@@ -23,6 +23,7 @@ import (
 const codexImportClockSkewSeconds int64 = 120
 
 type CodexSessionImportRequest struct {
+	DockerSystemProfile     string         `json:"docker_system_profile,omitempty"`
 	ExecutionMode           *string        `json:"execution_mode"`
 	InitializeOpenAITwoFA   bool           `json:"initialize_openai_two_fa"`
 	Content                 string         `json:"content"`
@@ -57,12 +58,13 @@ type CodexSessionImportResult struct {
 }
 
 type CodexSessionImportItem struct {
-	Index     int    `json:"index"`
-	Name      string `json:"name,omitempty"`
-	Action    string `json:"action"`
-	AccountID int64  `json:"account_id,omitempty"`
-	Message   string `json:"message,omitempty"`
-	Reason    string `json:"reason,omitempty"`
+	DockerSystemProfile *string `json:"docker_system_profile,omitempty"`
+	Index               int     `json:"index"`
+	Name                string  `json:"name,omitempty"`
+	Action              string  `json:"action"`
+	AccountID           int64   `json:"account_id,omitempty"`
+	Message             string  `json:"message,omitempty"`
+	Reason              string  `json:"reason,omitempty"`
 }
 
 type CodexSessionImportMessage struct {
@@ -276,7 +278,7 @@ func (h *AccountHandler) importCodexSessions(ctx context.Context, req CodexSessi
 		if existing != nil && req.SkipExisting {
 			result.Skipped++
 			result.Items = append(result.Items, CodexSessionImportItem{
-				Index: entry.Index, Name: accountName, Action: "skipped", AccountID: existing.ID,
+				Index: entry.Index, Name: accountName, Action: "skipped", AccountID: existing.ID, DockerSystemProfile: existing.DockerSystemProfile,
 			})
 			continue
 		}
@@ -349,10 +351,11 @@ func (h *AccountHandler) importCodexSessions(ctx context.Context, req CodexSessi
 				index.Add(*updated)
 			}
 			result.Items = append(result.Items, CodexSessionImportItem{
-				Index:     entry.Index,
-				Name:      accountName,
-				Action:    "updated",
-				AccountID: accountID,
+				Index:               entry.Index,
+				Name:                accountName,
+				Action:              "updated",
+				AccountID:           accountID,
+				DockerSystemProfile: existing.DockerSystemProfile,
 			})
 			continue
 		}
@@ -363,6 +366,7 @@ func (h *AccountHandler) importCodexSessions(ctx context.Context, req CodexSessi
 		}
 		account, createErr := h.adminService.CreateAccount(ctx, &service.CreateAccountInput{
 			ExecutionMode:         mode,
+			DockerSystemProfile:   req.DockerSystemProfile,
 			InitialOpenAITwoFA:    req.InitializeOpenAITwoFA && !item.IsAgentIdentity,
 			Name:                  accountName,
 			Notes:                 req.Notes,
@@ -406,11 +410,16 @@ func (h *AccountHandler) importCodexSessions(ctx context.Context, req CodexSessi
 		if account != nil {
 			accountID = account.ID
 		}
+		var profile *string
+		if account != nil {
+			profile = account.DockerSystemProfile
+		}
 		result.Items = append(result.Items, CodexSessionImportItem{
-			Index:     entry.Index,
-			Name:      accountName,
-			Action:    "created",
-			AccountID: accountID,
+			Index:               entry.Index,
+			Name:                accountName,
+			Action:              "created",
+			AccountID:           accountID,
+			DockerSystemProfile: profile,
 		})
 	}
 

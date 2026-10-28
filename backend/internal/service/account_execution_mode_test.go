@@ -86,6 +86,7 @@ func TestVMKernelCreateRequiresEnabledDeploymentAndSupportsTwoFA(t *testing.T) {
 	require.Error(t, err)
 	svc.cfg = &config.Config{VMKernel: config.VMKernelConfig{Enabled: true}}
 	svc.accountRepo = &upstreamBillingProbeAccountRepo{}
+	svc.dockerSystemPool = dockerSystemPoolFixture()
 	account, err := svc.CreateAccount(t.Context(), input)
 	require.NoError(t, err)
 	require.Equal(t, 12, account.Concurrency)
@@ -105,8 +106,9 @@ func TestVMKernelCreatePreservesOriginalAutoConfigurationAndAdmission(t *testing
 				require.NoError(t, err)
 				repo := &autoConfigAccountRepo{}
 				svc := &adminServiceImpl{cfg: &config.Config{VMKernel: config.VMKernelConfig{Enabled: true}}, accountRepo: repo,
-					settingService: NewSettingService(&accountOpsSettingsStub{raw: string(raw)}, nil),
-					groupRepo:      autoConfigGroups{group: &Group{ID: 5, Platform: PlatformOpenAI, Status: StatusActive}}}
+					dockerSystemPool: dockerSystemPoolFixture(),
+					settingService:   NewSettingService(&accountOpsSettingsStub{raw: string(raw)}, nil),
+					groupRepo:        autoConfigGroups{group: &Group{ID: 5, Platform: PlatformOpenAI, Status: StatusActive}}}
 				proxyID := int64(7)
 				account, err := svc.CreateAccount(t.Context(), &CreateAccountInput{Name: "OAuth", Platform: PlatformOpenAI, Type: AccountTypeOAuth,
 					ExecutionMode: mode, ProxyID: &proxyID, Concurrency: 12, InitialOpenAITwoFA: true, SkipDefaultGroupBind: true, SkipMixedChannelCheck: true})

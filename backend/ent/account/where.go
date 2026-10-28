@@ -110,6 +110,11 @@ func ExecutionMode(v string) predicate.Account {
 	return predicate.Account(sql.FieldEQ(FieldExecutionMode, v))
 }
 
+// DockerSystemProfile applies equality check predicate on the "docker_system_profile" field. It's identical to DockerSystemProfileEQ.
+func DockerSystemProfile(v string) predicate.Account {
+	return predicate.Account(sql.FieldEQ(FieldDockerSystemProfile, v))
+}
+
 // ProxyID applies equality check predicate on the "proxy_id" field. It's identical to ProxyIDEQ.
 func ProxyID(v int64) predicate.Account {
 	return predicate.Account(sql.FieldEQ(FieldProxyID, v))
@@ -858,6 +863,81 @@ func ExecutionModeEqualFold(v string) predicate.Account {
 // ExecutionModeContainsFold applies the ContainsFold predicate on the "execution_mode" field.
 func ExecutionModeContainsFold(v string) predicate.Account {
 	return predicate.Account(sql.FieldContainsFold(FieldExecutionMode, v))
+}
+
+// DockerSystemProfileEQ applies the EQ predicate on the "docker_system_profile" field.
+func DockerSystemProfileEQ(v string) predicate.Account {
+	return predicate.Account(sql.FieldEQ(FieldDockerSystemProfile, v))
+}
+
+// DockerSystemProfileNEQ applies the NEQ predicate on the "docker_system_profile" field.
+func DockerSystemProfileNEQ(v string) predicate.Account {
+	return predicate.Account(sql.FieldNEQ(FieldDockerSystemProfile, v))
+}
+
+// DockerSystemProfileIn applies the In predicate on the "docker_system_profile" field.
+func DockerSystemProfileIn(vs ...string) predicate.Account {
+	return predicate.Account(sql.FieldIn(FieldDockerSystemProfile, vs...))
+}
+
+// DockerSystemProfileNotIn applies the NotIn predicate on the "docker_system_profile" field.
+func DockerSystemProfileNotIn(vs ...string) predicate.Account {
+	return predicate.Account(sql.FieldNotIn(FieldDockerSystemProfile, vs...))
+}
+
+// DockerSystemProfileGT applies the GT predicate on the "docker_system_profile" field.
+func DockerSystemProfileGT(v string) predicate.Account {
+	return predicate.Account(sql.FieldGT(FieldDockerSystemProfile, v))
+}
+
+// DockerSystemProfileGTE applies the GTE predicate on the "docker_system_profile" field.
+func DockerSystemProfileGTE(v string) predicate.Account {
+	return predicate.Account(sql.FieldGTE(FieldDockerSystemProfile, v))
+}
+
+// DockerSystemProfileLT applies the LT predicate on the "docker_system_profile" field.
+func DockerSystemProfileLT(v string) predicate.Account {
+	return predicate.Account(sql.FieldLT(FieldDockerSystemProfile, v))
+}
+
+// DockerSystemProfileLTE applies the LTE predicate on the "docker_system_profile" field.
+func DockerSystemProfileLTE(v string) predicate.Account {
+	return predicate.Account(sql.FieldLTE(FieldDockerSystemProfile, v))
+}
+
+// DockerSystemProfileContains applies the Contains predicate on the "docker_system_profile" field.
+func DockerSystemProfileContains(v string) predicate.Account {
+	return predicate.Account(sql.FieldContains(FieldDockerSystemProfile, v))
+}
+
+// DockerSystemProfileHasPrefix applies the HasPrefix predicate on the "docker_system_profile" field.
+func DockerSystemProfileHasPrefix(v string) predicate.Account {
+	return predicate.Account(sql.FieldHasPrefix(FieldDockerSystemProfile, v))
+}
+
+// DockerSystemProfileHasSuffix applies the HasSuffix predicate on the "docker_system_profile" field.
+func DockerSystemProfileHasSuffix(v string) predicate.Account {
+	return predicate.Account(sql.FieldHasSuffix(FieldDockerSystemProfile, v))
+}
+
+// DockerSystemProfileIsNil applies the IsNil predicate on the "docker_system_profile" field.
+func DockerSystemProfileIsNil() predicate.Account {
+	return predicate.Account(sql.FieldIsNull(FieldDockerSystemProfile))
+}
+
+// DockerSystemProfileNotNil applies the NotNil predicate on the "docker_system_profile" field.
+func DockerSystemProfileNotNil() predicate.Account {
+	return predicate.Account(sql.FieldNotNull(FieldDockerSystemProfile))
+}
+
+// DockerSystemProfileEqualFold applies the EqualFold predicate on the "docker_system_profile" field.
+func DockerSystemProfileEqualFold(v string) predicate.Account {
+	return predicate.Account(sql.FieldEqualFold(FieldDockerSystemProfile, v))
+}
+
+// DockerSystemProfileContainsFold applies the ContainsFold predicate on the "docker_system_profile" field.
+func DockerSystemProfileContainsFold(v string) predicate.Account {
+	return predicate.Account(sql.FieldContainsFold(FieldDockerSystemProfile, v))
 }
 
 // ProxyIDEQ applies the EQ predicate on the "proxy_id" field.

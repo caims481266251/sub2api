@@ -8,62 +8,69 @@ import (
 	"testing"
 )
 
-func TestClientRuntimeIdentityOverridesCaller(t *testing.T) {
-	for _, owned := range []bool{false, true} {
-		t.Run(fmt.Sprint(owned), func(t *testing.T) {
-			b := fakeKernel(t, func(w http.ResponseWriter, r *http.Request) {
-				var env struct {
-					Options map[string]string
-					Headers map[string]string
-					Body    map[string]json.RawMessage
-					Session map[string]string
-				}
-				if err := json.NewDecoder(r.Body).Decode(&env); err != nil {
-					t.Error(err)
-				}
-				if env.Headers["user-agent"] != "" || env.Headers["User-Agent"] != "" {
-					t.Error("caller UA header forwarded")
-				}
+func TestClientDefaultUserAgentPreservesRuntimeInstallationIdentity(t *testing.T) {
+	for _, transport := range []string{"http", "prefer_websocket"} {
+		for _, owned := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/owned=%t", transport, owned), func(t *testing.T) {
+				b := fakeKernel(t, func(w http.ResponseWriter, r *http.Request) {
+					var env struct {
+						Options map[string]any
+						Headers map[string]string
+						Body    map[string]json.RawMessage
+						Session map[string]string
+					}
+					if err := json.NewDecoder(r.Body).Decode(&env); err != nil {
+						t.Error(err)
+					}
+					if env.Headers["user-agent"] != "" || env.Headers["User-Agent"] != "" {
+						t.Error("caller UA header forwarded")
+					}
+					if env.Options["user_agent"] != DefaultCodexUserAgent || env.Options["client_features"] != false || env.Options["analytics"] != false {
+						t.Error("fixed Codex policy missing")
+					}
+					if env.Options["upstream_transport"] != transport {
+						t.Error("transport policy changed")
+					}
+					if _, ok := env.Headers["x-codex-installation-id"]; ok {
+						t.Error("installation header must not bypass options")
+					}
+					for _, key := range []string{"client_metadata", "user_agent", "options", "base_url", "authorization"} {
+						if _, ok := env.Body[key]; ok {
+							t.Errorf("caller identity survived: %s", key)
+						}
+					}
+					var metadata map[string]any
+					if err := json.Unmarshal(env.Body["metadata"], &metadata); err != nil {
+						t.Fatal(err)
+					}
+					if len(metadata) != 1 || metadata["business"] != "keep" {
+						t.Error("business metadata not preserved or identity leaked")
+					}
+					if owned {
+						if env.Options["installation_id"] != "owned-device" {
+							t.Error("runtime identity not enforced")
+						}
+					} else if _, ok := env.Options["installation_id"]; ok {
+						t.Error("caller installation accepted")
+					}
+					if env.Session["session_id"] != "conversation-a" {
+						t.Error("conversation changed")
+					}
+					w.Header().Set("Content-Type", "text/event-stream")
+					fmt.Fprint(w, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_test\",\"status\":\"completed\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n")
+				})
 				if owned {
-					if env.Options["user_agent"] != "codex_cli_rs/0.164.0 (Mac OS 15.1; arm64)" || env.Options["installation_id"] != "owned-device" || env.Headers["x-codex-installation-id"] != "owned-device" {
-						t.Error("runtime identity not enforced")
-					}
-					var metadata map[string]string
-					json.Unmarshal(env.Body["client_metadata"], &metadata)
-					if metadata["installation_id"] != "owned-device" || metadata["x-codex-installation-id"] != "owned-device" {
-						t.Error("caller metadata survived")
-					}
-				} else if env.Options["user_agent"] != "" || env.Options["installation_id"] != "" {
-					t.Error("legacy behavior changed")
+					b.InstallationID = "owned-device"
 				}
-				if env.Session["session_id"] != "conversation-a" {
-					t.Error("conversation changed")
+				client := NewClient()
+				client.UpstreamTransport = transport
+				defer client.Close()
+				ctx := WithHeaders(context.Background(), http.Header{"User-Agent": {"caller-ua"}, "X-Codex-Installation-Id": {"caller-device"}})
+				result, err := client.Execute(ctx, b, Request{Protocol: "responses", Body: json.RawMessage(`{"model":"fixture","base_url":"http://untrusted.invalid","authorization":"caller-secret","metadata":{"user_id":"caller","device_id":"caller","installation_id":"caller","business":"keep"},"prompt_cache_key":"conversation-a","user_agent":"caller-top-level","options":{"user_agent":"caller","installation_id":"caller"},"client_metadata":{"installation_id":"caller","x-codex-installation-id":"caller"}}`)}, nil)
+				if err != nil || !result.Completed {
+					t.Fatal("request failed", err)
 				}
-				w.Header().Set("Content-Type", "text/event-stream")
-				fmt.Fprint(w, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_test\",\"status\":\"completed\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n")
 			})
-			if owned {
-				b.UserAgent = "codex_cli_rs/0.164.0 (Mac OS 15.1; arm64)"
-				b.InstallationID = "owned-device"
-			}
-			client := NewClient()
-			defer client.Close()
-			ctx := WithHeaders(context.Background(), http.Header{"User-Agent": {"caller-ua"}, "X-Codex-Installation-Id": {"caller-device"}})
-			result, err := client.Execute(ctx, b, Request{Protocol: "responses", Body: json.RawMessage(`{"model":"fixture","prompt_cache_key":"conversation-a","options":{"user_agent":"caller"},"client_metadata":{"installation_id":"caller","x-codex-installation-id":"caller"}}`)}, nil)
-			if err != nil || !result.Completed {
-				t.Fatal("request failed", err)
-			}
-		})
-	}
-}
-
-func TestClientRuntimeIdentityRejectsPartialBinding(t *testing.T) {
-	for _, b := range []Binding{{UserAgent: "owned-ua"}, {InstallationID: "owned-device"}} {
-		client := NewClient()
-		result, err := client.Execute(context.Background(), b, Request{Protocol: "responses", Body: json.RawMessage(`{}`)}, nil)
-		client.Close()
-		if err == nil || result != nil {
-			t.Fatal("partial identity admitted")
 		}
 	}
 }

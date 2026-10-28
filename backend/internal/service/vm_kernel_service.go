@@ -83,9 +83,9 @@ type vmKernelTokenProvider interface {
 // Each account owns one lifecycle binding, with independent concurrent attempts.
 // The existing scheduler owns business leases; this lane also bounds management
 // and business calls together by the current account concurrency configuration.
-// A control-plane observation can briefly hold the same account lock used for
-// admission. Context-aware acquisition lets admission wait for that observation
-// without queueing behind an active inference or an unbounded bootstrap.
+// Slow control-plane observations use a separate lock from admission. The
+// admission mutex only protects slot state and lifecycle mutations; healthy
+// requests never wait for Docker inspection or OAuth refresh.
 type vmKernelAccountMutex struct {
 	once  sync.Once
 	token chan struct{}
@@ -116,6 +116,9 @@ func (m *vmKernelAccountMutex) lockContext(ctx context.Context) bool {
 }
 
 type vmKernelSlot struct {
+	// Lifecycle operations always acquire controlMu before mu. Admission and
+	// attempt completion acquire only mu, so observations cannot block them.
+	controlMu           vmKernelAccountMutex
 	mu                  vmKernelAccountMutex
 	active              int
 	activeDone          chan struct{}
@@ -125,7 +128,6 @@ type vmKernelSlot struct {
 	observationFailures int
 	verifiedBinding     string
 	nextProbe           time.Time
-	uaMigrationRetryAt  time.Time
 }
 type VMKernelService struct {
 	cfg                config.VMKernelConfig
@@ -386,14 +388,22 @@ func (s *VMKernelService) controlLimits() {
 // Public inference never creates or starts a VM. Every restart/projection
 // change advances the helper generation and invalidates old WS bindings.
 func (s *VMKernelService) prepare(ctx context.Context, account *Account) {
-	if account != nil && account.ExecutionMode == "vm_kernel" {
+	if account == nil || account.ExecutionMode == "vm_kernel" {
 		return
 	}
 	slot := s.slot(account.ID)
-	if !slot.mu.TryLock() {
+	if !slot.controlMu.TryLock() {
 		return
 	}
-	defer slot.mu.Unlock()
+	defer slot.controlMu.Unlock()
+	if !slot.mu.lockContext(ctx) {
+		return
+	}
+	blocked := ctx.Err() != nil || slot.deleting || slot.revoked.Load()
+	slot.mu.Unlock()
+	if blocked {
+		return
+	}
 	s.controlLimits()
 	select {
 	case s.healthLimit <- struct{}{}:
@@ -406,34 +416,68 @@ func (s *VMKernelService) prepare(ctx context.Context, account *Account) {
 			<-s.healthLimit
 		}
 	}()
-	if slot.deleting || slot.revoked.Load() {
-		return
-	}
 	// Inspect even when OAuth refresh or proxy business eligibility is failing.
 	// Such failures must not stop a healthy process or erase its health evidence.
 	state, inspectErr := s.helper.Do(ctx, vmruntime.Request{Operation: "inspect", AccountID: account.ID})
+	if !slot.mu.lockContext(ctx) {
+		return
+	}
+	locked := true
+	defer func() {
+		if locked {
+			slot.mu.Unlock()
+		}
+	}()
+	// Deletion can fence admission while inspection is in flight. Its late
+	// response must not resurrect health or readiness after that fence.
+	if ctx.Err() != nil || slot.deleting || slot.revoked.Load() {
+		return
+	}
 	s.publishHealth(account.ID, state, inspectErr)
-	if !vmAccountEligible(account) {
+	a, err := s.repo.GetByID(ctx, account.ID)
+	if err != nil || !vmAccountEligible(a) {
 		vmKernelReadiness.Delete(account.ID)
 		return
 	}
 	// Authentication recovery owns token replacement while this account is paused.
 	// Preserve health observations without racing a refresh or reprojection.
-	if account.ErrorMessage == OpenAIContainerAuthRequired || account.ErrorMessage == OpenAIContainerTwoFAEnrollmentPending {
+	if a.ErrorMessage == OpenAIContainerAuthRequired || a.ErrorMessage == OpenAIContainerTwoFAEnrollmentPending {
 		vmKernelReadiness.Delete(account.ID)
 		return
+	}
+	// Previously mu fenced admission until this observation was processed. Keep
+	// that fail-closed behavior before releasing it for a possibly slow refresh.
+	// Only a healthy, unchanged binding may continue using its existing receipt.
+	if inspectErr != nil || !s.bindingReady(a, state) || (slot.verifiedBinding != "" && slot.verifiedBinding != vmBindingKey(state)) {
+		vmKernelReadiness.Delete(account.ID)
 	}
 	if s.tokens == nil {
-		s.publish(account, nil, errors.New("vm_token_provider_unavailable"), "credentials")
+		s.publish(a, nil, errors.New("vm_token_provider_unavailable"), "credentials")
 		return
 	}
-	if _, err := s.tokens.GetAccessToken(ctx, account); err != nil {
-		s.publish(account, nil, err, "credentials")
+	// Refresh may wait on a provider or refresh lock. Keep the lifecycle lane,
+	// but allow requests using an unchanged, fresh readiness receipt to proceed.
+	slot.mu.Unlock()
+	locked = false
+	_, tokenErr := s.tokens.GetAccessToken(ctx, a)
+	if !slot.mu.lockContext(ctx) {
 		return
 	}
-	a, err := s.repo.GetByID(ctx, account.ID)
+	locked = true
+	if ctx.Err() != nil || slot.deleting || slot.revoked.Load() {
+		return
+	}
+	a, err = s.repo.GetByID(ctx, account.ID)
 	if err != nil || !vmAccountEligible(a) {
 		vmKernelReadiness.Delete(account.ID)
+		return
+	}
+	if a.ErrorMessage == OpenAIContainerAuthRequired || a.ErrorMessage == OpenAIContainerTwoFAEnrollmentPending {
+		vmKernelReadiness.Delete(account.ID)
+		return
+	}
+	if tokenErr != nil {
+		s.publish(a, nil, tokenErr, "credentials")
 		return
 	}
 	credential, err := vmCredentialProjection(a)
@@ -473,24 +517,32 @@ func (s *VMKernelService) prepare(ctx context.Context, account *Account) {
 		slot.observationFailures = 0
 	}
 	projection := &vmruntime.Projection{Revision: vmCredentialRevision(a), Credential: credential, ProxyURL: a.Proxy.URL()}
-	spec := vmruntime.Spec{Platform: vmPlatform(a.Platform), Template: s.cfg.Template, CPU: s.cfg.CPU, MemoryMiB: s.cfg.MemoryMiB, ProxyID: *a.ProxyID, ProxyRevision: vmProxyRevision(a)}
+	template := s.cfg.Template
+	if a.DockerSystemProfile != nil {
+		if !ValidDockerSystemProfileID(*a.DockerSystemProfile) {
+			s.publish(a, state, errors.New("vm_binding_mismatch"), "inspect")
+			return
+		}
+		template = *a.DockerSystemProfile
+		if state != nil && state.Spec.Template != template {
+			s.publish(a, state, errors.New("vm_binding_mismatch"), "inspect")
+			return
+		}
+	}
+	spec := vmruntime.Spec{Platform: vmPlatform(a.Platform), Template: template, CPU: s.cfg.CPU, MemoryMiB: s.cfg.MemoryMiB, ProxyID: *a.ProxyID, ProxyRevision: vmProxyRevision(a)}
 	request := vmruntime.Request{Operation: "prepare", AccountID: a.ID, Generation: 1, Spec: &spec, Projection: projection}
 	mutate := state == nil
-	uaMigrationOnly := false
 	if state != nil {
 		request.InstanceID = state.InstanceID
 		request.Generation = state.Generation + 1
 		spec = state.Spec
 		spec.ProxyID = *a.ProxyID
 		spec.ProxyRevision = vmProxyRevision(a)
-		changed := state.AppliedCredentialRevision != projection.Revision || state.AppliedProxyRevision != spec.ProxyRevision
-		legacyUA := a.Platform == PlatformOpenAI && vmruntime.DesktopUserAgentNeedsMigration(state.ClientIdentity)
-		uaMigrationOnly = legacyUA && !changed && state.Ready
-		if legacyUA && uaMigrationOnly && time.Now().Before(slot.uaMigrationRetryAt) {
-			legacyUA = false
-		}
-		if a.Platform == PlatformOpenAI && (state.ClientIdentity == nil || state.ClientIdentity.UserAgent == "" || legacyUA) {
-			changed = true // Backfill or upgrade through the existing drain/apply path.
+		changed := state.AppliedCredentialRevision != projection.Revision || state.AppliedProxyRevision != spec.ProxyRevision || state.ProxyAddressChanged
+		if a.Platform == PlatformOpenAI && vmKernelHasLegacyUserAgent(state) {
+			// Clear the retired override once through the normal drain/apply path.
+			// Accounts using the shared Codex UA policy need no per-account UA allocation.
+			changed = true
 		}
 		mutate = changed || !state.Ready || (slot.verifiedBinding != "" && slot.verifiedBinding != vmBindingKey(state))
 		if changed {
@@ -528,42 +580,21 @@ func (s *VMKernelService) prepare(ctx context.Context, account *Account) {
 			return
 		}
 		vmKernelReadiness.Delete(a.ID)
-		previous := state
 		state, err = s.helper.Do(ctx, request)
 		s.publishHealth(a.ID, state, err)
 		if err != nil {
-			failure := vmRuntimeErrorCode(err)
-			if uaMigrationOnly && (failure == "client_user_agent_pool_exhausted" || failure == "proxy_resolution_failed" || failure == "proxy_ipv4_required") {
-				// These failures occur before any helper mutation. Confirm the old
-				// binding before preserving normal models during backoff.
-				observed, inspectErr := s.helper.Do(ctx, vmruntime.Request{Operation: "inspect", AccountID: a.ID})
-				latest, readErr := s.repo.GetByID(ctx, a.ID)
-				if inspectErr == nil && readErr == nil && vmAccountEligible(latest) &&
-					latest.ErrorMessage != OpenAIContainerAuthRequired && latest.ErrorMessage != OpenAIContainerTwoFAEnrollmentPending && previous != nil && observed != nil &&
-					previous.ClientIdentity != nil && observed.ClientIdentity != nil && *previous.ClientIdentity == *observed.ClientIdentity &&
-					vmBindingKey(previous) == vmBindingKey(observed) && vmCredentialRevision(a) == vmCredentialRevision(latest) &&
-					vmAccountRouteRevision(a) == vmAccountRouteRevision(latest) && s.bindingReady(latest, observed) {
-					slot.uaMigrationRetryAt = time.Now().Add(time.Minute)
-					slot.verifiedBinding = vmBindingKey(observed)
-					s.publishHealth(a.ID, observed, nil)
-					s.publish(latest, observed, nil)
-					slog.Warn("vm_kernel_ua_migration_deferred", "account_id", a.ID, "reason", failure)
-					return
-				}
-			}
 			s.publish(a, state, err, request.Operation)
 			slot.nextProbe = time.Now().Add(time.Minute)
 			return
 		}
 		slot.verifiedBinding = ""
 		slot.observationFailures = 0
-		if uaMigrationOnly && state != nil && vmruntime.DesktopUserAgentNeedsMigration(state.ClientIdentity) {
-			// A mismatched helper may accept apply-config without upgrading UA.
-			// Keep its verified binding and avoid repeatedly restarting the guest.
-			slot.uaMigrationRetryAt = time.Now().Add(10 * time.Minute)
-			slog.Warn("vm_kernel_ua_migration_deferred", "account_id", a.ID, "reason", "helper_did_not_upgrade_identity")
-		} else {
-			slot.uaMigrationRetryAt = time.Time{}
+		if a.Platform == PlatformOpenAI && vmKernelHasLegacyUserAgent(state) {
+			// A helper from the retired UA release cannot clear the override.
+			// Use the existing retry backoff instead of repeatedly restarting it.
+			slot.nextProbe = time.Now().Add(10 * time.Minute)
+			s.publish(a, state, &vmruntime.Error{Code: "vm_runtime_update_required"}, request.Operation)
+			return
 		}
 	}
 	if !s.bindingReady(a, state) {
@@ -582,10 +613,15 @@ func (s *VMKernelService) prepare(ctx context.Context, account *Account) {
 	s.publish(latest, state, nil)
 }
 func (s *VMKernelService) bindingReady(a *Account, state *vmruntime.State) bool {
-	if a.Platform == PlatformOpenAI && (state == nil || state.ClientIdentity == nil || state.ClientIdentity.DeviceID == "" || state.ClientIdentity.UserAgent == "" || state.ClientIdentity.UserAgentTemplate == "") {
+	if a.Platform == PlatformOpenAI && (state == nil || state.ClientIdentity == nil || state.ClientIdentity.DeviceID == "") {
 		return false
 	}
-	return state != nil && state.AccountID == a.ID && state.Spec.Platform == vmPlatform(a.Platform) && state.Ready && !state.DeleteRequested && state.Capacity >= 0 && state.Generation > 0 && state.InstanceID != "" && state.GuestBootID != "" && filepath.IsAbs(state.KernelSocket) && state.InternalToken != "" && state.AppliedCredentialRevision == vmCredentialRevision(a) && state.AppliedProxyRevision == vmProxyRevision(a)
+	return state != nil && state.AccountID == a.ID && state.Spec.Platform == vmPlatform(a.Platform) && state.Ready && !state.ProxyAddressChanged && !state.DeleteRequested && state.Capacity >= 0 && state.Generation > 0 && state.InstanceID != "" && state.GuestBootID != "" && filepath.IsAbs(state.KernelSocket) && state.InternalToken != "" && state.AppliedCredentialRevision == vmCredentialRevision(a) && state.AppliedProxyRevision == vmProxyRevision(a)
+}
+
+func vmKernelHasLegacyUserAgent(state *vmruntime.State) bool {
+	return state != nil && state.ClientIdentity != nil &&
+		(state.ClientIdentity.LegacyUserAgent != "" || state.ClientIdentity.LegacyUserAgentTemplate != "")
 }
 
 // vmKernelProbeModel returns a supported ingress model; mapping remains the
@@ -622,16 +658,32 @@ func vmKernelProbeModel(a *Account, requested string) (string, error) {
 }
 
 func (s *VMKernelService) retire(ctx context.Context, id int64, remove bool) {
-	vmKernelReadiness.Delete(id)
 	slot := s.slot(id)
-	if !slot.mu.TryLock() {
+	if !slot.controlMu.TryLock() {
+		return
+	}
+	defer slot.controlMu.Unlock()
+	if !slot.mu.lockContext(ctx) {
+		return
+	}
+	if ctx.Err() != nil {
+		slot.mu.Unlock()
+		return
+	}
+	vmKernelReadiness.Delete(id)
+	if slot.active > 0 {
+		slot.mu.Unlock()
+		return
+	}
+	slot.mu.Unlock()
+	state, _ := s.helper.Do(ctx, vmruntime.Request{Operation: "inspect", AccountID: id})
+	if !slot.mu.lockContext(ctx) {
 		return
 	}
 	defer slot.mu.Unlock()
-	if slot.active > 0 {
+	if ctx.Err() != nil || slot.active > 0 {
 		return
 	}
-	state, _ := s.helper.Do(ctx, vmruntime.Request{Operation: "inspect", AccountID: id})
 	if state == nil || state.AccountID != id || state.InstanceID == "" || state.Generation == 0 {
 		return
 	}
@@ -684,7 +736,9 @@ func PrepareVMKernelAccountDeletion(ctx context.Context, a *Account) error {
 	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 	slot := s.slot(a.ID)
-	slot.mu.Lock()
+	if !slot.mu.lockContext(ctx) {
+		return errors.New("vm_kernel_delete_draining")
+	}
 	slot.deleting = true
 	vmKernelReadiness.Delete(a.ID)
 	done := slot.activeDone
@@ -696,8 +750,19 @@ func PrepareVMKernelAccountDeletion(ctx context.Context, a *Account) error {
 			return errors.New("vm_kernel_delete_draining")
 		}
 	}
-	slot.mu.Lock()
+	// Never hold admission while waiting for a slow observation. Its completion
+	// sees deleting and discards the old receipt before this removal proceeds.
+	if !slot.controlMu.lockContext(ctx) {
+		return errors.New("vm_kernel_delete_draining")
+	}
+	defer slot.controlMu.Unlock()
+	if !slot.mu.lockContext(ctx) {
+		return errors.New("vm_kernel_delete_draining")
+	}
 	defer slot.mu.Unlock()
+	if ctx.Err() != nil {
+		return errors.New("vm_kernel_delete_draining")
+	}
 	state, err := s.helper.Do(ctx, vmruntime.Request{Operation: "inspect", AccountID: a.ID})
 	if vmRuntimeMissing(err) {
 		return nil
@@ -787,6 +852,8 @@ func (s *VMKernelService) execute(ctx context.Context, selected *Account, protoc
 				if ctx.Err() != nil {
 					return nil, ctx.Err()
 				}
+				slog.WarnContext(ctx, "vm_kernel_admission_failed", "account_id", selected.ID,
+					"stage", "admission_lock_timeout", "code", "vm_runtime_busy")
 				return nil, &vmkernel.AttemptError{Code: "vm_runtime_busy", SafeToRetry: true}
 			}
 		}
@@ -879,11 +946,19 @@ func (s *VMKernelService) execute(ctx context.Context, selected *Account, protoc
 	return result, err
 }
 func (s *VMKernelService) call(ctx context.Context, state *vmruntime.State, account *Account, protocol string, body []byte, emit func(vmkernel.Event) error) (*vmkernel.Result, error) {
-	var userAgent, installationID string
-	if account.Platform == PlatformOpenAI && state.ClientIdentity != nil {
-		userAgent, installationID = state.ClientIdentity.UserAgent, state.ClientIdentity.DeviceID
+	var installationID string
+	cancellationMode := vmkernel.CancellationModeControl
+	if account.Platform == PlatformOpenAI {
+		// The resident Codex kernel cancels through the execution connection.
+		// Its HTTP server has no /internal/v1/cancel control route. Choose the
+		// contract from the trusted kernel platform, never an observed 404 or
+		// the public request protocol (which may be cross-protocol adapted).
+		cancellationMode = vmkernel.CancellationModeStreamClose
 	}
-	return s.kernel.Execute(ctx, vmkernel.Binding{UserAgent: userAgent, InstallationID: installationID, Socket: state.KernelSocket, Token: state.InternalToken, InstanceID: state.InstanceID, Generation: state.Generation,
+	if account.Platform == PlatformOpenAI && state.ClientIdentity != nil {
+		installationID = state.ClientIdentity.DeviceID
+	}
+	return s.kernel.Execute(ctx, vmkernel.Binding{InstallationID: installationID, CancellationMode: cancellationMode, Socket: state.KernelSocket, Token: state.InternalToken, InstanceID: state.InstanceID, Generation: state.Generation,
 		AccountID: account.ID, GuestBootID: state.GuestBootID, CredentialRevision: state.AppliedCredentialRevision, ProxyRevision: state.AppliedProxyRevision},
 		vmkernel.Request{Protocol: protocol, Body: body, DisablePromptCache: account.IsVMKernel() && account.Platform == PlatformOpenAI && !account.DockerRequestCacheEnabled()}, emit)
 }

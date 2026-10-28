@@ -31,11 +31,7 @@ func TestVMKernelTurnHeadersRoundTripAndAccountGuard(t *testing.T) {
 						wantState = ""
 					}
 					require.Equal(t, wantState, env.Headers[openAICodexTurnStateHeader])
-					if foreign {
-						require.NotContains(t, env.Body.ClientMetadata, openAICodexTurnStateHeader)
-					} else {
-						require.Equal(t, wantState, env.Body.ClientMetadata[openAICodexTurnStateHeader])
-					}
+					require.Nil(t, env.Body.ClientMetadata, "turn context travels in guarded headers only")
 					require.Equal(t, "turn-from-payload", env.Headers[openAIWSTurnMetadataHeader])
 					require.Equal(t, "beta-feature", env.Headers["x-codex-beta-features"])
 					require.Empty(t, env.Headers["authorization"])
@@ -167,9 +163,8 @@ func TestVMKernelTurnMetadataSessionMatchesEnvelope(t *testing.T) {
 		session := env.Session["session_id"]
 		require.NotEmpty(t, session)
 		require.Equal(t, session, env.Headers["session-id"])
-		require.Equal(t, session, gjson.GetBytes(env.Body, "client_metadata.session_id").String())
+		require.False(t, gjson.GetBytes(env.Body, "client_metadata").Exists())
 		metadata := env.Headers[openAIWSTurnMetadataHeader]
-		require.Equal(t, metadata, gjson.GetBytes(env.Body, "client_metadata.x-codex-turn-metadata").String())
 		require.Equal(t, session, gjson.Get(metadata, "session_id").String())
 		require.Equal(t, "caller-extra", gjson.Get(metadata, "custom").String())
 		w.Header().Set("Content-Type", "text/event-stream")

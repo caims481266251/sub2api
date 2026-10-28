@@ -403,7 +403,7 @@ func openAIWSGetIngressReader(c *gin.Context, conn *coderws.Conn) *openAIWSIngre
 		for {
 			kind, payload, err := conn.Read(context.Background())
 			if err != nil {
-				r.err = err
+				r.err = markOpenAIWSClientReadDisconnect(err)
 				return
 			}
 			select {

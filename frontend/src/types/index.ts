@@ -1379,7 +1379,23 @@ export interface ExcelBPSCredentialState {
  requires_manual_resume?: boolean
 }
 
+export interface DockerSystemProfile {
+  profile_id: string
+  display_name: string
+  available: boolean
+  unavailable_reason?: string | null
+  bound_account_count: number
+}
+
+export interface DockerSystemPool {
+  count_scope: 'all' | 'visible'
+  profiles: DockerSystemProfile[]
+  legacy_bound_account_count: number
+  checked_at: string
+}
+
 export interface Account {
+  docker_system_profile?: string | null
   vm_kernel?: { phase: string; ready: boolean; error_code?: string; capacity: number; actual_accelerator?: 'docker' }
   execution_mode?: 'normal' | 'docker_kernel'
  excel_bps_credential_state?: ExcelBPSCredentialState
@@ -1722,6 +1738,7 @@ export interface OpenAIResponsesState {
 }
 
 export interface CreateAccountRequest {
+  docker_system_profile?: string
   execution_mode?: 'normal' | 'docker_kernel'
   name: string
   notes?: string | null
@@ -1886,6 +1903,7 @@ export interface AdminDataImportResult {
 }
 
 export interface CodexSessionImportRequest {
+  docker_system_profile?: string
   execution_mode?: 'normal' | 'docker_kernel'
   initialize_openai_two_fa?: boolean
   /** Skip matching accounts without replacing their credentials or settings. */
@@ -1935,6 +1953,7 @@ export interface CodexSessionImportMessage {
 }
 
 export interface CodexSessionImportItem {
+  docker_system_profile?: string | null
   reason?: string
   index: number
   name?: string

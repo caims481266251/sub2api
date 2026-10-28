@@ -80,7 +80,7 @@ function mountModal(account = buildOAuthAccount()) {
   return mount(EditAccountModal, {
     props: { show: true, account, proxies: [], groups: [] },
     global: {
-      stubs: { BaseDialog: BaseDialogStub, Select: true, Icon: true, ProxySelector: true, GroupSelector: true, ModelWhitelistSelector: true }
+      stubs: { SIWCAccountSettings: true, OpenAIRequestTimezoneField: true, BaseDialog: BaseDialogStub, Select: true, Icon: true, ProxySelector: true, GroupSelector: true, ModelWhitelistSelector: true }
     }
   })
 }
@@ -91,6 +91,17 @@ async function submit(wrapper: ReturnType<typeof mountModal>) {
 }
 
 const toggleSelector = '[data-testid="account-auto-bps-toggle"]'
+
+describe('Docker system binding display', () => {
+  it.each(['ubuntu-24.04', null])('shows persisted system %s without exposing a system selector', async (profile) => {
+    const wrapper = mountModal(buildOAuthAccount({ execution_mode: 'docker_kernel', docker_system_profile: profile }))
+    await flushPromises()
+    const label = wrapper.get('[data-testid="docker-system-binding"]')
+    expect(label.text()).toContain(profile ? 'Ubuntu 24.04' : 'admin.accounts.dockerSystem.legacy')
+    expect(wrapper.find('[data-testid="docker-system-selector"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+})
 
 describe('EditAccountModal Prism OAuth switch', () => {
   beforeEach(() => {

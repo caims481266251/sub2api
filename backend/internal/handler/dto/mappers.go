@@ -265,6 +265,7 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 		Name:                    a.Name,
 		Notes:                   a.Notes,
 		ExecutionMode:           a.EffectiveExecutionMode(),
+		DockerSystemProfile:     a.DockerSystemProfile,
 		VMKernel:                service.VMKernelRuntimeSummary(a),
 		Platform:                a.Platform,
 		Type:                    a.Type,
@@ -491,9 +492,10 @@ func AccountListItemFromAccount(a *Account) *AccountListItem {
 		return nil
 	}
 	return &AccountListItem{
-		ExecutionMode: a.ExecutionMode,
-		VMKernel:      a.VMKernel,
-		ID:            a.ID, Name: a.Name, Notes: a.Notes, Platform: a.Platform, Type: a.Type,
+		DockerSystemProfile: a.DockerSystemProfile,
+		ExecutionMode:       a.ExecutionMode,
+		VMKernel:            a.VMKernel,
+		ID:                  a.ID, Name: a.Name, Notes: a.Notes, Platform: a.Platform, Type: a.Type,
 		Credentials: a.Credentials, CredentialsStatus: a.CredentialsStatus, Extra: a.Extra,
 		ExcelBPSCredentialState: a.ExcelBPSCredentialState,
 		OllamaCloudUsage:        a.OllamaCloudUsage, CodexTurnTickets: a.CodexTurnTickets,

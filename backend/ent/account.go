@@ -41,6 +41,8 @@ type Account struct {
 	Type string `json:"type,omitempty"`
 	// ExecutionMode holds the value of the "execution_mode" field.
 	ExecutionMode string `json:"execution_mode,omitempty"`
+	// DockerSystemProfile holds the value of the "docker_system_profile" field.
+	DockerSystemProfile *string `json:"docker_system_profile,omitempty"`
 	// Credentials holds the value of the "credentials" field.
 	Credentials map[string]interface{} `json:"credentials,omitempty"`
 	// Extra holds the value of the "extra" field.
@@ -187,7 +189,7 @@ func (*Account) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullFloat64)
 		case account.FieldID, account.FieldOwnerUserID, account.FieldHostingPoolID, account.FieldProxyID, account.FieldProxyFallbackOriginID, account.FieldConcurrency, account.FieldLoadFactor, account.FieldPriority, account.FieldParentAccountID:
 			values[i] = new(sql.NullInt64)
-		case account.FieldHostingIdentity, account.FieldName, account.FieldNotes, account.FieldPlatform, account.FieldType, account.FieldExecutionMode, account.FieldStatus, account.FieldErrorMessage, account.FieldTempUnschedulableReason, account.FieldSessionWindowStatus, account.FieldQuotaDimension:
+		case account.FieldHostingIdentity, account.FieldName, account.FieldNotes, account.FieldPlatform, account.FieldType, account.FieldExecutionMode, account.FieldDockerSystemProfile, account.FieldStatus, account.FieldErrorMessage, account.FieldTempUnschedulableReason, account.FieldSessionWindowStatus, account.FieldQuotaDimension:
 			values[i] = new(sql.NullString)
 		case account.FieldCreatedAt, account.FieldUpdatedAt, account.FieldDeletedAt, account.FieldLastUsedAt, account.FieldExpiresAt, account.FieldRateLimitedAt, account.FieldRateLimitResetAt, account.FieldOverloadUntil, account.FieldTempUnschedulableUntil, account.FieldSessionWindowStart, account.FieldSessionWindowEnd:
 			values[i] = new(sql.NullTime)
@@ -282,6 +284,13 @@ func (_m *Account) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field execution_mode", values[i])
 			} else if value.Valid {
 				_m.ExecutionMode = value.String
+			}
+		case account.FieldDockerSystemProfile:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field docker_system_profile", values[i])
+			} else if value.Valid {
+				_m.DockerSystemProfile = new(string)
+				*_m.DockerSystemProfile = value.String
 			}
 		case account.FieldCredentials:
 			if value, ok := values[i].(*[]byte); !ok {
@@ -560,6 +569,11 @@ func (_m *Account) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("execution_mode=")
 	builder.WriteString(_m.ExecutionMode)
+	builder.WriteString(", ")
+	if v := _m.DockerSystemProfile; v != nil {
+		builder.WriteString("docker_system_profile=")
+		builder.WriteString(*v)
+	}
 	builder.WriteString(", ")
 	builder.WriteString("credentials=")
 	builder.WriteString(fmt.Sprintf("%v", _m.Credentials))

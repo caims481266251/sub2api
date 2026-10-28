@@ -58,7 +58,8 @@ func main() {
 			log.Fatal("VM/KVM mode has been removed; install the container-v1 template")
 		}
 	}
-	helper, err := vmruntime.OpenHelper(*root, &vmruntime.DockerDriver{Templates: templates, NetworkCIDR: *networkPool, ServiceGID: *serviceGID})
+	driver := &vmruntime.DockerDriver{Templates: templates, NetworkCIDR: *networkPool, ServiceGID: *serviceGID}
+	helper, err := vmruntime.OpenHelper(*root, driver)
 	if err != nil {
 		log.Fatal("cannot acquire helper state lock")
 	}
@@ -112,6 +113,19 @@ func main() {
 	srv := &http.Server{Handler: helper.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 8192}
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+	// Existing default-template accounts must remain usable while optional
+	// system images are verified. New profiles stay unavailable until verified.
+	catalogDone := make(chan struct{})
+	go func() {
+		defer close(catalogDone)
+		catalogContext, cancelCatalog := context.WithTimeout(ctx, 2*time.Minute)
+		defer cancelCatalog()
+		driver.VerifySystemProfiles(catalogContext)
+	}()
+	defer func() {
+		cancel()
+		<-catalogDone
+	}()
 	go func() {
 		<-ctx.Done()
 		stop, c := context.WithTimeout(context.Background(), 30*time.Second)

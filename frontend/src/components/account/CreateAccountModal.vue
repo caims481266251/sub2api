@@ -38,6 +38,25 @@
       </div>
     </div>
 
+    <div v-if="step === 1" class="mb-5">
+      <label class="input-label">{{ t('admin.accounts.executionMode') }}</label>
+      <select v-model="form.execution_mode" data-testid="account-execution-mode" class="input mt-2" @change="executionModeChoice = form.execution_mode">
+        <option value="normal">{{ t('admin.accounts.executionModeNormal') }}</option>
+        <option value="docker_kernel" :disabled="!dockerExecutionAvailable">{{ t('admin.accounts.executionModeVM') }}</option>
+      </select>
+      <p v-if="vmKernelEnabled === false && ['anthropic', 'openai'].includes(form.platform)" class="input-hint">{{ t('admin.accounts.vmKernelUnavailable') }}</p>
+      <p v-if="form.execution_mode === 'docker_kernel'" class="mt-2 text-sm text-gray-500">{{ t('admin.accounts.executionModeVMHint') }}</p>
+    </div>
+
+    <DockerSystemSelector v-if="form.execution_mode === 'docker_kernel'" v-model="dockerSystemSelection"
+      :profiles="dockerSystemProfiles" :pool="dockerSystemPool" :loading="dockerSystemLoading" :error="dockerSystemError"
+      :locked="submitting || currentOAuthLoading || twoFABusy" class="mb-5" @refresh="refreshDockerSystemPool" />
+    <ul v-if="form.execution_mode === 'docker_kernel' && createdDockerSystems.length" class="mb-4 space-y-1" aria-live="polite">
+      <li v-for="item in createdDockerSystems" :key="item.id" class="text-sm">
+        {{ item.name }} — <DockerSystemProfileLabel :profile="item.profile" />
+      </li>
+    </ul>
+
     <!-- Step 1: Basic Info -->
     <form
       v-if="step === 1"
@@ -65,16 +84,6 @@
           :placeholder="t('admin.accounts.notesPlaceholder')"
         ></textarea>
         <p class="input-hint">{{ t('admin.accounts.notesHint') }}</p>
-      </div>
-
-      <div>
-        <label class="input-label">{{ t('admin.accounts.executionMode') }}</label>
-        <select v-model="form.execution_mode" data-testid="account-execution-mode" class="input mt-2" @change="executionModeChoice = form.execution_mode">
-          <option value="normal">{{ t('admin.accounts.executionModeNormal') }}</option>
-          <option value="docker_kernel" :disabled="!dockerExecutionAvailable">{{ t('admin.accounts.executionModeVM') }}</option>
-        </select>
-        <p v-if="vmKernelEnabled === false && ['anthropic', 'openai'].includes(form.platform)" class="input-hint">{{ t('admin.accounts.vmKernelUnavailable') }}</p>
-        <p v-if="form.execution_mode === 'docker_kernel'" class="mt-2 text-sm text-gray-500">{{ t('admin.accounts.executionModeVMHint') }}</p>
       </div>
 
       <DockerRequestCacheField v-if="form.platform === 'openai' && form.execution_mode === 'docker_kernel'" v-model="dockerRequestCache" />
@@ -3805,7 +3814,7 @@
 
     <!-- Step 2: OAuth Authorization -->
     <div v-else class="space-y-5">
-      <OpenAITwoFAImport v-if="isOpenAITwoFA" :execution-mode="form.execution_mode" :import-credential="importTwoFACredential" @busy="twoFABusy = $event" />
+      <OpenAITwoFAImport v-if="isOpenAITwoFA" :execution-mode="form.execution_mode" :disabled="dockerCreationBlocked" :import-credential="importTwoFACredential" @busy="twoFABusy = $event" />
       <OAuthAuthorizationFlow
         v-else
         ref="oauthFlowRef"
@@ -3853,7 +3862,7 @@
         <button
           type="submit"
           form="create-account-form"
-          :disabled="submitting"
+          :disabled="submitting || dockerCreationBlocked"
           class="btn btn-primary"
           data-tour="account-form-submit"
         >
@@ -3893,7 +3902,7 @@
         <button
           v-if="!isOpenAITwoFA && isManualInputMethod"
           type="button"
-          :disabled="!canExchangeCode"
+          :disabled="!canExchangeCode || dockerCreationBlocked"
           class="btn btn-primary"
           @click="handleExchangeCode"
         >
@@ -4197,6 +4206,7 @@ import type {
   AccountType,
   CheckMixedChannelResponse,
   CreateAccountRequest,
+  CodexSessionImportRequest,
   CodexSessionImportMessage,
   CodexSessionImportResult,
   OpenAICompactMode,
@@ -4210,6 +4220,10 @@ import Select from '@/components/common/Select.vue'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import OpenAIUsageConcurrencyField from './OpenAIUsageConcurrencyField.vue'
 import DockerRequestCacheField from './DockerRequestCacheField.vue'
+import DockerSystemSelector from './DockerSystemSelector.vue'
+import DockerSystemProfileLabel from './DockerSystemProfileLabel.vue'
+import { useDockerSystemPool } from '@/composables/useDockerSystemPool'
+import { withDockerSystemProfile } from '@/utils/dockerSystemProfile'
 import { DOCKER_REQUEST_CACHE_KEY, readDockerRequestCache } from '@/utils/dockerRequestCache'
 import { OPENAI_USAGE_CONCURRENCY_KEY, readOpenAIUsageConcurrency } from '@/utils/openaiUsageConcurrency'
 import UpstreamRequestIdHeaderField from '@/components/account/UpstreamRequestIdHeaderField.vue'
@@ -5124,6 +5138,44 @@ const form = reactive({
   expires_at: null as number | null
 })
 
+const {
+  selection: dockerSystemSelection, pool: dockerSystemPool, profiles: dockerSystemProfiles,
+  loading: dockerSystemLoading, error: dockerSystemError, canSubmit: dockerSystemCanSubmit,
+  refresh: refreshDockerSystemPool,
+} = useDockerSystemPool(computed(() => props.show), computed(() => form.execution_mode === 'docker_kernel'))
+const dockerCreationBlocked = computed(() => form.execution_mode === 'docker_kernel' && !dockerSystemCanSubmit.value)
+const createdDockerSystems = ref<Array<{ id: number; name: string; profile?: string | null }>>([])
+
+function assertDockerSystemReady(executionMode?: string) {
+  if (executionMode === 'docker_kernel' && !dockerSystemCanSubmit.value) {
+    throw new Error(t('admin.accounts.dockerSystem.selectionRequired'))
+  }
+}
+
+// All creation routes share this boundary; updates never switch a bound system.
+async function createAccountWithSystem(payload: CreateAccountRequest) {
+  assertDockerSystemReady(payload.execution_mode)
+  const account = await adminAPI.accounts.create(withDockerSystemProfile(payload, dockerSystemSelection.value))
+  if (payload.execution_mode === 'docker_kernel') {
+    createdDockerSystems.value.push({ id: account.id, name: account.name || payload.name, profile: account.docker_system_profile })
+    await refreshDockerSystemPool()
+  }
+  return account
+}
+async function importCodexSessionWithSystem(payload: CodexSessionImportRequest) {
+  assertDockerSystemReady(payload.execution_mode)
+  const result = await adminAPI.accounts.importCodexSession(withDockerSystemProfile(payload, dockerSystemSelection.value))
+  if (payload.execution_mode === 'docker_kernel' && result.created > 0) {
+    for (const item of result.items ?? []) {
+      if (item.action === 'created' && item.account_id) {
+        createdDockerSystems.value.push({ id: item.account_id, name: item.name || payload.name || String(item.account_id), profile: item.docker_system_profile })
+      }
+    }
+    await refreshDockerSystemPool()
+  }
+  return result
+}
+
 const dockerExecutionAvailable = computed(() =>
   vmKernelEnabled.value === true && form.platform === 'openai' &&
   accountCategory.value === 'oauth-based' && addMethod.value === 'oauth' && !isOpenAIBPSOAuth.value
@@ -5664,7 +5716,7 @@ const ensureAntigravityMixedChannelConfirmed = async (onConfirm: () => Promise<v
 const submitCreateAccount = async (payload: CreateAccountRequest) => {
   submitting.value = true
   try {
-    const account = await adminAPI.accounts.create(withAntigravityConfirmFlag(payload))
+    const account = await createAccountWithSystem(withAntigravityConfirmFlag(payload))
     const modelMapping = payload.credentials.model_mapping
     const hasConcreteMappedTarget = payload.type === 'apikey' &&
       typeof modelMapping === 'object' &&
@@ -5717,6 +5769,8 @@ const submitCreateAccount = async (payload: CreateAccountRequest) => {
 
 // Methods
 const resetForm = () => {
+  dockerSystemSelection.value = 'auto'
+  createdDockerSystems.value = []
   step.value = 1
   openaiTwoFA.value = false
   openaiBPSOAuth.value = false
@@ -6088,6 +6142,7 @@ const handleVertexServiceAccountDrop = async (event: DragEvent) => {
 }
 
 const handleSubmit = async () => {
+  if (dockerCreationBlocked.value) { appStore.showError(t('admin.accounts.dockerSystem.selectionRequired')); return }
   if (form.execution_mode === 'docker_kernel') {
     try {
       const capabilities = await adminAPI.accounts.getManagementCapabilities()
@@ -6576,7 +6631,7 @@ const handleGrokValidateRT = async (refreshTokenInput: string) => {
           return
         }
 
-        await adminAPI.accounts.create({
+        await createAccountWithSystem({
           execution_mode: form.execution_mode,
           name: accountName,
           notes: form.notes,
@@ -6754,7 +6809,7 @@ const handleGrokAuthorizePassword = async (emailPasswordInput: string) => {
           return
         }
 
-        await adminAPI.accounts.create({
+        await createAccountWithSystem({
           execution_mode: form.execution_mode,
           name: accountName,
           notes: form.notes,
@@ -6874,7 +6929,7 @@ const handleOpenAIExchange = async (authCode: string) => {
     }
 
     if (shouldCreateOpenAI) {
-      const account = await adminAPI.accounts.create({
+      const account = await createAccountWithSystem({
           execution_mode: form.execution_mode,
         name: form.name,
         notes: form.notes,
@@ -6966,7 +7021,7 @@ const isAgentIdentityImportContent = (content: string) => {
 const importTwoFACredential = async (credential: Record<string, unknown>, email: string, login: TokenGuardReloginAccount): Promise<'created' | 'skipped'> => {
   const credentialExtras = buildOpenAICodexImportCredentialExtras()
   if (credentialExtras === null) throw new Error('invalid_account_settings')
-  const result = await adminAPI.accounts.importCodexSession({
+  const result = await importCodexSessionWithSystem({
       execution_mode: form.execution_mode,
     initialize_openai_two_fa: true,
     content: JSON.stringify(credential),
@@ -7032,7 +7087,7 @@ const handleOpenAIImportCodexSession = async (content: string) => {
 
   try {
     const extra = buildOpenAICodexImportExtra()
-    const result = await adminAPI.accounts.importCodexSession({
+    const result = await importCodexSessionWithSystem({
       execution_mode: form.execution_mode,
       content: trimmed,
       name: form.name,
@@ -7213,7 +7268,7 @@ const handleOpenAIBatchRT = async (refreshTokenInput: string, clientId?: string)
         const accountName = refreshTokens.length > 1 ? `${baseName} #${i + 1}` : baseName
 
         if (shouldCreateOpenAI) {
-          const account = await adminAPI.accounts.create({
+          const account = await createAccountWithSystem({
           execution_mode: form.execution_mode,
             name: accountName,
             notes: form.notes,
@@ -7332,7 +7387,7 @@ const handleAntigravityValidateRT = async (refreshTokenInput: string) => {
           expires_at: form.expires_at,
           auto_pause_on_expired: autoPauseOnExpired.value
         })
-        await adminAPI.accounts.create(createPayload)
+        await createAccountWithSystem(createPayload)
         successCount++
       } catch (error: any) {
         failedCount++
@@ -7689,7 +7744,7 @@ const handleCookieAuth = async (sessionKey: string) => {
           credentials.temp_unschedulable_rules = tempUnschedPayload
         }
 
-        await adminAPI.accounts.create({
+        await createAccountWithSystem({
           execution_mode: form.execution_mode,
           name: accountName,
           notes: form.notes,
